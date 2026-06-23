@@ -17,11 +17,15 @@ import numpy as np
 
 from doe import (
     ContinuousFactor,
+    ResponseGoal,
     box_behnken,
     central_composite,
+    desirability,
     fit_ols,
     fractional_factorial,
     full_factorial,
+    optimum,
+    stationary_point,
 )
 from doe.analysis import (
     adjusted_r2,
@@ -38,6 +42,7 @@ from doe.plotting import (
     pareto_plot,
     residuals_vs_fitted,
     surface_grid,
+    surface_plot,
 )
 
 IMG = pathlib.Path(__file__).resolve().parent.parent / "docs" / "img"
@@ -56,6 +61,11 @@ def banner(title: str) -> None:
     print("\n" + "=" * 70)
     print(title)
     print("=" * 70)
+
+
+def show_nat(d: dict[str, float]) -> str:
+    """Format a {dna_ng, lipid_uL} natural-units dict the way the vignettes transcribe it."""
+    return f"{{'dna_ng': {d['dna_ng']:.1f}, 'lipid_uL': {d['lipid_uL']:.3f}}}"
 
 
 # --------------------------------------------------------------------------- #
@@ -235,9 +245,85 @@ save(ax, "v10_box_behnken_contour.png")
 
 
 # --------------------------------------------------------------------------- #
-# Vignette 11: randomise run order
+# Vignette 11: optimization -- stationary point, canonical analysis, optimum
 # --------------------------------------------------------------------------- #
-banner("Vignette 11: randomise run order")
+banner("Vignette 11: response-surface optimization")
+
+# happy case: the V6 dome has an interior maximum, recovered analytically
+sp = stationary_point(res_ccd)
+print("stationary_point(res_ccd):")
+print(f"  coded      = {np.array2string(sp.coded, precision=4)}")
+print(f"  natural    = {show_nat(sp.natural)}")
+print(f"  response   = {sp.response:.2f}")
+print(f"  kind       = {sp.kind!r}")
+print(f"  eigenvalues= {np.array2string(sp.eigenvalues, precision=3)}")
+
+opt = optimum(res_ccd, maximize=True)
+print("\noptimum(res_ccd, maximize=True):")
+print(f"  coded={np.array2string(opt.coded, precision=4)}, natural={show_nat(opt.natural)}")
+print(f"  response={opt.response:.2f}, at_bound={opt.at_bound}")
+
+# cautionary case: a reporter readout whose model peak lies beyond the tested DNA range
+reporter_true = 50 + 14 * cc[:, 0] + 3 * cc[:, 1] - 4 * cc[:, 0] ** 2 - 5 * cc[:, 1] ** 2
+rng = np.random.default_rng(5)
+y_rep = np.round(reporter_true + rng.normal(0, 1.0, size=reporter_true.shape), 1)
+res_rep = fit_ols(ccd, y_rep, model="quadratic")
+sp_rep = stationary_point(res_rep)
+opt_rep = optimum(res_rep, maximize=True)
+print("\nreporter readout (model peak outside the box):")
+print(f"  stationary kind={sp_rep.kind!r}, coded={np.array2string(sp_rep.coded, precision=3)}"
+      f"  (dna coded {sp_rep.coded[0]:.2f} is outside [-1, 1])")
+print(f"  optimum coded={np.array2string(opt_rep.coded, precision=3)}, "
+      f"natural={show_nat(opt_rep.natural)}, at_bound={opt_rep.at_bound}")
+
+ax = surface_plot(res_ccd, "dna_ng", "lipid_uL")
+save(ax, "v11_surface.png")
+
+
+# --------------------------------------------------------------------------- #
+# Vignette 12: multi-response desirability (Derringer-Suich)
+# --------------------------------------------------------------------------- #
+banner("Vignette 12: multi-response desirability")
+
+# a second readout on the same CCD: % viable cells, which falls as DNA rises (toxicity)
+viab_true = 80 - 15 * cc[:, 0] - 2 * cc[:, 1] - 3 * cc[:, 0] ** 2
+rng = np.random.default_rng(3)
+y_viab = np.round(viab_true + rng.normal(0, 1.0, size=viab_true.shape), 1)
+res_viab = fit_ols(ccd, y_viab, model="quadratic")
+print("viability fit summary():")
+for k, (c, e) in res_viab.summary().items():
+    print(f"  {k!r}: (coef={c:.4g}, effect={e:.4g})")
+
+goals = [
+    ResponseGoal(res_ccd, goal="max", low=40.0, high=70.0),   # maximise % GFP+
+    ResponseGoal(res_viab, goal="max", low=50.0, high=90.0),  # maximise % viable
+]
+des = desirability(goals)
+print("\ndesirability([GFP max, viability max]):")
+print(f"  coded     = {np.array2string(des.coded, precision=4)}")
+print(f"  natural   = {show_nat(des.natural)}")
+print(f"  responses = (GFP {des.responses[0]:.1f}%, viability {des.responses[1]:.1f}%)")
+print(f"  individual d = {np.array2string(des.individual, precision=3)}")
+print(f"  overall D = {des.overall:.3f}")
+
+# for contrast: optimising GFP alone pushes to high DNA, where viability is worse.
+# read the viability surface at the GFP-only optimum to show the trade-off the
+# desirability solution avoids.
+opt_gfp = optimum(res_ccd, maximize=True)
+gx, gy, gz_v = surface_grid(res_viab, "dna_ng", "lipid_uL", resolution=201)
+ii = int(np.argmin(np.abs(gx[0, :] - opt_gfp.natural["dna_ng"])))
+jj = int(np.argmin(np.abs(gy[:, 0] - opt_gfp.natural["lipid_uL"])))
+print(
+    f"\nGFP-only optimum (dna_ng={opt_gfp.natural['dna_ng']:.0f}, GFP {opt_gfp.response:.1f}%): "
+    f"viability there is only {gz_v[jj, ii]:.0f}% -- the desirability point trades a little "
+    f"GFP for much better viability."
+)
+
+
+# --------------------------------------------------------------------------- #
+# Vignette 13: randomise run order
+# --------------------------------------------------------------------------- #
+banner("Vignette 13: randomise run order")
 
 plate_order = ccd.randomize(seed=42)
 print("plate_order.runs.head():")

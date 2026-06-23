@@ -15,6 +15,15 @@ from .analysis.anova import (
     press,
 )
 from .analysis.fit import FitResult, fit_ols
+from .analysis.optimize import (
+    DesirabilityResult,
+    Optimum,
+    ResponseGoal,
+    StationaryPoint,
+    desirability,
+    optimum,
+    stationary_point,
+)
 from .design import Design
 from .factors import CategoricalFactor, ContinuousFactor, Factor, FactorSet
 from .generators.factorial import fractional_factorial, full_factorial
@@ -24,20 +33,27 @@ __all__ = [
     "CategoricalFactor",
     "ContinuousFactor",
     "Design",
+    "DesirabilityResult",
     "Factor",
     "FactorSet",
     "FitResult",
     "LackOfFit",
+    "Optimum",
+    "ResponseGoal",
+    "StationaryPoint",
     "adjusted_r2",
     "anova_table",
     "box_behnken",
     "central_composite",
+    "desirability",
     "fit_ols",
     "fractional_factorial",
     "full_factorial",
     "lack_of_fit",
+    "optimum",
     "predicted_r2",
     "press",
+    "stationary_point",
 ]
 
 __version__ = "0.1.0"

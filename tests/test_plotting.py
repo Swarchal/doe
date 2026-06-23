@@ -28,6 +28,7 @@ from doe.plotting import (
     normal_qq,
     residuals_vs_fitted,
     surface_grid,
+    surface_plot,
 )
 
 
@@ -151,6 +152,22 @@ def test_contour_plot_uses_given_axes():
     out = contour_plot(result, "a", "b", ax=ax)
     assert out is ax
     plt.close(fig)
+
+
+# --------------------------------------------------------------------------- #
+# surface_plot (Phase 2b 3-D companion)
+# --------------------------------------------------------------------------- #
+
+
+def test_surface_plot_returns_3d_axes_with_natural_labels():
+    result = _fit_exact()
+    ax = surface_plot(result, "a", "b", resolution=11)
+
+    assert ax.name == "3d"  # a 3-D projection axes
+    assert ax.get_xlabel() == "a"
+    assert ax.get_ylabel() == "b"
+    assert ax.get_zlabel() == "fitted response"
+    plt.close(ax.figure)
 
 
 # --------------------------------------------------------------------------- #

@@ -159,6 +159,36 @@ def contour_plot(
     return ax
 
 
+def surface_plot(
+    result: FitResult,
+    x: str,
+    y: str,
+    *,
+    fixed: dict[str, float] | None = None,
+    ax: Axes | None = None,
+    resolution: int = 25,
+    cmap: str = "viridis",
+) -> Axes:
+    """3-D surface of the fitted response over two factors (Phase 2b companion to contour_plot).
+
+    Reuses :func:`surface_grid` for the natural-unit mesh. Requires matplotlib's ``mplot3d``
+    (bundled with matplotlib); passing your own ``ax`` requires a 3-D projection axes.
+    """
+    import matplotlib.pyplot as plt
+
+    nat_x, nat_y, z = surface_grid(result, x, y, fixed=fixed, resolution=resolution)
+
+    if ax is None:
+        fig = plt.figure()
+        ax = fig.add_subplot(projection="3d")
+    ax.plot_surface(nat_x, nat_y, z, cmap=cmap)  # type: ignore[union-attr]
+    ax.set_xlabel(x)
+    ax.set_ylabel(y)
+    ax.set_zlabel("fitted response")  # type: ignore[union-attr]
+    ax.set_title("Fitted response surface")
+    return ax
+
+
 def residuals_vs_fitted(result: FitResult, ax: Axes | None = None) -> Axes:
     """Scatter of residuals against fitted values, with a zero reference line."""
     import matplotlib.pyplot as plt

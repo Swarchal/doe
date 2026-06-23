@@ -22,7 +22,7 @@ reporter readout). The factors are things you actually pipette and set on an inc
 >
 > Every console output and figure below is real: it is produced by running the snippets
 > via `scripts/build_vignette_assets.py`, which writes the figures to `docs/img/`. The
-> readouts in Vignettes 5–10 use a synthetic-but-realistic dome surface so the examples are
+> readouts in Vignettes 5–12 use a synthetic-but-realistic dome surface so the examples are
 > fully reproducible; swap in your own plate data and the same calls apply.
 
 ---
@@ -654,7 +654,150 @@ the box with fewer runs. For three factors BBD is the economical, safe-by-constr
 
 ---
 
-## Vignette 11 — Run order: randomise to protect yourself
+## Vignette 11 — From contour to coordinates: the optimum, exactly
+
+**Concept: analytic optimisation of the fitted surface.** In Vignette 6 we _read_ the optimum
+off the contour map (and confirmed it with the argmax of a 101×101 grid). That works, but it
+is eyeballing. Once you have a quadratic fit the optimum has a closed form — and the same
+algebra tells you something the picture can't: whether that point is a genuine peak, a valley,
+or a saddle.
+
+A second-order model is `ŷ = b₀ + xᵀb + xᵀB x`, where `b` collects the linear coefficients and
+`B` is the curvature matrix (squared terms on its diagonal, half the interactions off it).
+Setting the gradient to zero gives the **stationary point** `x_s = −½ B⁻¹ b` directly.
+
+```python
+from doe import stationary_point
+
+# res_ccd is the quadratic fit from Vignette 6
+sp = stationary_point(res_ccd)
+print(sp.coded)       # [0.7429 0.8867]   (coded units)
+print(sp.natural)     # {'dna_ng': 448.6, 'lipid_uL': 2.387}
+print(sp.response)    # 67.10   -- predicted % GFP+ at the optimum
+print(sp.kind)        # 'maximum'
+print(sp.eigenvalues) # [-10.30  -4.65]
+```
+
+This lands on the same well Vignette 6's grid search found (~448 ng DNA, ~2.39 µL lipid,
+~67% GFP+) — but as an exact solution, decoded into pipette units, in one call.
+
+**Canonical analysis: is it actually a peak?** The `kind` and `eigenvalues` come from the
+_canonical analysis_ — the eigen-decomposition of the curvature matrix `B`. The signs of the
+eigenvalues classify the stationary point:
+
+- **all negative → a maximum** (a dome — what you want when maximising a readout),
+- **all positive → a minimum** (a bowl),
+- **mixed signs → a saddle** (a mountain pass: rising one way, falling another — there is no
+  single best point, and you should optimise _along_ the rising direction).
+
+Here both eigenvalues are negative, so the surface is a true dome and `x_s` is its peak — the
+statistical confirmation of the "both squared terms are negative" reading from Vignette 6.
+
+**The figure: a 3-D surface plot.** `surface_plot` is the companion to the contour map — the
+same fitted surface, drawn as a landscape you can see the dome in directly.
+
+```python
+from doe.plotting import surface_plot
+ax = surface_plot(res_ccd, "dna_ng", "lipid_uL")
+```
+
+![3-D surface of fitted % GFP+ over dna_ng and lipid_uL, climbing to a bright dome toward high DNA and high lipid](img/v11_surface.png)
+
+The surface climbs from ~30% GFP+ at low DNA/low lipid (front, dark) to a bright ridge near
+high DNA/high lipid (back, ~67%), bending over into the dome whose peak the stationary point
+pinned down. It is the Vignette 6 contour map with the height axis made literal.
+
+**When the peak is outside the box: the constrained optimum.** The stationary point is
+_unconstrained_ — the algebra doesn't know your factor limits. If the true peak lies beyond
+the range you tested, `x_s` falls outside the coded `[-1, +1]` box and is not a setting you can
+pipette. `optimum` handles that: it searches the surface _within_ the box and flags whether the
+best feasible point sits on a boundary.
+
+```python
+from doe import optimum
+
+# a luciferase reporter readout still climbing at the top of the tested DNA range
+res_rep = fit_ols(ccd, y_reporter, model="quadratic")
+
+stationary_point(res_rep).coded   # [1.90  0.29]  -- dna coded 1.90 is *outside* [-1, 1]
+opt = optimum(res_rep, maximize=True)
+print(opt.coded)      # [1.00  0.27]   -- clamped to the high-DNA edge
+print(opt.natural)    # {'dna_ng': 500.0, 'lipid_uL': 1.769}
+print(opt.at_bound)   # True
+```
+
+`at_bound=True` is the message that matters: your best feasible setting is pressed against a
+limit (here the top of the DNA range). The model's true peak is past where you pipetted, so
+this is a cue to run a follow-up that **extends the DNA range upward** rather than trusting
+500 ng as the answer. For the well-behaved Vignette 6 dome, by contrast, `optimum(res_ccd)`
+returns the interior stationary point with `at_bound=False` — the optimum is real, not an
+artefact of where you stopped looking.
+
+**Takeaway.** `stationary_point` gives the optimum in closed form _and_ tells you what kind of
+point it is; `optimum` keeps you honest about your factor bounds. An interior maximum with
+`at_bound=False` is a result you can act on; a boundary optimum is an invitation to widen the
+design.
+
+---
+
+## Vignette 12 — Two readouts at once: desirability
+
+**Concept: multi-response optimisation.** Real assay development almost never optimises a
+single number. You want high transfection **and** healthy cells; a bright reporter **and** low
+background. These goals usually pull in opposite directions — cranking DNA lifts %GFP+ but
+stresses the cells — so "the optimum" is a _compromise_, and where you strike it is a choice
+you should make explicitly, not by squinting at two contour plots side by side.
+
+The **desirability** approach (Derringer–Suich) makes the trade-off quantitative. Each response
+is mapped onto a **desirability** `dᵢ` between 0 (unacceptable) and 1 (ideal) via a goal —
+maximise, minimise, or hit a target — over a range you specify. The overall desirability is
+their **geometric mean** `D = (∏ dᵢ)^(1/m)`. The geometric mean is the crux: if _any_ response
+is unacceptable (`dᵢ = 0`), `D` collapses to 0 — so a setting that nails GFP but kills the cells
+scores zero, exactly as it should. `desirability` then finds the factor settings that maximise
+`D` over the design box.
+
+```python
+from doe import ResponseGoal, desirability
+
+# res_ccd  : the %GFP+ quadratic from Vignette 6 (more DNA helps, up to the dome's peak)
+# res_viab : a % viable-cell readout on the same CCD (falls as DNA rises -- toxicity)
+goals = [
+    ResponseGoal(res_ccd,  goal="max", low=40.0, high=70.0),   # want %GFP+ toward 70
+    ResponseGoal(res_viab, goal="max", low=50.0, high=90.0),   # want viability toward 90
+]
+des = desirability(goals)
+
+print(des.natural)     # {'dna_ng': 311.3, 'lipid_uL': 1.920}
+print(des.responses)   # [62.4  78.2]   -- predicted (%GFP+, % viable) at that point
+print(des.individual)  # [0.748  0.705] -- per-response desirabilities
+print(des.overall)     # 0.726          -- geometric-mean D
+```
+
+Each `ResponseGoal` says "for this response, desirability ramps from 0 at `low` to 1 at
+`high`." With both goals set to `max`, the optimiser looks for settings that push _both_
+readouts up their ramps together. The answer here is **~311 ng DNA, ~1.92 µL lipid** — a
+middle-of-the-range DNA amount giving a predicted **62% GFP+ at 78% viability**, with both
+individual desirabilities healthy (~0.7) and an overall `D` of 0.73.
+
+**Why not just maximise GFP?** Because the readouts conflict. Optimising %GFP+ _alone_ (the
+Vignette 11 result) drives DNA to ~449 ng for ~67% GFP+ — but read the viability surface at
+that same well and it has dropped to ~65%. Desirability deliberately gives back a few points of
+GFP (67 → 62) to buy a large gain in viability (65 → 78), because the geometric mean rewards
+keeping _both_ acceptable over maxing one out. That balance — not the single-response peak — is
+usually the setting that actually reproduces and scales.
+
+Tuning the trade-off is just editing the goals: tighten viability's `low` to refuse anything
+below, say, 70% viable; add a `weight > 1` to a `ResponseGoal` to make its ramp steeper (insist
+on getting closer to ideal); or switch a goal to `"target"` with a `target=` value when you want
+a response _at_ a set point rather than as high as possible.
+
+**Takeaway.** With more than one readout, don't optimise them one at a time and hope. State each
+goal, let desirability find the compromise that keeps them all acceptable, and read the
+trade-off it struck — explicitly, in the units you pipette.
+
+---
+
+## Vignette 13 — Run order: randomise to protect yourself
 
 **Concept: randomisation.** Plates drift. The first columns you pipette sit in reagent
 longer; the incubator has a thermal gradient; cells settle in the tube as you dispense. If
@@ -697,6 +840,9 @@ plate itself.
 | See which factors matter (cheap, many inputs) | `fractional_factorial` + `half_normal_plot`          |
 | Quantify main effects & interactions          | `full_factorial` + `fit_ols` + `pareto_plot`         |
 | Locate an optimum (curved surface)            | `central_composite` / `box_behnken` + `contour_plot` |
+| Pinpoint & classify the optimum exactly       | `stationary_point` (canonical analysis), `surface_plot` |
+| Find the best _feasible_ setting in bounds    | `optimum` (reports `at_bound`)                       |
+| Balance several readouts at once              | `desirability` + `ResponseGoal`                      |
 | Test whether effects are real, not just big   | `anova_table`, `FitResult.conf_int`                  |
 | Check the model is trustworthy                | `residuals_vs_fitted`, `normal_qq`, `lack_of_fit`    |
 | Guard against over-fitting (choose a model)   | `adjusted_r2`, `predicted_r2` (Q²), `press`          |

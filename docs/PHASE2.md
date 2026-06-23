@@ -8,17 +8,17 @@ The Phase 1 contract is unchanged: everything still flows through a coded design
 (`Design.coded()` → `build_model_matrix` → `fit_ols`). Phase 2 extends each link rather than
 replacing it.
 
-> **Scope decision:** Phase 2 is split. **Phase 2a (this plan)** = designs + quadratic fitting +
-> ANOVA/lack-of-fit + contour plots. **Phase 2b (deferred)** = surface optimization (stationary
+> **Scope decision:** Phase 2 is split. **Phase 2a** = designs + quadratic fitting +
+> ANOVA/lack-of-fit + contour plots. **Phase 2b** = surface optimization (stationary
 > point, canonical analysis, constrained optimum), multi-response desirability, and 3-D surface
-> plots. Phase 2b is sketched in §8 but not built until 2a ships.
+> plots (detailed in §8). Both phases are now implemented.
 
-> **Status (2026-06-23):** Phase 2a is **complete**. Generators (`rsm.py`), center-point
-> tracking on `Design`, the quadratic model cleanup, `FitResult` inference fields,
-> `analysis/anova.py`, and the §4 plotting helpers (contour + residual/half-normal diagnostics)
-> are all implemented; 54 tests pass with ruff + mypy clean. The only remaining roadmap work is
-> **Phase 2b** (§8: surface optimization + desirability + 3-D `surface_plot`), which is deferred.
-> Progress is tracked per item with ✅ below.
+> **Status (2026-06-23):** Phase 2a **and** Phase 2b are **complete**. Phase 2a: generators
+> (`rsm.py`), center-point tracking on `Design`, the quadratic model cleanup, `FitResult`
+> inference fields, `analysis/anova.py`, and the §4 plotting helpers (contour + residual/
+> half-normal diagnostics). Phase 2b: `analysis/optimize.py` (`stationary_point` + canonical
+> analysis, constrained `optimum`, Derringer-Suich `desirability`) and the 3-D `surface_plot`.
+> 76 tests pass with ruff + mypy clean. Progress is tracked per item with ✅ below.
 
 ## Goals (Phase 2a)
 
@@ -225,7 +225,8 @@ Drawing contours in natural units required `FitResult` to know its factors, so a
 FactorSet` field was added to `FitResult` (set by `fit_ols`). `tests/conftest.py` forces the Agg
 backend so the plotting tests run headless.
 
-3-D `surface_plot` ships with Phase 2b alongside the optimization it visualizes.
+3-D `surface_plot` shipped with Phase 2b (§8) alongside the optimization it visualizes; it
+reuses this `surface_grid` core.
 
 ---
 
@@ -272,23 +273,37 @@ complete — the next roadmap work is Phase 2b (§8), which is deferred.
 
 ---
 
-## 8. Phase 2b — deferred (surface optimization)
+## 8. Phase 2b — surface optimization ✅ DONE
 
-Built only after 2a ships. Sketch so the seams are designed in now:
+Built after 2a shipped. All items below are implemented (`analysis/optimize.py`,
+`tests/test_optimize.py`, `surface_plot` in `plotting.py`):
 
-- **`analysis/optimize.py`** — write the fitted quadratic as `ŷ = b₀ + xᵀb + xᵀB x` (extract `b`
-  and the symmetric `B` from `FitResult.term_names`).
-  - Stationary point `x_s = −½ B⁻¹ b`, decoded to natural units.
-  - Canonical analysis: eigendecomposition of `B` → max (all λ<0) / min (all λ>0) / saddle.
-  - Constrained numeric optimum via `scipy.optimize.minimize` over the coded box, for when the
-    stationary point is infeasible.
-  - Multi-response **desirability** (Derringer–Suich): per-response `dᵢ(ŷ)`, geometric-mean
-    `D = (∏dᵢ)^(1/m)`, maximized over the box.
-- **`plotting.py`** — `surface_plot` (3-D `plot_surface`) companion to the 2a contour plot.
-- **API** — `optimum`, `desirability`.
-- **Tests** (`test_optimize.py`) — known concave quadratic: stationary point = analytic maximum,
-  canonical analysis reports a maximum; constrained optimum clamps to the box when the stationary
-  point is outside it.
+- ✅ **`analysis/optimize.py`** — writes the fitted quadratic as `ŷ = b₀ + xᵀb + xᵀB x`
+  (`_quadratic_form` extracts `b` and the symmetric `B` from `FitResult.term_names`, using
+  `B[i,i] = coef(xᵢ²)` and `B[i,j] = ½·coef(xᵢ:xⱼ)`).
+  - ✅ `stationary_point` — `x_s = −½ B⁻¹ b`, decoded to natural units, with canonical analysis
+    (eigendecomposition of `B` via `eigh` → `"maximum"` / `"minimum"` / `"saddle"`). Raises when
+    `B` is rank-deficient (no unique stationary point).
+  - ✅ `optimum` — constrained optimum over the coded box via multistart `scipy.optimize`
+    (`L-BFGS-B`), reporting whether the optimum sits on a bound (`at_bound`). `bounds` accepts a
+    single `(low, high)` or a per-factor sequence.
+  - ✅ Multi-response **desirability** (Derringer–Suich): `ResponseGoal` (`max`/`min`/`target`,
+    `low`/`high`/`target`/`weight`) → per-response `dᵢ(ŷ)`, geometric-mean `D = (∏dᵢ)^(1/m)`,
+    maximized over the box with `differential_evolution` (the desirabilities are non-smooth).
+- ✅ **`plotting.py`** — `surface_plot` (3-D `plot_surface`) over the existing `surface_grid` core,
+  companion to the 2a contour plot.
+- ✅ **API** — `stationary_point`, `optimum`, `desirability` (plus the `StationaryPoint`,
+  `Optimum`, `ResponseGoal`, `DesirabilityResult` dataclasses) exported at top level.
+- ✅ **Tests** (`test_optimize.py`) — known concave quadratic: stationary point matches the
+  closed-form `−½ B⁻¹ b` and canonical analysis reports a maximum; convex → minimum, mixed →
+  saddle; constrained optimum clamps to the box when the stationary point is outside it; a
+  conflicting two-response desirability trades off at the analytic compromise (`x₁ = 0.5`, `D = 0.5`).
+
+**API decisions confirmed during the 2b build:**
+- The rank check uses an absolute tolerance tied to the coefficient scale, so a purely linear
+  fit's ~1e-16 interaction round-off reads as "no curvature" rather than a spurious full rank.
+- `desirability` uses `differential_evolution` (global, gradient-free) because the saturated
+  flats of each `dᵢ` make the objective non-smooth; `optimum` uses smooth multistart `L-BFGS-B`.
 
 ---
 

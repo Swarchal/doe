@@ -9,9 +9,11 @@ DoE (Design of Experiments) — a Python library for design-of-experiment analys
 ## Status
 
 Phase 1 (factors/coding, the `Design` container, factorial generators, OLS analysis,
-effect/Pareto/half-normal plots) and Phase 2a (response-surface designs, quadratic fitting,
-ANOVA + lack-of-fit, contour/diagnostic plots) are implemented. `plackett_burman` is still a
-deliberate `NotImplementedError` stub, and categorical-factor model expansion is deferred
+effect/Pareto/half-normal plots), Phase 2a (response-surface designs, quadratic fitting,
+ANOVA + lack-of-fit, contour/diagnostic plots), and Phase 2b (surface optimization —
+stationary point + canonical analysis, constrained optimum, Derringer–Suich desirability,
+3-D `surface_plot`) are implemented. `plackett_burman` is still a deliberate
+`NotImplementedError` stub, and categorical-factor model expansion is deferred
 (`build_model_matrix` rejects categorical factors explicitly). See `docs/PLAN.md` for the
 full roadmap and `docs/PHASE2.md` for the Phase 2 build plan.
 
@@ -56,10 +58,16 @@ consumes one.
   yields NaN standard errors rather than erroring.
 - `analysis/anova.py` — `anova_table` (sequential/Type I SS via QR), `lack_of_fit` (needs ≥2
   center points for pure error), and predictive metrics `press`/`predicted_r2`/`adjusted_r2`.
+- `analysis/optimize.py` (Phase 2b) — reads the fitted quadratic as `ŷ = b₀ + xᵀb + xᵀB x`
+  (`_quadratic_form` pulls `b`/symmetric `B` from `term_names`). `stationary_point` solves
+  `−½ B⁻¹ b` + canonical eigen-analysis (max/min/saddle); `optimum` does a constrained multistart
+  `L-BFGS-B` search over the coded box (reports `at_bound`); `desirability` maximizes a
+  Derringer–Suich geometric-mean `D` over `ResponseGoal`s via `differential_evolution`.
 - `plotting.py` — effect plots (`pareto_plot`, `main_effects_plot`, `half_normal_plot`),
-  RSM (`contour_plot` + its headless core `surface_grid`, which takes `fixed={factor: value}`
-  to slice >2 factors), and diagnostics (`residuals_vs_fitted`, `normal_qq`). Imports
-  `matplotlib` lazily so the core library stays usable without the optional `plotting` extra.
+  RSM (`contour_plot` + 3-D `surface_plot` over their headless core `surface_grid`, which takes
+  `fixed={factor: value}` to slice >2 factors), and diagnostics (`residuals_vs_fitted`,
+  `normal_qq`). Imports `matplotlib` lazily so the core library stays usable without the optional
+  `plotting` extra.
 
 Tests anchor correctness against known designs/effects (e.g. a 2^(4-1) defining relation,
 recovering injected coded-unit effects exactly, textbook CCD/Box-Behnken run counts). Keep
