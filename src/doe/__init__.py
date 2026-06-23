@@ -1,0 +1,43 @@
+"""DoE -- a Python library for design-of-experiment analysis.
+
+Phase 1 public API: factor definitions, the Design container, factorial generators,
+and OLS analysis. See ``docs/PLAN.md`` for the full roadmap.
+"""
+
+from __future__ import annotations
+
+from .analysis.anova import (
+    LackOfFit,
+    adjusted_r2,
+    anova_table,
+    lack_of_fit,
+    predicted_r2,
+    press,
+)
+from .analysis.fit import FitResult, fit_ols
+from .design import Design
+from .factors import CategoricalFactor, ContinuousFactor, Factor, FactorSet
+from .generators.factorial import fractional_factorial, full_factorial
+from .generators.rsm import box_behnken, central_composite
+
+__all__ = [
+    "CategoricalFactor",
+    "ContinuousFactor",
+    "Design",
+    "Factor",
+    "FactorSet",
+    "FitResult",
+    "LackOfFit",
+    "adjusted_r2",
+    "anova_table",
+    "box_behnken",
+    "central_composite",
+    "fit_ols",
+    "fractional_factorial",
+    "full_factorial",
+    "lack_of_fit",
+    "predicted_r2",
+    "press",
+]
+
+__version__ = "0.1.0"
