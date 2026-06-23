@@ -164,11 +164,12 @@ print(
 ax = contour_plot(res_ccd, "dna_ng", "lipid_uL")
 save(ax, "v6_contour.png")
 
-X, Y, Z = surface_grid(res_ccd, "dna_ng", "lipid_uL", resolution=101)
-i, j = np.unravel_index(np.argmax(Z), Z.shape)
+opt = res_ccd.optimum()
+print(f"\noptimum repr: {opt!r}")
 print(
-    f"\npredicted optimum: {X[i, j]:.0f} ng DNA, {Y[i, j]:.2f} uL lipid "
-    f"-> {Z[i, j]:.1f}% GFP+"
+    f"predicted optimum: {opt.natural['dna_ng']:.0f} ng DNA, "
+    f"{opt.natural['lipid_uL']:.2f} uL lipid -> {opt.response:.1f}% GFP+ "
+    f"(at_bound={opt.at_bound})"
 )
 
 ax = residuals_vs_fitted(res_ccd)

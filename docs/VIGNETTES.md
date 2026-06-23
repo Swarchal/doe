@@ -388,21 +388,32 @@ visible (the two reagents co-titrate). The "65" ring is broad rather than a tigh
 which is good news: a range of high-DNA/high-lipid combinations land near the peak, so you
 have room to pick a robust, pipettable setting rather than chasing one finicky point.
 
-Under the hood, `contour_plot` calls `surface_grid`, which you can use directly when you
-want the numbers rather than the picture — e.g. to find the predicted-best well
-programmatically:
+When you want the numbers rather than the picture, ask the fit for its optimum directly —
+`result.optimum()` runs a constrained search over the design box and reports the best point
+in natural units (no manual grid scan):
 
 ```python
-from doe.plotting import surface_grid
-X, Y, Z = surface_grid(result, "dna_ng", "lipid_uL", resolution=101)
-i, j = np.unravel_index(np.argmax(Z), Z.shape)
-print(f"predicted optimum: {X[i, j]:.0f} ng DNA, {Y[i, j]:.2f} uL lipid -> {Z[i, j]:.1f}% GFP+")
-# predicted optimum: 448 ng DNA, 2.38 uL lipid -> 67.1% GFP+
+opt = result.optimum()            # maximize over the coded box by default
+print(opt)
+# Optimum(max: dna_ng=448.6, lipid_uL=2.387 -> 67.1)
+
+print(f"predicted optimum: {opt.natural['dna_ng']:.0f} ng DNA, "
+      f"{opt.natural['lipid_uL']:.2f} uL lipid -> {opt.response:.1f}% GFP+")
+# predicted optimum: 449 ng DNA, 2.39 uL lipid -> 67.1% GFP+
 ```
 
-So the model's best guess is ~448 ng DNA with ~2.38 µL lipid for ~67% GFP+. With
-`alpha="faced"` every run stayed inside your stated bounds, so this optimum is an
-_interpolation_ you can trust — not an extrapolation past where you actually pipetted.
+So the model's best guess is ~449 ng DNA with ~2.39 µL lipid for ~67% GFP+. The
+`opt.at_bound` flag is `False` here, which is the reassuring case: the optimum sits in the
+interior of the design region, not pinned to an edge. Combined with `alpha="faced"` (every
+run stayed inside your stated bounds), this optimum is an _interpolation_ you can trust — not
+an extrapolation past where you actually pipetted. If `at_bound` were `True`, the surface
+would still be climbing at the edge of where you explored, and the "optimum" would really be
+a signpost to run a follow-up design shifted in that direction.
+
+For an unconstrained view — the surface's true stationary point plus a canonical analysis
+classifying it as a maximum, minimum, or saddle — use `result.stationary_point()`. And when
+you need the raw grid (e.g. to feed your own plotting), `contour_plot`'s underlying
+`surface_grid(result, "dna_ng", "lipid_uL")` is still there.
 
 **More than two factors?** Hold the others fixed and slice. With a third factor (say serum
 %), `surface_grid(result, "dna_ng", "lipid_uL", fixed={"serum_pct": 10})` shows the DNA×lipid

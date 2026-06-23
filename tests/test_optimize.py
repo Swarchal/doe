@@ -185,3 +185,54 @@ def test_desirability_requires_matching_factors():
     r2 = fit_ols(other, np.zeros(other.n_runs), order=1, interactions=True)
     with pytest.raises(ValueError):
         desirability([ResponseGoal(r1, "max", 0.0, 1.0), ResponseGoal(r2, "max", 0.0, 1.0)])
+
+
+# --------------------------------------------------------------------------- #
+# FitResult convenience methods + readable reprs
+# --------------------------------------------------------------------------- #
+
+
+def test_fitresult_optimum_method_matches_function():
+    result = _fit(
+        lambda x1, x2: 50.0 + 3.0 * x1 + 2.0 * x2 - 4.0 * x1**2 - 3.0 * x2**2 - 1.0 * x1 * x2
+    )
+    via_method = result.optimum(maximize=True)
+    via_function = optimum(result, maximize=True)
+    assert np.allclose(via_method.coded, via_function.coded)
+    assert np.isclose(via_method.response, via_function.response)
+
+
+def test_fitresult_optimum_method_forwards_bounds_and_direction():
+    result = _fit(lambda x1, x2: 50.0 + 10.0 * x1 + 2.0 * x2 - x1**2 - x2**2)
+    opt = result.optimum(maximize=True, bounds=(-0.5, 0.5))
+    assert np.allclose(opt.coded, [0.5, 0.5], atol=1e-4)
+
+
+def test_fitresult_stationary_point_method_matches_function():
+    result = _fit(
+        lambda x1, x2: 50.0 + 3.0 * x1 + 2.0 * x2 - 4.0 * x1**2 - 3.0 * x2**2 - 1.0 * x1 * x2
+    )
+    assert np.allclose(result.stationary_point().coded, stationary_point(result).coded)
+
+
+def test_optimum_repr_is_readable():
+    result = _fit(lambda x1, x2: 50.0 + 10.0 * x1 + 2.0 * x2 - x1**2 - x2**2)
+    text = repr(result.optimum(maximize=True))
+    assert text.startswith("Optimum(max:")
+    assert "a=" in text and "b=" in text
+    assert "->" in text
+    assert "at bound" in text  # this surface's max clamps to the box edge
+
+
+def test_stationary_point_repr_reports_kind():
+    result = _fit(
+        lambda x1, x2: 50.0 + 3.0 * x1 + 2.0 * x2 - 4.0 * x1**2 - 3.0 * x2**2 - 1.0 * x1 * x2
+    )
+    assert repr(stationary_point(result)).startswith("StationaryPoint(maximum:")
+
+
+def test_desirability_repr_lists_responses():
+    result = _fit(lambda x1, x2: 50.0 + 10.0 * x1, model=None, order=1)
+    text = repr(desirability([ResponseGoal(result, goal="max", low=50.0, high=60.0)]))
+    assert text.startswith("DesirabilityResult(D=")
+    assert "responses=[" in text

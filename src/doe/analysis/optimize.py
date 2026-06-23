@@ -83,6 +83,11 @@ def _decode(factors: FactorSet, coded: np.ndarray) -> dict[str, float]:
     return out
 
 
+def _format_point(natural: dict[str, float]) -> str:
+    """Render a ``{factor: natural_value}`` mapping as ``a=1.23, b=4.56`` for reprs."""
+    return ", ".join(f"{name}={value:.4g}" for name, value in natural.items())
+
+
 def _box(bounds: Bounds, k: int) -> list[tuple[float, float]]:
     """Normalise ``bounds`` into a per-factor list of ``(low, high)`` pairs."""
     if (
@@ -117,6 +122,12 @@ class StationaryPoint:
     eigenvalues: np.ndarray
     eigenvectors: np.ndarray
     kind: Literal["maximum", "minimum", "saddle"]
+
+    def __repr__(self) -> str:
+        return (
+            f"StationaryPoint({self.kind}: {_format_point(self.natural)} "
+            f"-> {self.response:.4g})"
+        )
 
 
 def stationary_point(result: FitResult) -> StationaryPoint:
@@ -171,6 +182,14 @@ class Optimum:
     response: float
     maximize: bool
     at_bound: bool
+
+    def __repr__(self) -> str:
+        direction = "max" if self.maximize else "min"
+        bound = " (at bound)" if self.at_bound else ""
+        return (
+            f"Optimum({direction}: {_format_point(self.natural)} "
+            f"-> {self.response:.4g}{bound})"
+        )
 
 
 def _multistart_minimize(
@@ -305,6 +324,13 @@ class DesirabilityResult:
     responses: np.ndarray
     individual: np.ndarray
     overall: float
+
+    def __repr__(self) -> str:
+        responses = ", ".join(f"{v:.4g}" for v in self.responses)
+        return (
+            f"DesirabilityResult(D={self.overall:.4g}: {_format_point(self.natural)} "
+            f"| responses=[{responses}])"
+        )
 
 
 def desirability(

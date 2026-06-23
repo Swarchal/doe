@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 from scipy import stats
@@ -12,6 +12,9 @@ from scipy import stats
 from ..design import Design
 from ..factors import FactorSet
 from .model import build_model_matrix
+
+if TYPE_CHECKING:
+    from .optimize import Bounds, Optimum, StationaryPoint
 
 ModelSpec = Literal["linear", "quadratic"]
 
@@ -58,6 +61,20 @@ class FitResult:
             t_crit = float(stats.t.ppf(0.5 + level / 2.0, self.dof_resid))
             half = t_crit * self.std_errors
         return np.column_stack([self.coefficients - half, self.coefficients + half])
+
+    def stationary_point(self) -> StationaryPoint:
+        """Unconstrained stationary point of the fitted surface (see :func:`optimize`)."""
+        from .optimize import stationary_point
+
+        return stationary_point(self)
+
+    def optimum(
+        self, *, maximize: bool = True, bounds: Bounds = (-1.0, 1.0)
+    ) -> Optimum:
+        """Constrained optimum over the coded design box (see :func:`optimize.optimum`)."""
+        from .optimize import optimum
+
+        return optimum(self, maximize=maximize, bounds=bounds)
 
 
 def fit_ols(
