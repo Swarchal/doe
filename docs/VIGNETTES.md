@@ -154,6 +154,26 @@ helps a lot at high DNA and only a little at low DNA, the interaction is large a
 When an interaction is present, **you cannot talk about a factor's "best" level without
 naming the other factor's level** — which is exactly why one-at-a-time tuning misleads.
 
+**The figure: an interaction plot.** `interaction_plot(result, "dna_ng", "lipid_uL")` draws
+the fitted readout against one factor (DNA) as a separate line for each level of the other
+(lipid). It is the most direct picture of an interaction there is: **parallel lines mean no
+interaction** (the effect of DNA is the same whatever the lipid setting), while **lines that
+fan apart or cross** _are_ the interaction, made visible.
+
+```python
+from doe.plotting import interaction_plot
+ax = interaction_plot(result, "dna_ng", "lipid_uL")   # default: lines at lipid's low & high
+```
+
+![Interaction plot: fitted % GFP+ vs DNA, with a shallow line at low lipid and a steeper line at high lipid fanning apart toward high DNA](img/v3_interaction.png)
+
+The two lines splay outward rather than running parallel. At low lipid (0.5 µL) the DNA line
+climbs gently, 22 → 40% GFP+; at high lipid (2.5 µL) it climbs more steeply, 31 → 60. That
+widening gap — ~9 points apart at low DNA, ~20 at high DNA — is exactly the `dna_ng:lipid_uL`
+interaction the table reported as +5.5, drawn out. Parallel lines would have said the two
+reagents act independently; the visible fan is the co-titration OFAT walks right past. (By
+default the trace lines sit at the factor's low and high; pass `trace_levels=[...]` for more.)
+
 **The figure: a Pareto plot of effects.** `pareto_plot(result)` sorts every term
 (main effects and interactions) by |effect| as a horizontal bar chart. It tells you, in
 rank order, where the signal is — and whether an interaction bar is tall enough to take
@@ -218,8 +238,8 @@ measured readout came back like this; fit a linear model and rank the effects:
 import numpy as np
 from doe import fit_ols
 
-# one viability-proxy readout per run (no replicates -> saturated model, but we only
-# need the effect *sizes* to spot the hits)
+# one viability-proxy readout per run (no replicates -> no residual degrees of
+# freedom for tests; we only need the effect *sizes* to spot the hits)
 y = np.array([31.0, 55.2, 68.8, 44.5, 54.7, 30.4, 45.0, 69.8])
 result = fit_ols(design, y, model="linear")
 
@@ -269,6 +289,100 @@ cluster of inert terms hugging the bottom-left (those overlapping labels at |eff
 are seeding density, DMSO, and every aliased interaction — pure noise). Two real factors
 out of four, found in eight wells. Those are the two to take forward into a response-surface
 study.
+
+---
+
+## Vignette 4b — Plackett–Burman: the leanest screen
+
+**Concept: saturated main-effect screening.** A half-fraction got 4 factors into 8 runs.
+But what if the suspect list is _long_ — eleven candidate factors, and you can only afford a
+dozen wells? A regular fractional factorial jumps in powers of two (8, 16, 32 …), so eleven
+factors would force you to 16 runs. A **Plackett–Burman** design fits `k` factors into the
+smallest available Hadamard run count with room for `k` factor columns: eleven factors in
+**twelve** runs. It is the most run-frugal two-level screen there is.
+
+```python
+from doe import ContinuousFactor, plackett_burman
+
+factors = [
+    ContinuousFactor("seeding_cells",  5_000, 20_000, units="cells/well"),
+    ContinuousFactor("serum_pct",      2,     10,     units="%"),
+    ContinuousFactor("dmso_pct",       0.1,   1.0,    units="%"),
+    ContinuousFactor("compound_uM",    0.1,   10,     units="uM"),
+    ContinuousFactor("incubation_h",   24,    72,     units="h"),
+    ContinuousFactor("passage_num",    5,     25,     units="passage"),
+    ContinuousFactor("dna_ng",         100,   500,    units="ng/well"),
+    ContinuousFactor("lipid_uL",       0.5,   2.5,    units="uL/well"),
+    ContinuousFactor("antibiotic_pct", 0.0,   1.0,    units="%"),
+    ContinuousFactor("coating_ugml",   1,     50,     units="ug/mL"),
+    ContinuousFactor("media_age_d",    1,     14,     units="d"),
+]
+
+pb = plackett_burman(factors)
+print(pb.n_runs)   # 12  -- eleven factors, twelve wells
+
+# the design is balanced and the main effects are perfectly orthogonal
+coded = pb.coded().to_numpy()
+print((coded.sum(axis=0) == 0).all())                 # True: each column is 6 high / 6 low
+print(np.allclose(coded.T @ coded, 12 * np.eye(11)))  # True: X^T X = 12 I
+```
+
+The left panel below is the design matrix itself: twelve runs, eleven `±1` columns, every
+column split exactly six high / six low, and every pair of columns orthogonal. That
+orthogonality is what lets you estimate all eleven main effects independently from twelve
+wells.
+
+The catch is the right panel — the **alias-structure heatmap** (`correlation_heatmap`, the
+general design-diagnostic tool introduced in Vignette 15). It shows the correlation between every
+pair of model terms: the eleven main effects are mutually orthogonal (the off-diagonal `0`s among
+them), but each two-factor interaction is _partially_ aliased (correlation `0` or exactly `±1/3`)
+with **many** main effects, not cleanly confounded with one. This "complex aliasing" is the price
+of the lean run count, and it is the visual signature that distinguishes PB from a regular fraction
+(whose interactions would be either fully aliased, `±1`, or not at all, `0`). With 66 terms the
+numbers are too dense to read — the _pattern_ is the message.
+
+![Left: the 12×11 Plackett–Burman design matrix as a balanced red/blue ±1 grid. Right: the alias-structure heatmap over all 66 terms — mains mutually orthogonal, each leaking |r| = 1/3 into many two-factor interactions.](img/v4b_plackett_burman.png)
+
+Because of that aliasing, you fit **main effects only** — asking for interactions on twelve
+runs over-parameterises the model and smears the real effects across their aliases. With a
+main-effects fit the signal is clean:
+
+```python
+import numpy as np
+from doe import fit_ols
+
+# one readout per run; here compound, DNA and serum are the true drivers
+y = np.array([69.7, 58.8, 62.3, 79.5, 52.5, 48.8, 80.5, 49.6, 40.5, 52.4, 57.4, 68.4])
+
+# main effects only: a saturated screen cannot resolve the aliased interactions
+result = fit_ols(pb, y, order=1, interactions=False)
+for name, (coef, eff) in sorted(result.summary().items(), key=lambda kv: -abs(kv[1][1])):
+    if name != "Intercept":
+        print(f"{name:>16s}: {eff:+.2f}")
+#      compound_uM: +18.03
+#           dna_ng: +12.23
+#        serum_pct: -9.63
+#         lipid_uL: -0.90
+#         dmso_pct: -0.40
+#     incubation_h: +0.37
+#      passage_num: -0.20
+#     coating_ugml: -0.13
+#   antibiotic_pct: +0.07
+#      media_age_d: -0.07
+#    seeding_cells: -0.03
+```
+
+Three factors (`compound_uM`, `dna_ng`, `serum_pct`) stand an order of magnitude above a
+floor of near-zero terms — the eight inert factors. Eleven suspects narrowed to three in
+twelve wells. Take those three into a response-surface study (Vignettes 5–6); the partial
+aliasing means a PB hit is a candidate worth confirming, not yet a quantified effect.
+
+> **PB vs. fractional factorial.** Reach for Plackett–Burman when you have many factors, you
+> only care _which_ matter (not their interactions), and run budget is tight — its available
+> run counts are multiples of four, not just powers of two. Reach for a fractional factorial
+> when you want cleaner, interpretable aliasing (and the ability to dealias interactions with
+> follow-up runs). Both are screens; PB trades interaction information for the leanest possible
+> design.
 
 ---
 
@@ -468,7 +582,27 @@ for a 12-run design) — no strong S-curve, no points flung far off the line. Th
 assumption behind the p-values and confidence intervals holds, so the significance calls from
 the fit can be trusted.
 
-**Takeaway.** Diagnostics are cheap insurance. Two plots stand between a tidy summary table
+**Predicted vs. actual.** `predicted_vs_actual(result)` scatters each predicted value against
+the value you actually measured, with a 45° reference line. It is the most direct "does the
+model agree with the wells?" check: points hugging the line mean the model reproduces the data,
+while systematic departures — a single run flung off the line, or a banana-shaped bend through
+the cloud — flag a suspect well or a missing term. The title carries R², the same goodness-of-fit
+number made visual.
+
+```python
+from doe.plotting import predicted_vs_actual
+ax = predicted_vs_actual(res_ccd)   # the Vignette 6 quadratic fit
+```
+
+![Predicted vs actual: points lie tight against the 45-degree line across the 30-67% GFP+ range, R² = 0.997](img/v7_predicted_vs_actual.png)
+
+Every point sits tight against the diagonal across the whole 30 → 67% GFP+ range — the visual
+face of the R² ≈ 0.997 from Vignette 6. No run strays from the line (no suspect well), and there
+is no curvature in the cloud that would betray a term the model is missing. The little knot near
+60% is the four center replicates again, predicted almost identically. Read alongside the two
+residual plots, this is a model you can act on.
+
+**Takeaway.** Diagnostics are cheap insurance. A few plots stand between a tidy summary table
 and a wasted confirmation experiment.
 
 ---
@@ -480,10 +614,10 @@ their effect. But size alone can mislead: a large effect estimated from noisy we
 fluke, while a modest one measured cleanly may be rock-solid. To separate "big" from
 "trustworthy" you need the **standard error** of each estimate — and that needs spare runs.
 A design with more runs than model terms has **residual degrees of freedom**, and those let
-you compute p-values and confidence intervals. (This is exactly what the saturated screen in
-Vignette 4 lacked: 8 runs, 8 terms, zero spare — so it could only rank effect _sizes_, never
-test them. The CCD from Vignettes 5–6 has 12 runs for a 6-term model, leaving 6 residual
-degrees of freedom — enough to do statistics.)
+you compute p-values and confidence intervals. (This is exactly what the unreplicated,
+aliased screen in Vignette 4 lacked: it could rank effect _sizes_, never test them. The CCD
+from Vignettes 5–6 has 12 runs for a 6-term model, leaving 6 residual degrees of freedom —
+enough to do statistics.)
 
 The **ANOVA table** partitions the total variation in the readout into a piece for each term
 plus a leftover **residual**. Each term's mean square is compared (an **F-ratio**) against
@@ -511,12 +645,12 @@ interaction, _and_ both quadratic terms are real, not artefacts. Note how small 
 `Residual` SS (5.4) is next to the term SS — the model captures almost all the variation, the
 numerical echo of the R² ≈ 0.997 from Vignette 6.
 
-The companion view is a **confidence interval** on each coefficient. `result.conf_int(0.95)`
+The companion view is a **confidence interval** on each coefficient. `res_ccd.conf_int(0.95)`
 returns a two-sided interval per term; an interval that excludes zero is the same verdict as
 "p < 0.05," but it also tells you _how precisely_ the effect is pinned down.
 
 ```python
-ci = result.conf_int(0.95)   # (n_terms, 2): [low, high] per coefficient
+ci = res_ccd.conf_int(0.95)   # (n_terms, 2): [low, high] per coefficient
 # coefficient (not effect) and its 95% CI:
 #   dna_ng         : 11.52   CI [10.57, 12.47]
 #   lipid_uL       :  6.73   CI [ 5.78,  7.68]
@@ -668,8 +802,8 @@ the box with fewer runs. For three factors BBD is the economical, safe-by-constr
 ## Vignette 11 — From contour to coordinates: the optimum, exactly
 
 **Concept: analytic optimisation of the fitted surface.** In Vignette 6 we _read_ the optimum
-off the contour map (and confirmed it with the argmax of a 101×101 grid). That works, but it
-is eyeballing. Once you have a quadratic fit the optimum has a closed form — and the same
+off the contour map (and confirmed it with `result.optimum()`). That works, but it is still a
+numerical search. Once you have a quadratic fit the optimum has a closed form — and the same
 algebra tells you something the picture can't: whether that point is a genuine peak, a valley,
 or a saddle.
 
@@ -689,7 +823,7 @@ print(sp.kind)        # 'maximum'
 print(sp.eigenvalues) # [-10.30  -4.65]
 ```
 
-This lands on the same well Vignette 6's grid search found (~448 ng DNA, ~2.39 µL lipid,
+This lands on the same well Vignette 6's constrained optimiser found (~448 ng DNA, ~2.39 µL lipid,
 ~67% GFP+) — but as an exact solution, decoded into pipette units, in one call.
 
 **Canonical analysis: is it actually a peak?** The `kind` and `eigenvalues` come from the
@@ -727,8 +861,8 @@ best feasible point sits on a boundary.
 ```python
 from doe import optimum
 
-# a luciferase reporter readout still climbing at the top of the tested DNA range
-res_rep = fit_ols(ccd, y_reporter, model="quadratic")
+# res_rep is a quadratic fit for a luciferase reporter readout still climbing at
+# the top of the tested DNA range, on the same CCD factors as res_ccd.
 
 stationary_point(res_rep).coded   # [1.90  0.29]  -- dna coded 1.90 is *outside* [-1, 1]
 opt = optimum(res_rep, maximize=True)
@@ -844,23 +978,137 @@ plate itself.
 
 ---
 
+## Vignette 14 — Sharing the design: interactive HTML
+
+**Concept: a self-contained, explorable view of the design.** Every figure so far has been a
+PNG of an _analysis_. But before any wells are filled, the design itself is worth looking at —
+and worth handing to a colleague who doesn't run Python. `to_html` writes the whole design to a
+single, self-contained HTML file: one row per run, in both the natural units you pipette and the
+coded `±1` units the maths uses, colour-coded so the structure is obvious at a glance. Apply it to
+a _randomised_ design (Vignette 13) and you get a ready-to-use bench **run sheet**.
+
+```python
+from doe import ContinuousFactor, central_composite, to_html
+
+dna   = ContinuousFactor("dna_ng",   100, 500, units="ng/well")
+lipid = ContinuousFactor("lipid_uL", 0.5, 2.5, units="uL/well")
+ccd   = central_composite([dna, lipid], alpha="faced", center=4)
+
+# randomise the run order, then export the run sheet
+plate_order = ccd.randomize(seed=42)
+plate_order.name = "Transfection CCD - randomised run sheet"
+
+# returns the HTML string and (optionally) writes it to a file
+to_html(plate_order, path="docs/example_design.html")
+```
+
+Open the result in any browser ([example output](example_design.html)). It is sortable,
+searchable and pageable (via DataTables, loaded from a CDN), with two pieces of colour doing the
+work:
+
+- The **coded columns** carry a diverging blue→white→red scale, so the factorial corners (deep
+  blue `−1` / deep red `+1`), the axial points, and the centre (white `0`) are visually distinct
+  — you can _see_ the CCD's structure without reading a single number.
+- When the design tracks point types (as a CCD does), the **`type` column is tinted** — centre
+  replicates in amber, axial runs in blue — so the run categories the lack-of-fit test relies on
+  (Vignette 5) are obvious.
+
+The `run` column is the **pipetting order** (1, 2, 3 …). For a randomised design a **`std_order`**
+column appears alongside it, carrying each well's original design-row index — so after you pipette
+in the shuffled physical order you can re-join your readouts back to the design (exactly the
+mapping introduced in Vignette 13).
+
+A few practical notes:
+
+- It adds **no Python dependencies** — the table and colouring are emitted directly, not via
+  `DataFrame.style` (which needs `jinja2`) or matplotlib.
+- Pass `cdn=False` for a fully offline file (a static styled table with no external assets), or
+  `coded=False` to show natural units only.
+- The output is just a string when you omit `path`, so you can embed it in a report or a
+  notebook (`IPython.display.HTML(to_html(plate_order))`).
+
+**Takeaway.** `to_html` turns a `Design` into something you can _share and explore_, not just a
+DataFrame you print. It is the bridge between designing an experiment and walking it over to the
+bench.
+
+---
+
+## Vignette 15 — Reading a design's alias structure
+
+**Concept: check aliasing _before_ you run.** Vignette 4 traded away the ability to resolve some
+interactions to save runs, and Vignette 4b showed Plackett–Burman's tangled "complex aliasing".
+Both are decisions you want to _see_ before committing wells — which terms can this design estimate
+independently, and which are confounded? `correlation_heatmap` answers that for **any** design, and
+`alias_matrix` is its headless, numeric core.
+
+The clearest illustration is the half-fraction from Vignette 4. Name the factors `A`–`D` so the
+term labels line up with the generator `D=ABC`:
+
+```python
+from doe import ContinuousFactor, fractional_factorial
+from doe.plotting import alias_matrix, correlation_heatmap
+
+demo = fractional_factorial(
+    [ContinuousFactor(c, 0.0, 1.0) for c in "ABCD"], generators=["D=ABC"]
+)
+
+labels, corr = alias_matrix(demo, interactions=True)   # term names + correlation matrix
+idx = {name: i for i, name in enumerate(labels)}
+for left, right in [("A:B", "C:D"), ("A:C", "B:D"), ("A:D", "B:C")]:
+    print(f"{left} = {right}: r = {corr[idx[left], idx[right]]:+.0f}")
+# A:B = C:D: r = +1
+# A:C = B:D: r = +1
+# A:D = B:C: r = +1
+
+ax = correlation_heatmap(demo, interactions=True)
+```
+
+![Alias-structure heatmap of the 2^(4-1) fraction: orthogonal main effects on the diagonal, and the three confounded interaction pairs A:B=C:D, A:C=B:D, A:D=B:C as off-diagonal blocks](img/v15_alias.png)
+
+How to read it:
+
+- The **diagonal is always 1** (each term correlates perfectly with itself). The interesting
+  information is _off_ the diagonal.
+- **Main effects** (`A`–`D`) show `0` everywhere off the diagonal — they are mutually orthogonal and
+  estimated independently, exactly what the factorial geometry buys you.
+- The three bright **off-diagonal cells** are the price of the fraction: `A:B` is perfectly
+  correlated (`r = 1`) with `C:D`, `A:C` with `B:D`, `A:D` with `B:C`. Those interaction pairs are
+  _confounded_ — the model literally cannot tell them apart, so a significant `A:B` term might
+  really be `C:D`. Knowing this _before_ you run tells you which follow-up runs would de-alias them.
+
+A few notes:
+
+- It reads straight from a `Design` (pre-analysis), and `order`/`interactions` pick which model's
+  aliasing to assess — the same knobs as `fit_ols`/`build_model_matrix`. It handles categorical
+  factors too (via their effect-coded contrast columns).
+- Pass `absolute=True` for `|r|` on a sequential scale — handy for spotting _any_ aliasing
+  regardless of sign on a busy design (this is the form Vignette 4b uses for Plackett–Burman).
+- For an orthogonal design (a full factorial, or a Plackett–Burman's main effects) the off-diagonal
+  is all zeros — a clean diagonal is the picture of "everything estimable independently".
+
+**Takeaway.** Aliasing is a property of the _design_, knowable before a single well is filled.
+`correlation_heatmap` makes it a one-glance check: a clean diagonal means orthogonal; bright
+off-diagonal cells are confounded terms you should know about before you commit reagents.
+
+---
+
 ## Where to go next
 
 | You want to…                                  | Reach for…                                           |
 | --------------------------------------------- | ---------------------------------------------------- |
 | See which factors matter (cheap, many inputs) | `fractional_factorial` + `half_normal_plot`          |
-| Quantify main effects & interactions          | `full_factorial` + `fit_ols` + `pareto_plot`         |
+| Quantify main effects & interactions          | `full_factorial` + `fit_ols` + `pareto_plot` / `interaction_plot` |
 | Locate an optimum (curved surface)            | `central_composite` / `box_behnken` + `contour_plot` |
 | Pinpoint & classify the optimum exactly       | `stationary_point` (canonical analysis), `surface_plot` |
 | Find the best _feasible_ setting in bounds    | `optimum` (reports `at_bound`)                       |
 | Balance several readouts at once              | `desirability` + `ResponseGoal`                      |
 | Test whether effects are real, not just big   | `anova_table`, `FitResult.conf_int`                  |
-| Check the model is trustworthy                | `residuals_vs_fitted`, `normal_qq`, `lack_of_fit`    |
+| Check the model is trustworthy                | `residuals_vs_fitted`, `normal_qq`, `predicted_vs_actual`, `lack_of_fit` |
 | Guard against over-fitting (choose a model)   | `adjusted_r2`, `predicted_r2` (Q²), `press`          |
 | Guard against plate drift                     | `Design.randomize`                                   |
+| Share/explore a design as interactive HTML    | `to_html`                                            |
+| Check a design's aliasing before running       | `correlation_heatmap`, `alias_matrix`                |
 
 Every example above runs in coded units internally but is entered and reported in the real
 units you set at the bench — nanograms, microlitres, percent. That is the whole point: the
 statistics stay rigorous while you keep thinking in pipette terms.
-</content>
-</invoke>

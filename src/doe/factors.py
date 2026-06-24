@@ -37,7 +37,15 @@ class ContinuousFactor:
         return (self.high - self.low) / 2.0
 
     def code(self, values: np.ndarray) -> np.ndarray:
-        """Map natural units to coded ``[-1, +1]`` units."""
+        """Map natural units to coded ``[-1, +1]`` units.
+
+        Centering on the midpoint and scaling by the half-range is what makes effects
+        comparable across factors measured on different scales (e.g. temperature in degrees
+        vs. concentration in molar): a one-unit move in coded space is the full low->high
+        swing for every factor. It also keeps the main-effect columns balanced about zero, so
+        in a balanced design they are mutually orthogonal and the effect estimates do not
+        confound one another.
+        """
         return (np.asarray(values, dtype=float) - self.center) / self.half_range
 
     def decode(self, coded: np.ndarray) -> np.ndarray:
@@ -47,13 +55,19 @@ class ContinuousFactor:
 
 @dataclass(frozen=True)
 class CategoricalFactor:
-    """A categorical factor taking one of a fixed set of ``levels``."""
+    """A categorical factor taking one of a fixed set of ``levels``.
+
+    Unlike a continuous factor there is no natural midpoint or distance between levels, so
+    categorical factors have no ``[-1, +1]`` coding of their own; they are turned into
+    numeric contrast columns only at analysis time (see ``analysis.model._effect_code``).
+    """
 
     name: str
     levels: tuple[object, ...]
     units: str | None = None
 
     def __post_init__(self) -> None:
+        # a factor must vary to have an effect; a single level carries no information
         if len(self.levels) < 2:
             raise ValueError(f"factor {self.name!r}: needs at least 2 levels")
 

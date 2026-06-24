@@ -16,7 +16,8 @@ from doe.analysis.optimize import (
     optimum,
     stationary_point,
 )
-from doe.factors import ContinuousFactor
+from doe.factors import CategoricalFactor, ContinuousFactor
+from doe.generators.factorial import full_factorial
 from doe.generators.rsm import central_composite
 
 
@@ -55,6 +56,39 @@ def test_stationary_point_recovers_interior_maximum():
     # decoded to natural units: a, b each span [0, 10] (center 5, half-range 5)
     assert np.isclose(sp.natural["a"], 5.0 + 5.0 * 16.0 / 47.0)
     assert np.isclose(sp.natural["b"], 5.0 + 5.0 * 13.0 / 47.0)
+
+
+def _mixed_fit():
+    """A fit including a categorical factor -- not optimizable as a continuous surface."""
+    factors = [
+        ContinuousFactor("temp", 0.0, 100.0),
+        ContinuousFactor("time", 0.0, 10.0),
+        CategoricalFactor("cat", ("A", "B")),
+    ]
+    design = full_factorial(factors, levels=2)
+    rng = np.random.default_rng(0)
+    return fit_ols(design, rng.normal(size=design.n_runs), order=1, interactions=True)
+
+
+def test_stationary_point_rejects_categorical_factor():
+    # surface optimization is undefined over a discrete factor; expect a clear TypeError
+    # (regression guard: previously raised an opaque KeyError 'cat[B]')
+    result = _mixed_fit()
+    with pytest.raises(TypeError, match="continuous"):
+        stationary_point(result)
+
+
+def test_optimum_rejects_categorical_factor():
+    result = _mixed_fit()
+    with pytest.raises(TypeError, match="continuous"):
+        optimum(result)
+
+
+def test_desirability_rejects_categorical_factor():
+    result = _mixed_fit()
+    goal = ResponseGoal(result, goal="max", low=-5.0, high=5.0)
+    with pytest.raises(TypeError, match="continuous"):
+        desirability([goal])
 
 
 def test_stationary_point_predicted_response_is_the_extremum():

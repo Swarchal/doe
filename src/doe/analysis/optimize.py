@@ -41,6 +41,19 @@ Bounds = tuple[float, float] | Sequence[tuple[float, float]]
 
 def _quadratic_form(result: FitResult) -> tuple[float, np.ndarray, np.ndarray]:
     """Extract ``(b0, b, B)`` so that ``y-hat = b0 + x^T b + x^T B x`` in coded units."""
+    # The quadratic form is over the continuous factors' coded coordinates. A categorical
+    # factor is expanded into ``factor[level]`` contrast columns whose term names are not
+    # factor names, and optimizing a smooth surface over a discrete dimension is not defined,
+    # so reject such fits with a clear error rather than a KeyError deep in the parse below.
+    non_continuous = [
+        name for name in result.factors.names
+        if not isinstance(result.factors[name], ContinuousFactor)
+    ]
+    if non_continuous:
+        raise TypeError(
+            "surface optimization requires all-continuous factors; "
+            f"got categorical factor(s) {non_continuous}"
+        )
     names = result.factors.names
     index = {name: i for i, name in enumerate(names)}
     k = len(names)
@@ -146,8 +159,13 @@ def stationary_point(result: FitResult) -> StationaryPoint:
             "fit a quadratic model or use optimum() for a constrained search"
         )
 
-    # gradient is b + 2 B x; set to zero -> 2 B x = -b
+    # The stationary point is where the fitted surface is flat (zero gradient): the candidate
+    # optimum. Gradient is b + 2 B x; setting it to zero gives 2 B x = -b.
     x_s = np.linalg.solve(2.0 * big_b, -b)
+    # Canonical analysis: the eigenvalues of B describe the surface's curvature along its
+    # principal axes. All negative -> the surface curves down in every direction (a true
+    # maximum); all positive -> a minimum; mixed signs -> a saddle (best on the boundary, where
+    # optimum() should be used instead). Eigenvectors give the directions of steepest curvature.
     eigenvalues, eigenvectors = np.linalg.eigh(big_b)
 
     tol = 1e-9 * max(1.0, float(np.abs(eigenvalues).max()))
@@ -202,6 +220,10 @@ def _multistart_minimize(
     lows = np.array([lo for lo, _ in box])
     highs = np.array([hi for _, hi in box])
     rng = np.random.default_rng(0)
+    # A quadratic constrained to a box can have its optimum in the interior or on any face/
+    # corner; a single gradient descent can stall at a local optimum or a saddle. Starting from
+    # the center, both bounds and several random points and keeping the best makes the search
+    # robust to that.
     starts = [
         0.5 * (lows + highs),  # center
         lows.copy(),
@@ -291,7 +313,13 @@ class ResponseGoal:
                 raise ValueError("target must lie strictly between low and high")
 
     def desirability(self, value: float) -> float:
-        """Map a predicted response ``value`` to a desirability in ``[0, 1]``."""
+        """Map a predicted response ``value`` to a desirability in ``[0, 1]``.
+
+        Desirability puts responses on different scales onto a common 0 (unacceptable) to 1
+        (ideal) ruler. "max" ramps up across ``[low, high]``, "min" ramps down, and "target"
+        peaks at the target and falls off either side. The ``weight`` exponent bends the ramp:
+        ``>1`` demands getting near the ideal before desirability rises, ``<1`` is lenient.
+        """
         lo, hi, wt = self.low, self.high, self.weight
         if self.goal == "max":
             if value <= lo:
@@ -358,6 +386,9 @@ def desirability(
         d = np.empty(m)
         for i, (goal, (b0, b, big_b)) in enumerate(zip(goals, forms, strict=True)):
             d[i] = goal.desirability(_predict(b0, b, big_b, x))
+        # The overall score is the *geometric* mean, so any single unacceptable response (d=0)
+        # drags the whole product to zero -- a deliberate veto: a compromise must satisfy every
+        # goal at least minimally, not let a great score on one paper over a failure on another.
         if np.any(d <= 0.0):
             return 0.0  # geometric mean is 0; negate -> 0
         return -float(np.prod(d) ** (1.0 / m))

@@ -66,6 +66,9 @@ def anova_table(result: FitResult, design: Design, response: np.ndarray) -> pd.D
     index: list[str] = []
     # skip the intercept (column 0): its SS is the mean-correction, not a model term
     for name, ss in zip(result.term_names[1:], seq_ss[1:], strict=True):
+        # each term has 1 df, so its mean square equals its sum of squares. The F-ratio asks
+        # whether the variation this term explains is large relative to the residual noise; the
+        # p-value is the chance of an F that big if the term's true effect were zero.
         ms = float(ss)
         f = ms / ms_resid if ms_resid and np.isfinite(ms_resid) and ms_resid > 0 else float("nan")
         p = float(stats.f.sf(f, 1, dof_resid)) if np.isfinite(f) else float("nan")
@@ -103,10 +106,15 @@ def lack_of_fit(result: FitResult, design: Design, response: np.ndarray) -> Lack
     if len(center) < 2:
         raise ValueError("lack-of-fit needs at least 2 replicated center points for pure error")
 
+    # Pure error: replicate runs share identical factor settings, so any spread among their
+    # responses is pure experimental noise -- a model-free yardstick for the residual variance.
     y_center = y[center]
     ss_pe = float(((y_center - y_center.mean()) ** 2).sum())
     df_pe = len(center) - 1
 
+    # Lack of fit is whatever residual variation is left after removing pure error: variation
+    # the model failed to capture (e.g. missing curvature). The F-test below compares the two;
+    # a significant result means the model is inadequate, not merely that the data are noisy.
     ss_res = float(result.residuals @ result.residuals)
     df_resid = result.dof_resid
     ss_lof = ss_res - ss_pe
@@ -122,7 +130,13 @@ def lack_of_fit(result: FitResult, design: Design, response: np.ndarray) -> Lack
 
 
 def press(result: FitResult) -> float:
-    """PRESS statistic ``sum((e_i / (1 - h_i))**2)`` from leave-one-out residuals."""
+    """PRESS statistic ``sum((e_i / (1 - h_i))**2)`` from leave-one-out residuals.
+
+    PRESS measures how well the model *predicts runs it did not see*: dividing each residual by
+    ``1 - h_i`` rescales it into the residual the model would have had if that run were left out
+    of the fit (an algebraic shortcut that avoids ``n`` refits). It penalises over-fitting that
+    ordinary R^2 rewards, and underlies the predicted R^2 below.
+    """
     h = _leverages(result.model_matrix)
     denom = 1.0 - h
     return float(np.sum((result.residuals / denom) ** 2))
@@ -138,7 +152,12 @@ def predicted_r2(result: FitResult) -> float:
 
 
 def adjusted_r2(result: FitResult) -> float:
-    """Adjusted R-squared ``1 - (1 - R2)(n - 1)/(n - p)``."""
+    """Adjusted R-squared ``1 - (1 - R2)(n - 1)/(n - p)``.
+
+    Plain R^2 can only rise as terms are added; adjusting by the degrees of freedom charges for
+    each extra parameter, so it falls when a term explains less than chance would. A large gap
+    between R^2 and adjusted R^2 is a sign the model is padded with unhelpful terms.
+    """
     n_runs = result.model_matrix.shape[0]
     n_terms = len(result.term_names)
     if n_runs - n_terms <= 0:

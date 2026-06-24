@@ -12,10 +12,10 @@ Phase 1 (factors/coding, the `Design` container, factorial generators, OLS analy
 effect/Pareto/half-normal plots), Phase 2a (response-surface designs, quadratic fitting,
 ANOVA + lack-of-fit, contour/diagnostic plots), and Phase 2b (surface optimization —
 stationary point + canonical analysis, constrained optimum, Derringer–Suich desirability,
-3-D `surface_plot`) are implemented. `plackett_burman` is still a deliberate
-`NotImplementedError` stub, and categorical-factor model expansion is deferred
-(`build_model_matrix` rejects categorical factors explicitly). See `docs/PLAN.md` for the
-full roadmap and `docs/PHASE2.md` for the Phase 2 build plan.
+3-D `surface_plot`) are implemented, completing Phase 1 and Phase 2. `build_model_matrix`
+expands categorical factors via deviation (effect) coding, so OLS analysis handles mixed
+continuous/categorical designs. See `docs/PLAN.md` for the full roadmap and `docs/PHASE2.md`
+for the Phase 2 build plan.
 
 ## Commands
 
@@ -43,15 +43,19 @@ consumes one.
   `n_center`/`center_indices`, which the lack-of-fit pure-error estimate depends on, and is
   carried through `replicate`/`randomize` so center labels survive.
 - `generators/factorial.py` — `full_factorial` and `fractional_factorial` (2-level, from
-  generator strings like `"D=ABC"`). `plackett_burman` is a `NotImplementedError` stub.
+  generator strings like `"D=ABC"`), plus `plackett_burman` (saturated, orthogonal
+  main-effect screening designs; run counts from Sylvester doubling of the order-1/12/20
+  base Hadamard matrices, picking the next available size when one isn't constructible).
 - `generators/rsm.py` — second-order designs: `central_composite` (factorial core + axial
   points + center replicates; `alpha` is `"faced"`/`"rotatable"`/`"orthogonal"` or a float)
   and `box_behnken` (3-level, no corner runs). Both require continuous factors and set
   `point_types`.
 - `analysis/model.py` — `build_model_matrix` expands a `Design` into intercept + main-effect
   + interaction (+ optional quadratic) columns in coded units. Squared terms are only emitted
-  for factors that actually take values off `{-1, +1}` (a pure ±1 column squares to the
-  intercept). Categorical factors are rejected here (contrast expansion deferred).
+  for continuous factors that actually take values off `{-1, +1}` (a pure ±1 column squares to
+  the intercept). Categorical factors are expanded by deviation (effect) coding into `k-1`
+  contrast columns named `factor[level]` (first level is the `-1` reference); interactions are
+  products of the participating factors' encoded columns.
 - `analysis/fit.py` — `fit_ols` returns a `FitResult` (coefficients, effects, std errors,
   t/p-values, `conf_int`, `r_squared`). Note: in coded units an *effect* is `2 × coefficient`
   (the −1→+1 swing), which the tests rely on. A saturated model (residual dof 0) warns and

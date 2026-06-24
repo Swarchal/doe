@@ -25,7 +25,9 @@ from doe import (
     fractional_factorial,
     full_factorial,
     optimum,
+    plackett_burman,
     stationary_point,
+    to_html,
 )
 from doe.analysis import (
     adjusted_r2,
@@ -35,11 +37,16 @@ from doe.analysis import (
     press,
 )
 from doe.plotting import (
+    alias_matrix,
     contour_plot,
+    correlation_heatmap,
     half_normal_plot,
+    interaction_lines,
+    interaction_plot,
     main_effects_plot,
     normal_qq,
     pareto_plot,
+    predicted_vs_actual,
     residuals_vs_fitted,
     surface_grid,
     surface_plot,
@@ -95,6 +102,16 @@ save(ax, "v2_main_effects.png")
 ax = pareto_plot(result)
 save(ax, "v3_pareto.png")
 
+# interaction plot: fitted %GFP+ vs DNA, one line per lipid level. Non-parallel lines
+# are the dna x lipid interaction made visible. Print the line endpoints transcribed
+# in the vignette.
+nat_x, lines = interaction_lines(result, "dna_ng", "lipid_uL")
+print("\ninteraction_lines(result, 'dna_ng', 'lipid_uL'):")
+for level, z in lines:
+    print(f"  lipid={level:g} uL: DNA 100->500 gives {z[0]:.1f} -> {z[-1]:.1f}% GFP+")
+ax = interaction_plot(result, "dna_ng", "lipid_uL")
+save(ax, "v3_interaction.png")
+
 
 # --------------------------------------------------------------------------- #
 # Vignette 4: fractional factorial screen, half-normal plot
@@ -126,6 +143,86 @@ for i in order:
 
 ax = half_normal_plot(res_screen)
 save(ax, "v4_half_normal.png")
+
+
+# --------------------------------------------------------------------------- #
+# Vignette 4b: Plackett-Burman -- the leanest main-effect screen
+# --------------------------------------------------------------------------- #
+banner("Vignette 4b: Plackett-Burman screening")
+
+pb_factors = [
+    ContinuousFactor("seeding_cells", 5_000, 20_000, units="cells/well"),
+    ContinuousFactor("serum_pct", 2, 10, units="%"),
+    ContinuousFactor("dmso_pct", 0.1, 1.0, units="%"),
+    ContinuousFactor("compound_uM", 0.1, 10, units="uM"),
+    ContinuousFactor("incubation_h", 24, 72, units="h"),
+    ContinuousFactor("passage_num", 5, 25, units="passage"),
+    ContinuousFactor("dna_ng", 100, 500, units="ng/well"),
+    ContinuousFactor("lipid_uL", 0.5, 2.5, units="uL/well"),
+    ContinuousFactor("antibiotic_pct", 0.0, 1.0, units="%"),
+    ContinuousFactor("coating_ugml", 1, 50, units="ug/mL"),
+    ContinuousFactor("media_age_d", 1, 14, units="d"),
+]
+pb = plackett_burman(pb_factors)
+print(f"pb.n_runs = {pb.n_runs} for {len(pb_factors)} factors")
+print("pb.coded():")
+print(pb.coded())
+
+codedpb = pb.coded().to_numpy(dtype=float)
+n_pb = codedpb.shape[0]
+gram = codedpb.T @ codedpb
+print(f"\nevery column balanced (sums to zero): {np.allclose(codedpb.sum(0), 0)}")
+print(f"main effects mutually orthogonal (XtX = {n_pb}*I): "
+      f"{np.allclose(gram, n_pb * np.eye(codedpb.shape[1]))}")
+
+# a readout where three factors dominate; the other eight are inert
+rng = np.random.default_rng(19)
+true_pb = (
+    60
+    + 9 * codedpb[:, 3]   # compound_uM
+    + 6 * codedpb[:, 6]   # dna_ng
+    - 5 * codedpb[:, 1]   # serum_pct
+)
+y_pb = np.round(true_pb + rng.normal(0, 0.8, size=true_pb.shape), 1)
+print("\ny_pb:", list(y_pb))
+# fit MAIN EFFECTS ONLY: a saturated PB screen cannot resolve interactions (they are
+# partially aliased), so asking for them over-parameterises and dilutes the real effects.
+res_pb = fit_ols(pb, y_pb, order=1, interactions=False)
+print("\neffects (|effect|, sorted):")
+ranked = sorted(res_pb.summary().items(), key=lambda kv: -abs(kv[1][1]))
+for name, ce in ranked:
+    if name != "Intercept":
+        print(f"  {name:>16s}: {ce[1]:+.2f}")
+
+# The figure: the iconic balanced design matrix (left), and the alias-structure
+# heatmap (right) -- the partial-aliasing fingerprint that sets PB apart from a
+# regular fractional factorial. The right panel reuses doe.plotting.correlation_heatmap.
+labels, alias = alias_matrix(pb, interactions=True, absolute=True)
+print(f"\nterm-to-term correlations take values: {np.unique(np.round(alias, 4))}")
+
+names = pb.factors.names
+fig, (ax1, ax2) = plt.subplots(
+    1, 2, figsize=(12.5, 5.2), gridspec_kw={"width_ratios": [0.8, 1.4]}
+)
+ax1.imshow(codedpb, cmap="RdBu_r", vmin=-1, vmax=1, aspect="auto")
+for i in range(n_pb):
+    for j in range(len(names)):
+        ax1.text(
+            j, i, "+" if codedpb[i, j] > 0 else "−",
+            ha="center", va="center", fontsize=7,
+            color="white" if codedpb[i, j] > 0 else "black",
+        )
+ax1.set_xticks(range(len(names)))
+ax1.set_xticklabels(names, rotation=90, fontsize=7)
+ax1.set_yticks(range(n_pb))
+ax1.set_yticklabels([f"run {i + 1}" for i in range(n_pb)], fontsize=7)
+ax1.set_title("PB design: 11 factors in 12 runs\n(red +1, blue −1; every column 6/6 balanced)",
+              fontsize=9)
+
+correlation_heatmap(pb, interactions=True, absolute=True, ax=ax2)
+ax2.set_title("Alias structure: 11 mains + 55 two-factor interactions\n"
+              "(mains mutually orthogonal; each leaks |r| = 1/3 into many 2FIs)", fontsize=9)
+save(ax1, "v4b_plackett_burman.png")
 
 
 # --------------------------------------------------------------------------- #
@@ -176,6 +273,8 @@ ax = residuals_vs_fitted(res_ccd)
 save(ax, "v7_residuals_vs_fitted.png")
 ax = normal_qq(res_ccd)
 save(ax, "v7_normal_qq.png")
+ax = predicted_vs_actual(res_ccd)
+save(ax, "v7_predicted_vs_actual.png")
 
 
 # --------------------------------------------------------------------------- #
@@ -329,5 +428,38 @@ banner("Vignette 13: randomise run order")
 plate_order = ccd.randomize(seed=42)
 print("plate_order.runs.head():")
 print(plate_order.runs.head())
+
+
+# --------------------------------------------------------------------------- #
+# Vignette 14: interactive HTML view of the design
+# --------------------------------------------------------------------------- #
+banner("Vignette 14: interactive HTML view of the design")
+
+DOCS = pathlib.Path(__file__).resolve().parent.parent / "docs"
+# the randomised CCD doubles as a bench run sheet: 'run' is the pipetting order and
+# 'std_order' maps each well back to its design row for re-joining readouts.
+plate_order.name = "Transfection CCD - randomised run sheet"
+html = to_html(plate_order, path=DOCS / "example_design.html")
+print(f"wrote docs/example_design.html ({len(html)} bytes)")
+
+
+# --------------------------------------------------------------------------- #
+# Vignette 15: alias-structure heatmap (correlation_heatmap)
+# --------------------------------------------------------------------------- #
+banner("Vignette 15: alias-structure heatmap")
+
+# a 2^(4-1) fraction with short factor names so the term labels match the generator
+demo = fractional_factorial(
+    [ContinuousFactor(c, 0.0, 1.0) for c in "ABCD"], generators=["D=ABC"]
+)
+labels15, alias15 = alias_matrix(demo, interactions=True)
+idx15 = {name: i for i, name in enumerate(labels15)}
+print(f"labels: {labels15}")
+print("confounded two-factor-interaction pairs (|r| = 1):")
+for left, right in [("A:B", "C:D"), ("A:C", "B:D"), ("A:D", "B:C")]:
+    print(f"  {left} = {right}: r = {alias15[idx15[left], idx15[right]]:+.0f}")
+
+ax = correlation_heatmap(demo, interactions=True)
+save(ax, "v15_alias.png")
 
 print("\nDONE")

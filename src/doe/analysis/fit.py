@@ -104,19 +104,27 @@ def fit_ols(
 
     mm = build_model_matrix(design, order=order, interactions=interactions)
     x = mm.X
+    # least-squares solution of X b = y; in a balanced/orthogonal design the coefficients are
+    # exactly the half-effects, but lstsq also handles the non-orthogonal (e.g. CCD) case.
     coef, *_ = np.linalg.lstsq(x, y, rcond=None)
 
     fitted = x @ coef
     residuals = y - fitted
+    # R^2 is the fraction of the total (mean-corrected) variation in the response explained by
+    # the model: 1 - unexplained/total. Undefined when the response never varies.
     ss_res = float(residuals @ residuals)
     ss_tot = float(((y - y.mean()) ** 2).sum())
     r_squared = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
 
+    # residual degrees of freedom = runs minus parameters estimated; this is the budget that
+    # pays for the error variance and therefore for every standard error and p-value below.
     n_runs, n_terms = x.shape
     dof_resid = n_runs - n_terms
     xtx_inv = np.linalg.pinv(x.T @ x)
 
     if dof_resid > 0:
+        # mean squared error estimates the experimental noise variance; scaling (X'X)^-1 by it
+        # gives the coefficient covariance, whose diagonal square-roots are the standard errors.
         mse = ss_res / dof_resid
         cov_beta = mse * xtx_inv
         std_errors = np.sqrt(np.diag(cov_beta))
@@ -124,6 +132,9 @@ def fit_ols(
             t_values = coef / std_errors
             p_values = 2.0 * stats.t.sf(np.abs(t_values), dof_resid)
     else:
+        # a saturated model spends every run on a parameter, leaving nothing to estimate noise
+        # with; effects can still be computed but their significance cannot be judged. (Such a
+        # design is usually read with a half-normal plot instead -- see plotting.half_normal_plot.)
         warnings.warn(
             "model is saturated (residual dof = 0); standard errors are undefined",
             stacklevel=2,
@@ -134,8 +145,11 @@ def fit_ols(
         t_values = np.full(n_terms, np.nan)
         p_values = np.full(n_terms, np.nan)
 
+    # an "effect" is the response change over the full -1 -> +1 swing of a coded factor, i.e.
+    # twice the coefficient (the slope per coded unit). This is the classic factorial-effect
+    # scale that the Pareto/half-normal plots and most DoE textbooks report.
     effects = 2.0 * coef
-    effects[0] = coef[0]  # intercept has no "effect" interpretation
+    effects[0] = coef[0]  # intercept is the grand mean, not a swing -- leave it untouched
     return FitResult(
         mm.term_names,
         coef,

@@ -47,8 +47,12 @@ def _resolve_alpha(alpha: AlphaSpec, n_factorial: int, k: int, center: int) -> f
     if isinstance(alpha, (int, float)) and not isinstance(alpha, bool):
         return float(alpha)
     if alpha == "faced":
+        # axial points on the cube faces (alpha = 1) -- keeps every run within the stated
+        # low/high bounds, at the cost of rotatability. Use when factor levels are hard limits.
         return 1.0
     if alpha == "rotatable":
+        # alpha = (n_factorial)^(1/4) makes prediction variance depend only on distance from the
+        # center, so the model predicts equally well in every direction -- the usual default.
         return float(n_factorial**0.25)
     if alpha == "orthogonal":
         # value that makes the second-order terms uncorrelated (NIST e-Handbook form)
@@ -97,11 +101,17 @@ def central_composite(
 
     a = _resolve_alpha(alpha, n_factorial, k, center)
 
+    # Axial (star) points sit out along each factor axis with all other factors at zero. They
+    # are what gives the design a third level per factor, so the pure quadratic (curvature)
+    # terms become estimable -- a 2-level factorial alone can only fit a plane. ``alpha`` sets
+    # how far out they reach, trading off rotatability vs. staying inside the factor bounds.
     axial = np.zeros((2 * k, k), dtype=float)
     for j in range(k):
         axial[2 * j, j] = -a
         axial[2 * j + 1, j] = a
 
+    # Replicated center points anchor the design at the origin: they supply the pure-error
+    # estimate for lack-of-fit and let the fit detect overall curvature.
     center_block = np.zeros((center, k), dtype=float)
 
     coded = np.vstack([core, axial, center_block])
@@ -124,6 +134,11 @@ def box_behnken(factors: Sequence[Factor], *, center: int = 3) -> Design:
     A spherical 3-level design with no corner runs: for each pair of factors, run the
     ``+/-1`` factorial of that pair with all other factors at 0, then add ``center``
     center-point replicates. Requires ``k >= 3`` factors.
+
+    Because it never sets all factors to their extremes at once, a Box-Behnken design avoids
+    the (often impossible or unsafe) corner combinations a central composite would visit, while
+    still placing points at three levels so curvature is estimable. It is a good choice when the
+    corners of the factor region are infeasible.
 
     Run-count anchors: ``k=3`` -> 12 edge + center; ``k=4`` -> 24 + center.
     """

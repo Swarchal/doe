@@ -108,3 +108,16 @@ def test_replicate_each_aligns_with_condition_grouped_response():
     y = 50.0 + 10.0 * coded[:, 0]
     result = fit_ols(rep, y, model="linear")
     assert np.isclose(dict(result.summary())["a"][1], 20.0)
+
+
+def test_randomize_can_be_repeated_without_duplicating_std_order():
+    design = central_composite(
+        [ContinuousFactor("a", 0, 10), ContinuousFactor("b", 0, 10)],
+        center=3,
+    )
+
+    randomized = design.randomize(seed=1).randomize(seed=2)
+
+    assert list(randomized.runs.columns).count("std_order") == 1
+    assert list(randomized.runs.columns)[0] == "std_order"
+    assert sorted(randomized.runs["std_order"].tolist()) == list(range(design.n_runs))

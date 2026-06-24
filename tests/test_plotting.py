@@ -20,12 +20,22 @@ import pytest
 from matplotlib.axes import Axes
 
 from doe.analysis.fit import fit_ols
-from doe.factors import ContinuousFactor
+from doe.factors import CategoricalFactor, ContinuousFactor
+from doe.generators.factorial import (
+    fractional_factorial,
+    full_factorial,
+    plackett_burman,
+)
 from doe.generators.rsm import central_composite
 from doe.plotting import (
+    alias_matrix,
     contour_plot,
+    correlation_heatmap,
     half_normal_plot,
+    interaction_lines,
+    interaction_plot,
     normal_qq,
+    predicted_vs_actual,
     residuals_vs_fitted,
     surface_grid,
     surface_plot,
@@ -171,6 +181,139 @@ def test_surface_plot_returns_3d_axes_with_natural_labels():
 
 
 # --------------------------------------------------------------------------- #
+# interaction_lines / interaction_plot
+# --------------------------------------------------------------------------- #
+
+
+def test_interaction_lines_recovers_known_slices():
+    # surface: y = 50 + 3 x1 - 2 x2 + 4 x1^2 + 2 x2^2 - x1 x2 (coded). Slicing along a (x1)
+    # at the two extremes of b (x2 = -1, +1) gives two analytic quadratics in x1.
+    result = _fit_exact()
+    nat_x, lines = interaction_lines(result, "a", "b", resolution=21)
+
+    assert nat_x.shape == (21,)
+    assert np.isclose(nat_x.min(), 0.0) and np.isclose(nat_x.max(), 10.0)
+    # default trace levels are b's low and high
+    assert [level for level, _ in lines] == [0.0, 10.0]
+
+    mid = int(np.argmin(np.abs(nat_x - 5.0)))  # a = 5 -> coded x1 = 0
+    (b_low, z_low), (b_high, z_high) = lines
+    # x1 = 0: b=0 (x2=-1) -> 50+2+2 = 54;  b=10 (x2=+1) -> 50-2+2 = 50
+    assert np.isclose(z_low[mid], 54.0, atol=1e-6)
+    assert np.isclose(z_high[mid], 50.0, atol=1e-6)
+
+
+def test_interaction_lines_nonparallel_when_interaction_present():
+    # the -x1 x2 term makes the a-slices fan out: the gap between the two lines is not constant
+    result = _fit_exact()
+    _, lines = interaction_lines(result, "a", "b", resolution=21)
+    gap = lines[0][1] - lines[1][1]
+    assert not np.allclose(gap, gap[0])
+
+
+def test_interaction_lines_custom_trace_levels():
+    result = _fit_exact()
+    nat_x, lines = interaction_lines(result, "a", "b", trace_levels=[2.5, 5.0, 7.5])
+    assert [level for level, _ in lines] == [2.5, 5.0, 7.5]
+    assert all(z.shape == nat_x.shape for _, z in lines)
+
+
+def test_interaction_lines_rejects_duplicate_axes():
+    result = _fit_exact()
+    with pytest.raises(ValueError):
+        interaction_lines(result, "a", "a")
+
+
+def test_interaction_plot_returns_axes_with_legend():
+    result = _fit_exact()
+    ax = interaction_plot(result, "a", "b")
+
+    assert isinstance(ax, Axes)
+    assert ax.get_xlabel() == "a"
+    assert ax.get_ylabel() == "fitted response"
+    assert ax.get_legend().get_title().get_text() == "b"
+    # one drawn line per trace level (default: 2)
+    assert len(ax.lines) == 2
+    plt.close(ax.figure)
+
+
+def test_interaction_plot_uses_given_axes():
+    result = _fit_exact()
+    fig, ax = plt.subplots()
+    out = interaction_plot(result, "a", "b", ax=ax)
+    assert out is ax
+    plt.close(fig)
+
+
+# --------------------------------------------------------------------------- #
+# mixed continuous/categorical fits -- plotting over the continuous axes must
+# not crash on the categorical contrast columns (regression: KeyError 'cat[B]')
+# --------------------------------------------------------------------------- #
+
+
+def _mixed_fit():
+    """A 2^3 fit over two continuous factors + one 2-level categorical, with a clean
+    categorical main effect (cat=B is +3 over the mean, cat=A is -3) and no interaction."""
+    factors = [
+        ContinuousFactor("temp", 0.0, 100.0),
+        ContinuousFactor("time", 0.0, 10.0),
+        CategoricalFactor("cat", ("A", "B")),
+    ]
+    design = full_factorial(factors, levels=2)
+    coded = design.coded()
+    temp = coded["temp"].to_numpy(dtype=float)
+    cat_sign = np.where(design.runs["cat"].to_numpy() == "B", 1.0, -1.0)
+    y = 10.0 + 2.0 * temp + 3.0 * cat_sign
+    return fit_ols(design, y, order=1, interactions=True)
+
+
+def test_surface_grid_handles_categorical_third_factor():
+    result = _mixed_fit()
+    # 'cat[B]' is in the model; sweeping the two continuous factors must not KeyError
+    _, _, z_default = surface_grid(result, "temp", "time", resolution=11)
+    _, _, z_a = surface_grid(result, "temp", "time", fixed={"cat": "A"}, resolution=11)
+    _, _, z_b = surface_grid(result, "temp", "time", fixed={"cat": "B"}, resolution=11)
+
+    assert z_default.shape == (11, 11)
+    # default holds the categorical at its average over levels -> midpoint of the two slices
+    assert np.allclose(z_default, 0.5 * (z_a + z_b))
+    # the categorical main effect (coef ~ 3) is a constant +/-1 contrast swing: z_b - z_a = 6
+    assert np.allclose(z_b - z_a, 6.0, atol=1e-6)
+
+
+def test_surface_grid_rejects_categorical_axis():
+    result = _mixed_fit()
+    with pytest.raises(TypeError):
+        surface_grid(result, "cat", "temp")
+
+
+def test_surface_grid_rejects_unknown_categorical_level():
+    result = _mixed_fit()
+    with pytest.raises(ValueError):
+        surface_grid(result, "temp", "time", fixed={"cat": "Z"})
+
+
+def test_interaction_lines_handles_categorical_third_factor():
+    result = _mixed_fit()
+    nat_x, lines = interaction_lines(result, "temp", "time", resolution=11)
+    assert len(lines) == 2
+    assert all(np.all(np.isfinite(z)) for _, z in lines)
+    # pinning the categorical to B raises every line by the +3 contrast vs the A=-3 slice
+    _, lines_a = interaction_lines(result, "temp", "time", fixed={"cat": "A"}, resolution=11)
+    _, lines_b = interaction_lines(result, "temp", "time", fixed={"cat": "B"}, resolution=11)
+    for (_, za), (_, zb) in zip(lines_a, lines_b, strict=True):
+        assert np.allclose(zb - za, 6.0, atol=1e-6)
+
+
+def test_interaction_lines_rejects_categorical_axis():
+    result = _mixed_fit()
+    with pytest.raises(TypeError):
+        interaction_lines(result, "cat", "temp")
+    with pytest.raises(TypeError):
+        interaction_lines(result, "temp", "cat")
+
+
+# --------------------------------------------------------------------------- #
 # residual diagnostics
 # --------------------------------------------------------------------------- #
 
@@ -190,6 +333,25 @@ def test_residuals_vs_fitted_plots_fitted_against_residuals():
 
     # a horizontal reference line at zero
     assert any(np.allclose(line.get_ydata(), 0.0) for line in ax.lines)
+    plt.close(ax.figure)
+
+
+def test_predicted_vs_actual_scatters_observed_against_fitted():
+    result = _fit_noisy()
+    ax = predicted_vs_actual(result)
+
+    assert isinstance(ax, Axes)
+    assert ax.get_xlabel().lower().startswith("actual")
+    assert ax.get_ylabel().lower().startswith("predicted")
+
+    observed = result.fitted + result.residuals
+    pts = ax.collections[0].get_offsets()
+    assert pts.shape[0] == result.fitted.shape[0]
+    assert np.allclose(np.sort(pts[:, 0]), np.sort(observed))
+    assert np.allclose(np.sort(pts[:, 1]), np.sort(result.fitted))
+
+    # a 45-degree reference line (x-data equals y-data)
+    assert any(np.allclose(line.get_xdata(), line.get_ydata()) for line in ax.lines)
     plt.close(ax.figure)
 
 
@@ -222,3 +384,69 @@ def test_half_normal_plot_one_point_per_effect():
     # half-normal quantiles are non-negative and increase with |effect|
     assert np.all(pts[:, 0] >= -1e-9)
     plt.close(ax.figure)
+
+
+# --------------------------------------------------------------------------- #
+# alias_matrix / correlation_heatmap -- design alias structure
+# --------------------------------------------------------------------------- #
+
+
+def _factors(n):
+    import string
+
+    return [ContinuousFactor(c, 0.0, 10.0) for c in string.ascii_lowercase[:n]]
+
+
+def test_alias_matrix_orthogonal_for_full_factorial():
+    # a 2^3 full factorial: every main effect and 2-factor interaction is orthogonal
+    labels, corr = alias_matrix(full_factorial(_factors(3), levels=2), interactions=True)
+
+    assert "a:b" in labels  # interactions are included as terms
+    assert np.allclose(np.diag(corr), 1.0)
+    off_diagonal = corr - np.eye(len(labels))
+    assert np.allclose(off_diagonal, 0.0, atol=1e-9)
+
+
+def test_alias_matrix_detects_confounded_interactions_in_fraction():
+    # 2^(4-1) with D=ABC: the classic 2FI aliases are AB=CD, AC=BD, AD=BC
+    design = fractional_factorial(_factors(4), generators=["D=ABC"])
+    labels, corr = alias_matrix(design, interactions=True)
+    idx = {name: i for i, name in enumerate(labels)}
+
+    for left, right in [("a:b", "c:d"), ("a:c", "b:d"), ("a:d", "b:c")]:
+        assert np.isclose(abs(corr[idx[left], idx[right]]), 1.0, atol=1e-9)
+
+
+def test_alias_matrix_partial_aliasing_in_plackett_burman():
+    # 8 factors -> a 12-run PB (order-12 base), whose hallmark is *partial* (~1/3) aliasing
+    design = plackett_burman(_factors(8))
+
+    # main effects on their own are perfectly orthogonal (identity matrix)
+    labels, corr = alias_matrix(design, interactions=False)
+    assert np.allclose(corr - np.eye(len(labels)), 0.0, atol=1e-9)
+
+    # but with interactions, mains leak *partially* into 2FIs: magnitudes strictly
+    # between 0 and 1 appear (PB's signature complex aliasing, ~1/3)
+    labels2, corr2 = alias_matrix(design, interactions=True, absolute=True)
+    off = corr2[~np.eye(len(labels2), dtype=bool)]
+    assert np.all(off >= -1e-9)  # absolute=True -> non-negative
+    assert np.any((off > 0.1) & (off < 0.99))
+
+
+def test_correlation_heatmap_returns_axes_matching_alias_matrix():
+    design = fractional_factorial(_factors(4), generators=["D=ABC"])
+    ax = correlation_heatmap(design)
+
+    assert isinstance(ax, Axes)
+    labels, corr = alias_matrix(design)
+    # the displayed image is the alias matrix itself
+    assert ax.images[0].get_array().shape == (len(labels), len(labels))
+    assert [t.get_text() for t in ax.get_xticklabels()] == labels
+    plt.close(ax.figure)
+
+
+def test_correlation_heatmap_uses_given_axes():
+    fig, ax = plt.subplots()
+    out = correlation_heatmap(full_factorial(_factors(2), levels=2), ax=ax)
+    assert out is ax
+    plt.close(fig)

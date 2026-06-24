@@ -155,7 +155,8 @@ interactions + squares — that *is* the full quadratic model. Phase 2a cleanups
   collinear with the intercept). Detect from the design (does the coded column take a value off
   `{-1,+1}`?) and skip those squares so `X` stays full rank.
 - Term ordering: mains, then interactions, then squares (stable, matches ANOVA grouping).
-- Categorical contrast expansion stays deferred to a later phase — document it, don't build it.
+- Categorical contrast expansion was deferred at the time of this plan; it has since been
+  built into `build_model_matrix` (deviation/effect coding, `k-1` contrast columns per factor).
 
 ---
 

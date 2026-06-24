@@ -6,18 +6,29 @@ Importing this module requires the optional ``matplotlib`` dependency
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
 import numpy as np
 
 from .analysis.fit import FitResult
+from .analysis.model import _effect_code, build_model_matrix
+from .factors import ContinuousFactor, FactorSet
 
 if TYPE_CHECKING:
     from matplotlib.axes import Axes
 
+    from .design import Design
+
 
 def pareto_plot(result: FitResult, ax: Axes | None = None) -> Axes:
-    """Horizontal bar chart of absolute effect sizes, largest first (intercept dropped)."""
+    """Horizontal bar chart of absolute effect sizes, largest first (intercept dropped).
+
+    Ranking effects by magnitude makes the "vital few vs. trivial many" pattern obvious: a
+    handful of large bars are the factors that drive the response, and the long tail of small
+    bars are candidates to pool into error. Sign is dropped because screening asks *which*
+    factors matter, not their direction.
+    """
     import matplotlib.pyplot as plt
 
     names = result.term_names[1:]
@@ -81,50 +92,91 @@ def _predict(result: FitResult, coded: dict[str, np.ndarray], sample: np.ndarray
     return np.asarray(total, dtype=float)
 
 
+def _require_continuous_axes(fs: FactorSet, axes: Sequence[str]) -> None:
+    """Validate that each named plot axis exists and is continuous.
+
+    Plot axes are swept over the coded ``[-1, +1]`` grid, which only makes sense for a
+    continuous factor; a categorical factor has no such ordered scale. Raises ``KeyError``
+    for an unknown name and ``TypeError`` for a categorical one (a clearer signal than the
+    ``AttributeError`` that ``code``/``decode`` would otherwise raise downstream).
+    """
+    for axis in axes:
+        if not isinstance(fs[axis], ContinuousFactor):  # ``fs[axis]`` raises KeyError if unknown
+            raise TypeError(
+                f"factor {axis!r} is categorical; only continuous factors can be a plot axis"
+            )
+
+
+def _coded_columns(
+    result: FitResult,
+    sweeps: dict[str, np.ndarray],
+    fixed: Mapping[str, object],
+    sample: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """Build the ``{model-column name: grid}`` mapping that :func:`_predict` consumes.
+
+    ``sweeps`` holds the coded grids for the (continuous) factors being varied; ``fixed`` holds
+    remaining factors at given *natural* values. Any factor neither swept nor fixed is held at
+    its center -- coded ``0`` for a continuous factor, and *all contrasts ``0``* for a
+    categorical one, which is its average over levels (the marginal surface). Categorical
+    factors are expanded into their ``factor[level]`` contrast columns via the same
+    :func:`~doe.analysis.model._effect_code` used to fit the model, so the keys line up exactly
+    with ``result.term_names`` -- including for mixed continuous/categorical fits.
+    """
+    fs = result.factors
+    unknown = set(fixed) - set(fs.names)
+    if unknown:
+        raise ValueError(f"fixed refers to unknown factors: {sorted(unknown)}")
+
+    coded: dict[str, np.ndarray] = {}
+    for factor in fs:
+        name = factor.name
+        if isinstance(factor, ContinuousFactor):
+            if name in sweeps:
+                coded[name] = sweeps[name]
+            elif name in fixed:
+                coded[name] = np.full_like(sample, factor.code(np.asarray(fixed[name])))
+            else:
+                coded[name] = np.zeros_like(sample)  # held at center
+        else:  # categorical -> one constant column per effect-coded contrast
+            if name in fixed:
+                # _effect_code validates the level and yields the contrast values for it
+                encoding = _effect_code(factor, np.asarray([fixed[name]], dtype=object))
+                for contrast_name, contrast_col in encoding:
+                    coded[contrast_name] = np.full_like(sample, float(contrast_col[0]))
+            else:  # marginal: average over levels is all contrasts == 0
+                encoding = _effect_code(factor, np.asarray(list(factor.levels), dtype=object))
+                for contrast_name, _ in encoding:
+                    coded[contrast_name] = np.zeros_like(sample)
+    return coded
+
+
 def surface_grid(
     result: FitResult,
     x: str,
     y: str,
     *,
-    fixed: dict[str, float] | None = None,
+    fixed: Mapping[str, object] | None = None,
     resolution: int = 25,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Evaluate the fitted surface over a grid of two factors (others held fixed).
 
     Returns natural-unit mesh arrays ``(X, Y, Z)`` of shape ``(resolution, resolution)``,
     with ``X`` varying along the columns and ``Y`` along the rows (``contourf`` convention).
-    ``fixed`` holds the remaining factors at given *natural* values (default: factor center).
-    This is the headless core that :func:`contour_plot` draws.
+    ``fixed`` holds the remaining factors at given *natural* values (default: factor center; a
+    categorical factor defaults to its average over levels). The ``x``/``y`` axes must be
+    continuous. This is the headless core that :func:`contour_plot` draws.
     """
     fs = result.factors
-    names = fs.names
     if x == y:
         raise ValueError("x and y must be two different factors")
-    for axis in (x, y):
-        if axis not in names:
-            raise KeyError(axis)
-
-    fixed = dict(fixed or {})
-    unknown = set(fixed) - set(names)
-    if unknown:
-        raise ValueError(f"fixed refers to unknown factors: {sorted(unknown)}")
+    _require_continuous_axes(fs, (x, y))
 
     cx = np.linspace(-1.0, 1.0, resolution)
     cy = np.linspace(-1.0, 1.0, resolution)
     grid_x, grid_y = np.meshgrid(cx, cy)  # (resolution, resolution)
 
-    coded: dict[str, np.ndarray] = {}
-    for name in names:
-        if name == x:
-            coded[name] = grid_x
-        elif name == y:
-            coded[name] = grid_y
-        elif name in fixed:
-            coded_value = fs[name].code(np.asarray(fixed[name]))  # type: ignore[union-attr]
-            coded[name] = np.full_like(grid_x, coded_value)
-        else:
-            coded[name] = np.zeros_like(grid_x)  # held at center
-
+    coded = _coded_columns(result, {x: grid_x, y: grid_y}, dict(fixed or {}), grid_x)
     z = _predict(result, coded, grid_x)
     nat_x = fs[x].decode(grid_x)  # type: ignore[union-attr]
     nat_y = fs[y].decode(grid_y)  # type: ignore[union-attr]
@@ -136,7 +188,7 @@ def contour_plot(
     x: str,
     y: str,
     *,
-    fixed: dict[str, float] | None = None,
+    fixed: Mapping[str, object] | None = None,
     ax: Axes | None = None,
     resolution: int = 25,
     filled: bool = True,
@@ -164,7 +216,7 @@ def surface_plot(
     x: str,
     y: str,
     *,
-    fixed: dict[str, float] | None = None,
+    fixed: Mapping[str, object] | None = None,
     ax: Axes | None = None,
     resolution: int = 25,
     cmap: str = "viridis",
@@ -189,8 +241,189 @@ def surface_plot(
     return ax
 
 
+def interaction_lines(
+    result: FitResult,
+    x: str,
+    trace: str,
+    *,
+    fixed: Mapping[str, object] | None = None,
+    trace_levels: Sequence[float] | None = None,
+    resolution: int = 25,
+) -> tuple[np.ndarray, list[tuple[float, np.ndarray]]]:
+    """Evaluate the fitted model along ``x`` for several fixed levels of ``trace``.
+
+    Returns ``(nat_x, lines)`` where ``nat_x`` is the natural-unit sweep of factor ``x``
+    (``resolution`` points across its range) and ``lines`` is a list of
+    ``(trace_natural_value, z)`` pairs, one per ``trace`` level. Any remaining factors are
+    held at the value in ``fixed`` (natural units) or at their center. ``trace_levels`` are
+    natural values for ``trace`` (default: its low and high).
+
+    This is the headless, numerically-testable core that :func:`interaction_plot` draws. The
+    lines are parallel exactly when ``x`` and ``trace`` do not interact; a fanning gap between
+    them is the interaction. ``x`` and ``trace`` must be continuous (a categorical factor has
+    no coded sweep), matching :func:`surface_grid`; any remaining factor is held per ``fixed``.
+    """
+    fs = result.factors
+    if x == trace:
+        raise ValueError("x and trace must be two different factors")
+    _require_continuous_axes(fs, (x, trace))
+
+    trace_factor = fs[trace]
+    if trace_levels is None:
+        trace_levels = [trace_factor.low, trace_factor.high]  # type: ignore[union-attr]
+
+    cx = np.linspace(-1.0, 1.0, resolution)
+    nat_x = fs[x].decode(cx)  # type: ignore[union-attr]
+
+    # Build the coded columns once (trace held at center for now); each line only re-sets the
+    # one trace column, so the x sweep, fixed factors, and any held factors are not rebuilt.
+    coded = _coded_columns(result, {x: cx}, dict(fixed or {}), cx)
+    lines: list[tuple[float, np.ndarray]] = []
+    for level in trace_levels:
+        coded[trace] = np.full_like(cx, trace_factor.code(np.asarray(level)))  # type: ignore[union-attr]
+        z = _predict(result, coded, cx)
+        lines.append((float(level), z))
+    return nat_x, lines
+
+
+def interaction_plot(
+    result: FitResult,
+    x: str,
+    trace: str,
+    *,
+    fixed: Mapping[str, object] | None = None,
+    trace_levels: Sequence[float] | None = None,
+    ax: Axes | None = None,
+    resolution: int = 25,
+) -> Axes:
+    """Plot the fitted response against ``x`` as a separate line per level of ``trace``.
+
+    The classic two-factor interaction plot: parallel lines mean the effect of ``x`` does not
+    depend on ``trace`` (no interaction), while lines that fan apart or cross reveal one. Draws
+    :func:`interaction_lines`; both factors must be continuous.
+    """
+    import matplotlib.pyplot as plt
+
+    nat_x, lines = interaction_lines(
+        result, x, trace, fixed=fixed, trace_levels=trace_levels, resolution=resolution
+    )
+
+    if ax is None:
+        _, ax = plt.subplots()
+    trace_units = getattr(result.factors[trace], "units", None)
+    suffix = f" {trace_units}" if trace_units else ""
+    for level, z in lines:
+        ax.plot(nat_x, z, "-o", markersize=3, label=f"{level:g}{suffix}")
+    ax.set_xlabel(x)
+    ax.set_ylabel("fitted response")
+    ax.legend(title=trace)
+    ax.set_title(f"Interaction: {x} × {trace}")
+    return ax
+
+
+def alias_matrix(
+    design: Design,
+    *,
+    order: int = 1,
+    interactions: bool = True,
+    absolute: bool = False,
+) -> tuple[list[str], np.ndarray]:
+    """Pairwise correlations among model terms -- the design's alias structure.
+
+    Returns ``(labels, matrix)`` where ``matrix[i, j]`` is the Pearson correlation between
+    model terms ``labels[i]`` and ``labels[j]`` in coded units. The intercept (and any other
+    constant column, e.g. a squared pure-``+/-1`` term) is dropped, having no defined
+    correlation. Read it as: off-diagonals near ``0`` mean the terms are estimated
+    independently (an orthogonal design); ``|r| = 1`` is full aliasing (the terms are
+    confounded -- you cannot separate their effects); intermediate magnitudes are *partial*
+    aliasing (e.g. a Plackett-Burman main effect leaking ``+/- 1/3`` into two-factor
+    interactions). With ``absolute=True`` the magnitudes ``|r|`` are returned instead.
+
+    This is the headless, numerically-testable core that :func:`correlation_heatmap` draws.
+    The model whose aliasing is assessed is chosen by ``order``/``interactions``, exactly as
+    in :func:`~doe.analysis.model.build_model_matrix`.
+    """
+    mm = build_model_matrix(design, order=order, interactions=interactions)
+    keep = [
+        i
+        for i, name in enumerate(mm.term_names)
+        if name != "Intercept" and np.std(mm.X[:, i]) > 1e-12
+    ]
+    labels = [mm.term_names[i] for i in keep]
+    corr = np.atleast_2d(np.corrcoef(mm.X[:, keep], rowvar=False))
+    np.clip(corr, -1.0, 1.0, out=corr)  # tame rounding drift outside [-1, 1]
+    if absolute:
+        corr = np.abs(corr)
+    return labels, corr
+
+
+def correlation_heatmap(
+    design: Design,
+    *,
+    order: int = 1,
+    interactions: bool = True,
+    absolute: bool = False,
+    ax: Axes | None = None,
+    cmap: str | None = None,
+    annotate: bool | None = None,
+) -> Axes:
+    """Heatmap of the design's alias structure (term-to-term correlations).
+
+    Draws :func:`alias_matrix`. A clean block-diagonal of zeros off the diagonal means an
+    orthogonal design; bright off-diagonal cells flag aliased (confounded) terms. ``annotate``
+    overlays the numeric values (default: on when there are <= 12 terms). ``absolute`` shows
+    ``|r|`` on a sequential scale -- handy for spotting *any* aliasing regardless of sign.
+    """
+    import matplotlib.pyplot as plt
+
+    labels, corr = alias_matrix(
+        design, order=order, interactions=interactions, absolute=absolute
+    )
+    n = len(labels)
+
+    if ax is None:
+        _, ax = plt.subplots()
+    if cmap is None:
+        cmap = "magma" if absolute else "RdBu_r"
+    vmin = 0.0 if absolute else -1.0
+    im = ax.imshow(corr, cmap=cmap, vmin=vmin, vmax=1.0)
+
+    ax.set_xticks(range(n))
+    ax.set_xticklabels(labels, rotation=90, fontsize=7)
+    ax.set_yticks(range(n))
+    ax.set_yticklabels(labels, fontsize=7)
+
+    if annotate is None:
+        annotate = n <= 12
+    if annotate:
+        for i in range(n):
+            for j in range(n):
+                mag = abs(corr[i, j])
+                # pick legible text colour against each colormap's dark/light extremes
+                light_bg = mag >= 0.5 if absolute else mag < 0.5
+                ax.text(
+                    j,
+                    i,
+                    f"{corr[i, j]:.2f}",
+                    ha="center",
+                    va="center",
+                    fontsize=6,
+                    color="black" if light_bg else "white",
+                )
+
+    label = "|correlation|" if absolute else "correlation"
+    ax.figure.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label=label)
+    ax.set_title("Alias structure (term correlations)")
+    return ax
+
+
 def residuals_vs_fitted(result: FitResult, ax: Axes | None = None) -> Axes:
-    """Scatter of residuals against fitted values, with a zero reference line."""
+    """Scatter of residuals against fitted values, with a zero reference line.
+
+    Checks the constant-variance and adequacy assumptions of OLS: a healthy plot is a
+    structureless band around zero. A funnel shape signals non-constant variance (consider a
+    transform), and curvature signals a missing higher-order term.
+    """
     import matplotlib.pyplot as plt
 
     if ax is None:
@@ -203,8 +436,41 @@ def residuals_vs_fitted(result: FitResult, ax: Axes | None = None) -> Axes:
     return ax
 
 
+def predicted_vs_actual(result: FitResult, ax: Axes | None = None) -> Axes:
+    """Scatter of predicted (fitted) against observed responses, with a 45° reference line.
+
+    The most direct read on model adequacy: points hug the ``y = x`` line when the model
+    reproduces the data and scatter away from it when it does not, with systematic curvature
+    about the line flagging a missing term. The observed values are reconstructed as
+    ``fitted + residuals`` (so no separate response array is needed), and ``R²`` -- the same
+    fraction-of-variance the line's tightness shows -- is reported in the title.
+    """
+    import matplotlib.pyplot as plt
+
+    observed = result.fitted + result.residuals
+    predicted = result.fitted
+
+    if ax is None:
+        _, ax = plt.subplots()
+    lo = float(min(observed.min(), predicted.min()))
+    hi = float(max(observed.max(), predicted.max()))
+    pad = 0.05 * (hi - lo) if hi > lo else 1.0
+    ax.plot([lo - pad, hi + pad], [lo - pad, hi + pad], color="grey", lw=0.8, zorder=0)
+    ax.scatter(observed, predicted)
+    ax.set_xlabel("Actual")
+    ax.set_ylabel("Predicted")
+    ax.set_aspect("equal", adjustable="datalim")
+    ax.set_title(f"Predicted vs actual (R² = {result.r_squared:.3f})")
+    return ax
+
+
 def normal_qq(result: FitResult, ax: Axes | None = None) -> Axes:
-    """Normal quantile-quantile plot of the residuals (``scipy.stats.probplot``)."""
+    """Normal quantile-quantile plot of the residuals (``scipy.stats.probplot``).
+
+    Checks the normality assumption that the t- and F-tests rely on: residuals that are roughly
+    normal fall on the reference line. Heavy tails or marked curvature warn that p-values should
+    be read with caution.
+    """
     import matplotlib.pyplot as plt
     from scipy import stats
 
@@ -216,13 +482,21 @@ def normal_qq(result: FitResult, ax: Axes | None = None) -> Axes:
 
 
 def half_normal_plot(result: FitResult, ax: Axes | None = None) -> Axes:
-    """Absolute effects against half-normal quantiles (screening companion to pareto_plot)."""
+    """Absolute effects against half-normal quantiles (screening companion to pareto_plot).
+
+    This is the standard way to judge significance when a saturated design leaves no degrees of
+    freedom for a formal test. Inactive effects are just noise, so they scatter along a straight
+    line through the origin; genuinely active effects break above that line on the right. The eye
+    picks out the real factors as the points that depart from the noise trend.
+    """
     import matplotlib.pyplot as plt
     from scipy import stats
 
     if ax is None:
         _, ax = plt.subplots()
 
+    # rank effects by magnitude and plot against half-normal quantiles: if the effects were pure
+    # noise these points would fall on a line, so departures from it flag the active factors.
     abs_effects = np.abs(result.effects[1:])  # drop the intercept
     names = result.term_names[1:]
     order = np.argsort(abs_effects)

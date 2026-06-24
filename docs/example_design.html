@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transfection CCD - randomised run sheet</title>
+<link rel="stylesheet" href="https://cdn.datatables.net/1.13.8/css/jquery.dataTables.min.css">
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
+<style>
+body { font-family: system-ui, sans-serif; margin: 2rem; }
+h1 { font-size: 1.4rem; }
+table.display td, table.display th { padding: 4px 10px; text-align: right; }
+</style>
+</head>
+<body>
+<h1>Transfection CCD - randomised run sheet</h1>
+<p>12 runs &middot; 2 factors</p>
+<table id="T_doe-design" class="display compact" style="width:100%"><thead><tr><th>run</th><th>std_order</th><th>dna_ng (ng/well)</th><th>dna_ng [coded]</th><th>lipid_uL (uL/well)</th><th>lipid_uL [coded]</th><th>type</th></tr></thead><tbody><tr><td>1</td><td>0</td><td>100</td><td style="background-color:#3b4cc0">-1</td><td>0.5</td><td style="background-color:#3b4cc0">-1</td><td style="background-color:#e2e3e5">factorial</td></tr><tr><td>2</td><td>7</td><td>300</td><td style="background-color:#f7f7f7">0</td><td>2.5</td><td style="background-color:#b40426">1</td><td style="background-color:#d1ecf1">axial</td></tr><tr><td>3</td><td>6</td><td>300</td><td style="background-color:#f7f7f7">0</td><td>0.5</td><td style="background-color:#3b4cc0">-1</td><td style="background-color:#d1ecf1">axial</td></tr><tr><td>4</td><td>9</td><td>300</td><td style="background-color:#f7f7f7">0</td><td>1.5</td><td style="background-color:#f7f7f7">0</td><td style="background-color:#fff3cd">center</td></tr><tr><td>5</td><td>11</td><td>300</td><td style="background-color:#f7f7f7">0</td><td>1.5</td><td style="background-color:#f7f7f7">0</td><td style="background-color:#fff3cd">center</td></tr><tr><td>6</td><td>3</td><td>500</td><td style="background-color:#b40426">1</td><td>2.5</td><td style="background-color:#b40426">1</td><td style="background-color:#e2e3e5">factorial</td></tr><tr><td>7</td><td>5</td><td>500</td><td style="background-color:#b40426">1</td><td>1.5</td><td style="background-color:#f7f7f7">0</td><td style="background-color:#d1ecf1">axial</td></tr><tr><td>8</td><td>2</td><td>500</td><td style="background-color:#b40426">1</td><td>0.5</td><td style="background-color:#3b4cc0">-1</td><td style="background-color:#e2e3e5">factorial</td></tr><tr><td>9</td><td>4</td><td>100</td><td style="background-color:#3b4cc0">-1</td><td>1.5</td><td style="background-color:#f7f7f7">0</td><td style="background-color:#d1ecf1">axial</td></tr><tr><td>10</td><td>10</td><td>300</td><td style="background-color:#f7f7f7">0</td><td>1.5</td><td style="background-color:#f7f7f7">0</td><td style="background-color:#fff3cd">center</td></tr><tr><td>11</td><td>1</td><td>100</td><td style="background-color:#3b4cc0">-1</td><td>2.5</td><td style="background-color:#b40426">1</td><td style="background-color:#e2e3e5">factorial</td></tr><tr><td>12</td><td>8</td><td>300</td><td style="background-color:#f7f7f7">0</td><td>1.5</td><td style="background-color:#f7f7f7">0</td><td style="background-color:#fff3cd">center</td></tr></tbody></table>
+<script>$(function(){$("#T_doe-design").DataTable({"paging":true,"pageLength":25,"order":[]});});</script>
+</body>
+</html>

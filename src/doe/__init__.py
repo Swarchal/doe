@@ -26,8 +26,13 @@ from .analysis.optimize import (
 )
 from .design import Design
 from .factors import CategoricalFactor, ContinuousFactor, Factor, FactorSet
-from .generators.factorial import fractional_factorial, full_factorial
+from .generators.factorial import (
+    fractional_factorial,
+    full_factorial,
+    plackett_burman,
+)
 from .generators.rsm import box_behnken, central_composite
+from .interactive import to_html
 
 __all__ = [
     "CategoricalFactor",
@@ -51,9 +56,11 @@ __all__ = [
     "full_factorial",
     "lack_of_fit",
     "optimum",
+    "plackett_burman",
     "predicted_r2",
     "press",
     "stationary_point",
+    "to_html",
 ]
 
 __version__ = "0.1.0"

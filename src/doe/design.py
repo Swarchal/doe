@@ -40,7 +40,12 @@ class Design:
 
     @property
     def n_center(self) -> int:
-        """Number of center-point runs (0 when point types aren't tracked)."""
+        """Number of center-point runs (0 when point types aren't tracked).
+
+        Replicated center points serve two distinct DoE purposes: their spread gives a
+        *pure-error* estimate independent of the model (the basis of the lack-of-fit test),
+        and their mean vs. the factorial mean detects overall curvature in the response.
+        """
         if self.point_types is None:
             return 0
         return sum(1 for t in self.point_types if t == "center")
@@ -95,11 +100,25 @@ class Design:
         )
 
     def randomize(self, seed: int | None = None) -> Design:
-        """Return a copy with the run order shuffled (records the original order)."""
+        """Return a copy with the run order shuffled (records the original order).
+
+        Randomizing the order in which runs are executed is a core DoE safeguard: it spreads
+        any uncontrolled time-trend or lurking variable (drifting reagents, a warming room,
+        operator fatigue) evenly across the factors instead of letting it correlate with -- and
+        bias -- a particular effect. It is also what justifies treating the OLS residuals as
+        independent. The original (standard-order) index is preserved as ``std_order`` so
+        measured responses can be re-joined to the design after running in shuffled order.
+        """
         rng = np.random.default_rng(seed)
         order = rng.permutation(self.n_runs)
         shuffled = self.runs.iloc[order].reset_index(drop=True)
-        shuffled.insert(0, "std_order", np.asarray(self.runs.index)[order])
+        base_order = (
+            self.runs["std_order"].to_numpy()
+            if "std_order" in self.runs
+            else np.asarray(self.runs.index)
+        )
+        shuffled["std_order"] = base_order[order]
+        shuffled = shuffled[["std_order", *[c for c in shuffled.columns if c != "std_order"]]]
         point_types = (
             tuple(self.point_types[i] for i in order)
             if self.point_types is not None
