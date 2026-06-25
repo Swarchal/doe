@@ -20,9 +20,9 @@ the rest of the library (designs are fitted coded, reported natural).
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 from scipy import optimize as sciopt
@@ -341,6 +341,38 @@ class ResponseGoal:
         if value <= t:
             return float(((value - lo) / (t - lo)) ** wt)
         return float(((hi - value) / (hi - t)) ** wt)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the goal *definition* for storage.
+
+        The bound :class:`FitResult` is deliberately omitted: like other analysis results it
+        is *derived* from a design plus a response and is re-fit on load, so only the goal
+        specification (direction, ramp bounds, target, weight) is data worth persisting.
+        Pair this with :meth:`from_dict`, which takes the re-fitted result back in.
+        """
+        return {
+            "goal": self.goal,
+            "low": self.low,
+            "high": self.high,
+            "target": self.target,
+            "weight": self.weight,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any], result: FitResult) -> ResponseGoal:
+        """Rebuild a :class:`ResponseGoal` from :meth:`to_dict` plus a re-fitted ``result``."""
+        goal = data["goal"]
+        if goal not in ("max", "min", "target"):
+            raise ValueError(f"unknown goal {goal!r}; expected 'max', 'min' or 'target'")
+        target = data.get("target")
+        return cls(
+            result=result,
+            goal=goal,
+            low=float(data["low"]),
+            high=float(data["high"]),
+            target=None if target is None else float(target),
+            weight=float(data.get("weight", 1.0)),
+        )
 
 
 @dataclass

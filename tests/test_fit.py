@@ -47,6 +47,34 @@ def test_fit_recovers_effects_with_categorical_factor():
     assert np.isclose(result.r_squared, 1.0)
 
 
+def test_fit_records_model_spec():
+    # the resolved (order, interactions) must be stored so a serialized FitResult can be
+    # re-fitted -- the result object alone otherwise can't say how it was built.
+    factors = [ContinuousFactor("a", 0, 10), ContinuousFactor("b", 0, 10)]
+    design = full_factorial(factors, levels=2)
+    y = np.arange(design.n_runs, dtype=float)
+
+    result = fit_ols(design, y, order=2, interactions=False)
+    assert result.order == 2
+    assert result.interactions is False
+
+    # the recorded spec round-trips: re-fitting with it reproduces the term names exactly
+    refit = fit_ols(design, y, order=result.order, interactions=result.interactions)
+    assert refit.term_names == result.term_names
+
+
+def test_fit_records_model_spec_from_named_model():
+    # the convenience ``model="quadratic"`` resolves to (order=2, interactions=True);
+    # the resolved values, not the name, are what gets recorded.
+    factors = [ContinuousFactor("a", 0, 10), ContinuousFactor("b", 0, 10)]
+    design = full_factorial(factors, levels=3)
+    y = np.arange(design.n_runs, dtype=float)
+
+    result = fit_ols(design, y, model="quadratic")
+    assert result.order == 2
+    assert result.interactions is True
+
+
 def test_fit_response_length_mismatch():
     design = full_factorial([ContinuousFactor("a", 0, 1)], levels=2)
     try:

@@ -121,3 +121,33 @@ def test_randomize_can_be_repeated_without_duplicating_std_order():
     assert list(randomized.runs.columns).count("std_order") == 1
     assert list(randomized.runs.columns)[0] == "std_order"
     assert sorted(randomized.runs["std_order"].tolist()) == list(range(design.n_runs))
+
+
+def test_randomize_records_explicit_seed():
+    design = _factorial_2x2()
+    randomized = design.randomize(seed=42)
+    assert randomized.meta["random_seed"] == 42
+    assert randomized.meta["randomized"] is True
+
+
+def test_randomize_records_a_concrete_seed_when_none_given():
+    # passing no seed must still record a concrete, reproducible seed (the serialization
+    # gap this fixes: meta previously said "randomized" but not *how*).
+    design = _factorial_2x2()
+    randomized = design.randomize()
+    seed = randomized.meta["random_seed"]
+    assert isinstance(seed, int)
+    # re-running with the recorded seed reproduces the exact shuffle
+    replayed = design.randomize(seed=seed)
+    assert randomized.runs["std_order"].tolist() == replayed.runs["std_order"].tolist()
+
+
+def test_randomize_seed_reproduces_run_order():
+    design = central_composite(
+        [ContinuousFactor("a", 0, 10), ContinuousFactor("b", 0, 10)],
+        center=3,
+    )
+    a = design.randomize(seed=7)
+    b = design.randomize(seed=7)
+    assert a.runs["std_order"].tolist() == b.runs["std_order"].tolist()
+    assert a.runs[["a", "b"]].equals(b.runs[["a", "b"]])

@@ -25,7 +25,13 @@ from .analysis.optimize import (
     stationary_point,
 )
 from .design import Design
-from .factors import CategoricalFactor, ContinuousFactor, Factor, FactorSet
+from .factors import (
+    CategoricalFactor,
+    ContinuousFactor,
+    Factor,
+    FactorSet,
+    factor_from_dict,
+)
 from .generators.factorial import (
     fractional_factorial,
     full_factorial,
@@ -33,6 +39,7 @@ from .generators.factorial import (
 )
 from .generators.rsm import box_behnken, central_composite
 from .interactive import to_html
+from .serialization import ValidationError, validate_design_dict
 
 __all__ = [
     "CategoricalFactor",
@@ -46,11 +53,13 @@ __all__ = [
     "Optimum",
     "ResponseGoal",
     "StationaryPoint",
+    "ValidationError",
     "adjusted_r2",
     "anova_table",
     "box_behnken",
     "central_composite",
     "desirability",
+    "factor_from_dict",
     "fit_ols",
     "fractional_factorial",
     "full_factorial",
@@ -61,6 +70,7 @@ __all__ = [
     "press",
     "stationary_point",
     "to_html",
+    "validate_design_dict",
 ]
 
 __version__ = "0.1.0"

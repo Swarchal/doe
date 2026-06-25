@@ -43,6 +43,8 @@ class FitResult:
     t_values: np.ndarray
     p_values: np.ndarray
     factors: FactorSet
+    order: int
+    interactions: bool
 
     def summary(self) -> dict[str, tuple[float, float]]:
         """Map each term to ``(coefficient, effect)``."""
@@ -165,4 +167,6 @@ def fit_ols(
         t_values,
         p_values,
         design.factors,
+        order,
+        interactions,
     )

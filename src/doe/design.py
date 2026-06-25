@@ -2,12 +2,28 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from .factors import ContinuousFactor, FactorSet
+
+#: Bumped when the serialized design shape changes incompatibly.
+SCHEMA_VERSION = "1.0"
+
+
+def _jsonable(value: object) -> object:
+    """Coerce numpy scalars to native Python types so the result is JSON-serializable."""
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        return float(value)
+    if isinstance(value, np.bool_):
+        return bool(value)
+    return value
 
 
 @dataclass
@@ -108,7 +124,16 @@ class Design:
         bias -- a particular effect. It is also what justifies treating the OLS residuals as
         independent. The original (standard-order) index is preserved as ``std_order`` so
         measured responses can be re-joined to the design after running in shuffled order.
+
+        The seed actually used is recorded in ``meta["random_seed"]`` so the shuffle is
+        reproducible (and serializable). When ``seed`` is ``None`` a concrete 32-bit seed is
+        drawn and recorded rather than left unspecified, so every randomized design can be
+        regenerated exactly.
         """
+        if seed is None:
+            # draw a concrete seed so the shuffle is reproducible and round-trips through JSON;
+            # 32-bit keeps it within the safe-integer range of JSON/JavaScript consumers.
+            seed = int(np.random.SeedSequence().generate_state(1, dtype=np.uint32)[0])
         rng = np.random.default_rng(seed)
         order = rng.permutation(self.n_runs)
         shuffled = self.runs.iloc[order].reset_index(drop=True)
@@ -125,5 +150,52 @@ class Design:
             else None
         )
         return Design(
-            shuffled, self.factors, self.name, {**self.meta, "randomized": True}, point_types
+            shuffled,
+            self.factors,
+            self.name,
+            {**self.meta, "randomized": True, "random_seed": seed},
+            point_types,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-ready dict.
+
+        Captures everything needed to reconstruct the design exactly: the ordered factor
+        set, the full run table in *natural* units (including any ``std_order`` or response
+        columns appended after randomization/experiments), the ``point_types`` that drive
+        center-point / lack-of-fit logic, and ``meta`` (which carries the randomization seed).
+        Coded values are intentionally *not* stored -- they are derived from the factor set.
+        """
+        runs = [
+            {key: _jsonable(value) for key, value in record.items()}
+            for record in self.runs.to_dict(orient="records")
+        ]
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "name": self.name,
+            **self.factors.to_dict(),
+            "runs": runs,
+            "point_types": list(self.point_types) if self.point_types is not None else None,
+            "meta": {key: _jsonable(value) for key, value in self.meta.items()},
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> Design:
+        """Reconstruct a :class:`Design` from its :meth:`to_dict` form.
+
+        The inverse of :meth:`to_dict`: ``Design.from_dict(d.to_dict())`` reproduces the run
+        table, factor set, point types, and meta. Column order in ``runs`` is preserved from
+        the serialized records.
+        """
+        factors = FactorSet.from_dict(data)
+        records = list(data["runs"])
+        columns = list(records[0].keys()) if records else factors.names
+        runs = pd.DataFrame(records, columns=columns)
+        point_types = data.get("point_types")
+        return cls(
+            runs,
+            factors,
+            name=str(data.get("name", "")),
+            meta=dict(data.get("meta") or {}),
+            point_types=tuple(point_types) if point_types is not None else None,
         )
