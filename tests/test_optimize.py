@@ -221,6 +221,16 @@ def test_desirability_requires_matching_factors():
         desirability([ResponseGoal(r1, "max", 0.0, 1.0), ResponseGoal(r2, "max", 0.0, 1.0)])
 
 
+def test_desirability_rejects_same_names_different_bounds():
+    # same factor names but different natural bounds -> a shared coded box would decode to
+    # different settings per response, so the goals must be rejected (not just name-matched)
+    r1 = _fit(lambda x1, x2: 50.0 + x1, model=None, order=1)
+    other = central_composite([ContinuousFactor("a", 0.0, 10.0), ContinuousFactor("b", 0.0, 20.0)])
+    r2 = fit_ols(other, np.zeros(other.n_runs), order=1, interactions=True)
+    with pytest.raises(ValueError, match="same factors"):
+        desirability([ResponseGoal(r1, "max", 0.0, 1.0), ResponseGoal(r2, "max", 0.0, 1.0)])
+
+
 # --------------------------------------------------------------------------- #
 # FitResult convenience methods + readable reprs
 # --------------------------------------------------------------------------- #

@@ -15,6 +15,7 @@ from doe.analysis.anova import (
 )
 from doe.analysis.fit import fit_ols
 from doe.factors import ContinuousFactor
+from doe.generators.factorial import full_factorial
 from doe.generators.rsm import central_composite
 
 
@@ -165,6 +166,23 @@ def test_lack_of_fit_not_significant_for_true_quadratic():
     lof = lack_of_fit(result, design, y)
     # the quadratic model is adequate -> lack-of-fit should not be significant
     assert lof.p_value > 0.05
+
+
+def test_lack_of_fit_pools_pure_error_from_non_center_replicates():
+    # a replicated 2^2 factorial has no center points, but every corner is run twice, so pure
+    # error is still estimable (4 groups of 2 -> df_pe = 4). The old center-only rule rejected
+    # this; pooling over identical settings now uses those replicates.
+    design = full_factorial([ContinuousFactor("a", 0.0, 1.0), ContinuousFactor("b", 0.0, 1.0)])
+    design = design.replicate(2)
+    assert design.n_center == 0
+    rng = np.random.default_rng(11)
+    coded = design.coded().to_numpy()
+    y = 5.0 + 2.0 * coded[:, 0] - coded[:, 1] + rng.normal(scale=0.1, size=design.n_runs)
+    result = fit_ols(design, y, order=1, interactions=False)  # 3 terms, dof_resid = 5
+    lof = lack_of_fit(result, design, y)
+    assert lof.df_pe == 4  # four corners, each replicated once
+    assert lof.df_lof == result.dof_resid - lof.df_pe
+    assert 0.0 <= lof.p_value <= 1.0
 
 
 def test_lack_of_fit_significant_for_linear_fit_to_curved_data():

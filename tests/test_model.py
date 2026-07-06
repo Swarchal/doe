@@ -1,9 +1,10 @@
 import numpy as np
 import pytest
 
-from doe.analysis.model import build_model_matrix
+from doe.analysis.model import build_model_matrix, coded_design_points, expand_coded_points
 from doe.factors import CategoricalFactor, ContinuousFactor
 from doe.generators.factorial import full_factorial
+from doe.generators.optimal import candidate_grid
 
 
 def test_quadratic_drops_squares_for_two_level_factors():
@@ -93,3 +94,77 @@ def test_categorical_rejects_unknown_level():
     design.runs.loc[0, "c"] = "Z"
     with pytest.raises(ValueError, match="unknown level"):
         build_model_matrix(design)
+
+
+# --------------------------------------------------------------------------- #
+# Array-based coded-point expansion for Phase 3 diagnostics / optimal designs
+# --------------------------------------------------------------------------- #
+
+
+def test_expand_coded_points_matches_linear_design_matrix():
+    factors = [ContinuousFactor("a", 0.0, 10.0), ContinuousFactor("b", 0.0, 10.0)]
+    design = full_factorial(factors)
+
+    expected = build_model_matrix(design, order=1, interactions=True)
+    points = design.coded()[design.factors.names].to_numpy()
+    got = expand_coded_points(points, design.factors, order=1, interactions=True)
+
+    assert got.term_names == expected.term_names
+    assert np.allclose(got.X, expected.X)
+
+
+def test_expand_coded_points_matches_quadratic_design_matrix():
+    factors = [ContinuousFactor("a", 0.0, 10.0), ContinuousFactor("b", 0.0, 10.0)]
+    design = full_factorial(factors, levels=3)
+
+    expected = build_model_matrix(design, order=2, interactions=True)
+    points = design.coded()[design.factors.names].to_numpy()
+    got = expand_coded_points(points, design.factors, order=2, interactions=True)
+
+    assert got.term_names == expected.term_names
+    assert np.allclose(got.X, expected.X)
+
+
+def test_expand_coded_points_matches_mixed_design_matrix():
+    factors = [
+        ContinuousFactor("temp", 0.0, 100.0),
+        CategoricalFactor("catalyst", ("A", "B", "C")),
+    ]
+    design = full_factorial(factors, levels=3)
+
+    expected = build_model_matrix(design, order=2, interactions=True)
+    points = candidate_grid(factors, levels=3)
+    got = expand_coded_points(points, design.factors, order=2, interactions=True)
+
+    assert got.term_names == expected.term_names
+    assert np.allclose(got.X, expected.X)
+
+
+def test_coded_design_points_maps_categorical_labels_to_candidate_coordinates():
+    factors = [
+        ContinuousFactor("temp", 0.0, 100.0),
+        CategoricalFactor("catalyst", ("A", "B", "C")),
+    ]
+    design = full_factorial(factors, levels=3)
+
+    points = coded_design_points(design)
+
+    assert points.shape == (9, 2)
+    assert set(np.unique(points[:, 0])) == {-1.0, 0.0, 1.0}
+    assert set(np.unique(points[:, 1])) == {-1.0, 0.0, 1.0}
+    assert np.all(points[design.runs["catalyst"] == "A", 1] == -1.0)
+    assert np.all(points[design.runs["catalyst"] == "B", 1] == 0.0)
+    assert np.all(points[design.runs["catalyst"] == "C", 1] == 1.0)
+
+
+def test_coded_design_points_rejects_unknown_categorical_level():
+    design = full_factorial([CategoricalFactor("c", ("A", "B"))])
+    design.runs.loc[0, "c"] = "Z"
+    with pytest.raises(ValueError, match="unknown level"):
+        coded_design_points(design)
+
+
+def test_expand_coded_points_rejects_invalid_categorical_coordinate():
+    design = full_factorial([CategoricalFactor("c", ("A", "B", "C"))])
+    with pytest.raises(ValueError, match="discrete coded levels"):
+        expand_coded_points(np.array([[-0.5], [1.0]]), design.factors)

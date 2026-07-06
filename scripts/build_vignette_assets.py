@@ -14,20 +14,36 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
 from doe import (
+    CategoricalFactor,
     ContinuousFactor,
+    Design,
+    FactorSet,
     ResponseGoal,
+    augment,
     box_behnken,
+    candidate_grid,
     central_composite,
+    condition_number,
+    d_optimal,
     desirability,
+    discrepancy,
+    efficiency,
     fit_ols,
     fractional_factorial,
     full_factorial,
+    halton,
+    i_optimal,
+    latin_hypercube,
+    maximin_distance,
     optimum,
     plackett_burman,
+    sobol,
     stationary_point,
     to_html,
+    vif,
 )
 from doe.analysis import (
     adjusted_r2,
@@ -43,6 +59,7 @@ from doe.plotting import (
     half_normal_plot,
     interaction_lines,
     interaction_plot,
+    leverage_plot,
     main_effects_plot,
     normal_qq,
     pareto_plot,
@@ -461,5 +478,217 @@ for left, right in [("A:B", "C:D"), ("A:C", "B:D"), ("A:D", "B:C")]:
 
 ax = correlation_heatmap(demo, interactions=True)
 save(ax, "v15_alias.png")
+
+
+# --------------------------------------------------------------------------- #
+# Vignette 16: design diagnostics before running the plate
+# --------------------------------------------------------------------------- #
+banner("Vignette 16: design diagnostics")
+
+diag = efficiency(ccd, order=2, interactions=True)
+print("efficiency(ccd, order=2, interactions=True):")
+print(f"  D = {diag.d:.3f}")
+print(f"  A = {diag.a:.3f}")
+print(f"  G = {diag.g:.3f}")
+print(f"  I = {diag.i:.3f}")
+print(f"condition_number(res_ccd.model_matrix) = {condition_number(res_ccd.model_matrix):.2f}")
+print("\nVIFs:")
+for name, value in vif(res_ccd.model_matrix, term_names=res_ccd.term_names).items():
+    print(f"  {name:>16s}: {value:.2f}")
+
+ax = leverage_plot(res_ccd)
+save(ax, "v16_leverage.png")
+
+
+# --------------------------------------------------------------------------- #
+# Vignette 17: computer-generated optimal designs
+# --------------------------------------------------------------------------- #
+banner("Vignette 17: optimal and augmented designs")
+
+region = candidate_grid([dna, lipid], levels=5)
+d_design = d_optimal(
+    [dna, lipid], n_runs=8, model="quadratic", region=region, seed=1, n_restarts=50
+)
+i_design = i_optimal(
+    [dna, lipid], n_runs=8, model="quadratic", region=region, seed=1, n_restarts=50
+)
+d_eff = efficiency(d_design, order=2, interactions=True, region=region)
+i_eff = efficiency(i_design, order=2, interactions=True, region=region)
+print("D-optimal 8-run quadratic design:")
+print(d_design.runs)
+print("I-optimal 8-run quadratic design:")
+print(i_design.runs)
+print(
+    "\nshared-region efficiencies:\n"
+    f"  D-optimal: D={d_eff.d:.3f}, I={d_eff.i:.3f}\n"
+    f"  I-optimal: D={i_eff.d:.3f}, I={i_eff.i:.3f}"
+)
+
+fig, ax = plt.subplots(figsize=(6.2, 4.8))
+region_nat_x = dna.decode(region[:, 0])
+region_nat_y = lipid.decode(region[:, 1])
+ax.scatter(region_nat_x, region_nat_y, s=25, color="0.85", label="candidate grid")
+d_coded = d_design.coded().to_numpy(dtype=float)
+i_coded = i_design.coded().to_numpy(dtype=float)
+ax.scatter(
+    dna.decode(d_coded[:, 0]),
+    lipid.decode(d_coded[:, 1]),
+    marker="s",
+    s=80,
+    facecolors="none",
+    edgecolors="tab:blue",
+    linewidths=1.8,
+    label="D-optimal runs",
+)
+ax.scatter(
+    dna.decode(i_coded[:, 0]),
+    lipid.decode(i_coded[:, 1]),
+    marker="^",
+    s=80,
+    facecolors="none",
+    edgecolors="tab:orange",
+    linewidths=1.8,
+    label="I-optimal runs",
+)
+ax.set_xlabel("dna_ng")
+ax.set_ylabel("lipid_uL")
+ax.set_title("Candidate grid with D- and I-optimal 8-run choices")
+ax.legend(loc="best")
+save(ax, "v17_optimal_designs.png")
+
+augmented = augment(full_factorial([dna, lipid]), n_runs=4, model="quadratic", seed=2)
+print("\naugment(full_factorial([dna, lipid]), n_runs=4):")
+print(augmented.runs)
+print(f"point_types = {augmented.point_types}")
+
+reagent = CategoricalFactor("reagent", ("PEI", "Lipo", "FuGENE"))
+mixed = d_optimal([dna, reagent], n_runs=6, model="linear", seed=4)
+print("\nmixed continuous/categorical D-optimal design:")
+print(mixed.runs)
+
+
+# --------------------------------------------------------------------------- #
+# Vignette 18: space-filling designs (LHS, Sobol', Halton) + coverage metrics
+# --------------------------------------------------------------------------- #
+banner("Vignette 18: space-filling designs")
+
+
+def design_from_coded(coded: np.ndarray, factors: list[ContinuousFactor]) -> Design:
+    """Wrap a coded [-1, +1]^k point cloud as a Design (for discrepancy/plots)."""
+    data = {f.name: f.decode(coded[:, j]) for j, f in enumerate(factors)}
+    return Design(pd.DataFrame(data), FactorSet(factors))
+
+
+sf_dna = ContinuousFactor("dna_ng", 100, 500, units="ng/well")
+sf_lipid = ContinuousFactor("lipid_uL", 0.5, 2.5, units="uL/well")
+sf_factors = [sf_dna, sf_lipid]
+n = 16
+
+# four ways to place 16 points over the same box
+rng = np.random.default_rng(0)
+iid16 = design_from_coded(rng.uniform(-1.0, 1.0, size=(n, 2)), sf_factors)
+g = np.linspace(-1.0, 1.0, 4)
+gx, gy = np.meshgrid(g, g)
+grid16 = design_from_coded(np.column_stack([gx.ravel(), gy.ravel()]), sf_factors)
+lhs16 = latin_hypercube(sf_factors, n_runs=n, seed=0)
+sobol16 = sobol(sf_factors, n_runs=n, seed=0)
+
+panels = [
+    ("Random (i.i.d.)", iid16),
+    ("Grid (4x4)", grid16),
+    ("Latin hypercube", lhs16),
+    ("Sobol'", sobol16),
+]
+fig, axes = plt.subplots(2, 2, figsize=(9.0, 8.6))
+for ax, (title, d) in zip(axes.ravel(), panels, strict=True):
+    r = d.runs
+    ax.scatter(r["dna_ng"], r["lipid_uL"], s=45, color="tab:blue", edgecolor="white", zorder=3)
+    ax.set_title(f"{title}\ndiscrepancy = {discrepancy(d):.4f}", fontsize=10)
+    ax.set_xlabel("dna_ng")
+    ax.set_ylabel("lipid_uL")
+    ax.set_xlim(90, 510)
+    ax.set_ylim(0.45, 2.55)
+save(axes[0, 0], "v18_spacefilling_compare.png")
+
+print("coverage of the four 16-run designs over [dna_ng, lipid_uL]:")
+for label, d in panels:
+    print(
+        f"  {label:>16s}: discrepancy={discrepancy(d):.4f}, "
+        f"maximin_distance={maximin_distance(d):.4f}"
+    )
+
+# stratification diagram: an 8-run LHS with stratum gridlines + marginal rug ticks
+lhs8 = latin_hypercube(sf_factors, n_runs=8, seed=1)
+print("\nlhs8 = latin_hypercube([dna_ng, lipid_uL], n_runs=8, seed=1)")
+print("lhs8.runs:")
+print(lhs8.runs)
+print("lhs8.meta:", lhs8.meta)
+
+r8 = lhs8.runs
+fig, ax = plt.subplots(figsize=(6.4, 5.8))
+for e in np.linspace(100, 500, 9):
+    ax.axvline(e, color="0.85", lw=0.8, zorder=0)
+for e in np.linspace(0.5, 2.5, 9):
+    ax.axhline(e, color="0.85", lw=0.8, zorder=0)
+ax.scatter(r8["dna_ng"], r8["lipid_uL"], s=60, color="tab:blue", edgecolor="white", zorder=3)
+ax.plot(
+    r8["dna_ng"], np.full(8, 0.5), "|", color="tab:red",
+    markersize=14, markeredgewidth=1.8, clip_on=False, zorder=4,
+)
+ax.plot(
+    np.full(8, 100), r8["lipid_uL"], "_", color="tab:red",
+    markersize=14, markeredgewidth=1.8, clip_on=False, zorder=4,
+)
+ax.set_xlim(100, 500)
+ax.set_ylim(0.5, 2.5)
+ax.set_xlabel("dna_ng")
+ax.set_ylabel("lipid_uL")
+ax.set_title("Latin hypercube: exactly one point per stratum, on every axis (n = 8)")
+save(ax, "v18_lhs_stratification.png")
+
+# sobol' rejects non-power-of-two run counts
+try:
+    sobol(sf_factors, n_runs=20)
+except ValueError as exc:
+    print("\nsobol([dna_ng, lipid_uL], n_runs=20) ->", exc)
+
+# discrepancy convergence: random vs LHS vs Halton vs Sobol', averaged over seeds
+conv_factors = [ContinuousFactor(name, 0.0, 1.0) for name in ("x1", "x2", "x3")]
+ns = [8, 16, 32, 64, 128]
+n_seed = 15
+rand_disc, lhs_disc, hal_disc, sob_disc = [], [], [], []
+for nn in ns:
+    rd, ld, hd, sd = [], [], [], []
+    for s in range(n_seed):
+        cloud = np.random.default_rng(1000 + s).uniform(-1.0, 1.0, size=(nn, 3))
+        rd.append(discrepancy(design_from_coded(cloud, conv_factors)))
+        ld.append(discrepancy(latin_hypercube(conv_factors, n_runs=nn, criterion=None, seed=s)))
+        hd.append(discrepancy(halton(conv_factors, n_runs=nn, seed=s)))
+        sd.append(discrepancy(sobol(conv_factors, n_runs=nn, seed=s)))
+    rand_disc.append(float(np.mean(rd)))
+    lhs_disc.append(float(np.mean(ld)))
+    hal_disc.append(float(np.mean(hd)))
+    sob_disc.append(float(np.mean(sd)))
+
+print("\ndiscrepancy vs n (mean over 15 seeds, 3 factors):")
+print(f"  {'n':>4} {'random':>9} {'lhs':>9} {'halton':>9} {'sobol':>9}")
+for i, nn in enumerate(ns):
+    print(
+        f"  {nn:>4} {rand_disc[i]:>9.4f} {lhs_disc[i]:>9.4f} "
+        f"{hal_disc[i]:>9.4f} {sob_disc[i]:>9.4f}"
+    )
+
+fig, ax = plt.subplots(figsize=(6.8, 5.0))
+ax.loglog(ns, rand_disc, "o-", color="0.5", label="random (i.i.d.)")
+ax.loglog(ns, lhs_disc, "s-", color="tab:green", label="Latin hypercube")
+ax.loglog(ns, hal_disc, "^-", color="tab:orange", label="Halton")
+ax.loglog(ns, sob_disc, "D-", color="tab:blue", label="Sobol'")
+ax.set_xlabel("number of runs")
+ax.set_ylabel("centered discrepancy (lower = more uniform)")
+ax.set_title("Coverage improves faster for low-discrepancy sequences (3 factors)")
+ax.set_xticks(ns)
+ax.set_xticklabels([str(nn) for nn in ns])
+ax.legend()
+save(ax, "v18_discrepancy_convergence.png")
 
 print("\nDONE")

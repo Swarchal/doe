@@ -12,10 +12,16 @@ Phase 1 (factors/coding, the `Design` container, factorial generators, OLS analy
 effect/Pareto/half-normal plots), Phase 2a (response-surface designs, quadratic fitting,
 ANOVA + lack-of-fit, contour/diagnostic plots), and Phase 2b (surface optimization —
 stationary point + canonical analysis, constrained optimum, Derringer–Suich desirability,
-3-D `surface_plot`) are implemented, completing Phase 1 and Phase 2. `build_model_matrix`
-expands categorical factors via deviation (effect) coding, so OLS analysis handles mixed
-continuous/categorical designs. See `docs/PLAN.md` for the full roadmap and `docs/PHASE2.md`
-for the Phase 2 build plan.
+3-D `surface_plot`) are implemented, completing Phase 1 and Phase 2. Phase 3
+(computer-generated optimal designs — `coordinate_exchange` engine with D/I-optimality,
+`candidate_grid`, `augment` — plus design diagnostics: `efficiency` (D/A/G/I),
+`vif`, `condition_number`, `correlation_matrix`/`alias_matrix`, `leverage`) is implemented.
+Phase 4a (space-filling generators — `latin_hypercube`, `sobol`, `halton`, thin wrappers over
+`scipy.stats.qmc` — plus the model-free coverage diagnostics `discrepancy` and
+`maximin_distance`) is implemented; Phase 4b (mixture designs) is not yet started.
+`build_model_matrix` expands categorical factors via deviation (effect) coding, so OLS
+analysis handles mixed continuous/categorical designs. See `docs/PLAN.md` for the full roadmap
+and `docs/PHASE2.md`/`docs/PHASE3.md`/`docs/PHASE4.md` for the detailed build plans.
 
 ## Commands
 
@@ -28,6 +34,10 @@ uv run pytest tests/test_fit.py::test_fit_recovers_known_effects   # a single te
 uv run ruff check .                      # lint
 uv run mypy                              # type-check (strict; checks src/)
 ```
+
+CI (`.github/workflows/ci.yml`) runs these same three checks — `ruff check .`, `mypy`,
+and `pytest` — via `uv run --extra dev` on a Python 3.11/3.12/3.13 matrix, on pushes to
+`main` and on pull requests.
 
 ## Architecture
 
@@ -50,6 +60,21 @@ consumes one.
   points + center replicates; `alpha` is `"faced"`/`"rotatable"`/`"orthogonal"` or a float)
   and `box_behnken` (3-level, no corner runs). Both require continuous factors and set
   `point_types`.
+- `generators/optimal.py` (Phase 3b) — computer-generated designs via a `coordinate_exchange`
+  engine (Meyer–Nachtsheim): seeds a random feasible start over a coded `candidate_grid` (or a
+  custom `region`), then exchanges each mutable run against every candidate to maximise
+  `criterion="D"` (`log_det_information`) or minimise `"I"` (average prediction variance),
+  restarting `n_restarts` times to dodge local optima. `d_optimal`/`i_optimal` are
+  intention-revealing wrappers; `augment` holds an existing design's rows fixed
+  (`point_type="existing"`) and searches only the added rows. Returns a plain `Design` with the
+  search diagnostics stashed in `meta`.
+- `generators/spacefilling.py` (Phase 4a) — space-filling designs that target *coverage* rather
+  than model efficiency (computer experiments, surrogate modelling, exploratory sampling):
+  `latin_hypercube` (stratified, `criterion="maximin"`/`"correlation"`/`None`), `sobol`
+  (power-of-two run counts only — raises otherwise, naming the nearest valid sizes), and
+  `halton` (any count). Thin wrappers over `scipy.stats.qmc`: samples in `[0, 1]^k` map to
+  coded `[-1, +1]` then decode to natural units. Continuous factors only; reproducible and
+  self-describing via `meta` (`sampler`/`seed`/`criterion`/`scramble`).
 - `analysis/model.py` — `build_model_matrix` expands a `Design` into intercept + main-effect
   + interaction (+ optional quadratic) columns in coded units. Squared terms are only emitted
   for continuous factors that actually take values off `{-1, +1}` (a pure ±1 column squares to
@@ -62,16 +87,32 @@ consumes one.
   yields NaN standard errors rather than erroring.
 - `analysis/anova.py` — `anova_table` (sequential/Type I SS via QR), `lack_of_fit` (needs ≥2
   center points for pure error), and predictive metrics `press`/`predicted_r2`/`adjusted_r2`.
+- `analysis/diagnostics.py` — model-based design diagnostics (Phase 3a) that judge *any* design
+  against a model: `information_matrix`/`condition_number`/`log_det_information`, `vif`,
+  `leverage`, `correlation_matrix` (alias structure), and `efficiency` (D/A/G/I, normalised so
+  an orthogonal design scores ~1, integrating scaled prediction variance over a candidate
+  region). Plus model-free coverage metrics (Phase 4a): `discrepancy` (`qmc.discrepancy`) and
+  `maximin_distance`, both on `Design.coded()` rescaled to the `[0, 1]^k` unit cube. Headless;
+  the cores feed both the plotting wrappers and the `optimal.py` engine (whose D-objective *is*
+  `log_det_information`).
 - `analysis/optimize.py` (Phase 2b) — reads the fitted quadratic as `ŷ = b₀ + xᵀb + xᵀB x`
   (`_quadratic_form` pulls `b`/symmetric `B` from `term_names`). `stationary_point` solves
   `−½ B⁻¹ b` + canonical eigen-analysis (max/min/saddle); `optimum` does a constrained multistart
   `L-BFGS-B` search over the coded box (reports `at_bound`); `desirability` maximizes a
   Derringer–Suich geometric-mean `D` over `ResponseGoal`s via `differential_evolution`.
-- `plotting.py` — effect plots (`pareto_plot`, `main_effects_plot`, `half_normal_plot`),
-  RSM (`contour_plot` + 3-D `surface_plot` over their headless core `surface_grid`, which takes
-  `fixed={factor: value}` to slice >2 factors), and diagnostics (`residuals_vs_fitted`,
-  `normal_qq`). Imports `matplotlib` lazily so the core library stays usable without the optional
-  `plotting` extra.
+- `plotting.py` — effect plots (`pareto_plot`, `main_effects_plot`, `half_normal_plot`,
+  `interaction_plot` over its headless `interaction_lines`), RSM (`contour_plot` + 3-D
+  `surface_plot` over their headless core `surface_grid`, which takes `fixed={factor: value}` to
+  slice >2 factors), model diagnostics (`residuals_vs_fitted`, `normal_qq`,
+  `predicted_vs_actual`, `leverage_plot`), and alias structure (`correlation_heatmap` over its
+  headless `alias_matrix`). Imports `matplotlib` lazily so the core library stays usable without
+  the optional `plotting` extra.
+- `serialization.py` — `validate_design_dict` checks a serialized-`Design` mapping (the
+  `Design.to_dict` payload consumed by `Design.from_dict`) against the versioned schema, raising
+  `ValidationError`; see `docs/SERIALIZATION.md`.
+- `interactive.py` — `to_html` renders a `Design` to a self-contained, sortable HTML run sheet
+  (natural + coded columns on a diverging colour scale, tinted point-type column); adds no new
+  Python dependencies.
 
 Tests anchor correctness against known designs/effects (e.g. a 2^(4-1) defining relation,
 recovering injected coded-unit effects exactly, textbook CCD/Box-Behnken run counts). Keep

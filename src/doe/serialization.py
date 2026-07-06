@@ -104,9 +104,7 @@ def validate_design_dict(data: Mapping[str, Any], *, check_ranges: bool = False)
         elif kind == "categorical":
             levels = fd.get("levels")
             if not _is_list(levels) or len(levels) < 2:
-                errors.append(
-                    f"factor {name!r}: categorical 'levels' must list at least 2 values"
-                )
+                errors.append(f"factor {name!r}: categorical 'levels' must list at least 2 values")
             else:
                 if len(set(levels)) != len(levels):
                     errors.append(f"factor {name!r}: categorical levels must be unique")
@@ -144,9 +142,7 @@ def validate_design_dict(data: Mapping[str, Any], *, check_ranges: bool = False)
                 elif check_ranges:
                     lo, hi = continuous_bounds[fname]
                     if not lo <= value <= hi:
-                        errors.append(
-                            f"run[{i}] factor {fname!r}: {value} outside [{lo}, {hi}]"
-                        )
+                        errors.append(f"run[{i}] factor {fname!r}: {value} outside [{lo}, {hi}]")
 
     point_types = data.get("point_types")
     if point_types is not None:

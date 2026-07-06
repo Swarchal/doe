@@ -149,3 +149,15 @@ def test_box_behnken_center_count():
 def test_box_behnken_requires_three_factors():
     with pytest.raises(ValueError):
         box_behnken(_factors(2))
+
+
+def test_box_behnken_k5_run_count():
+    # k=5: all C(5,2)=10 pairs x 4 edge runs = 40 (canonical BBD), plus 3 center -> 43
+    design = box_behnken(_factors(5))
+    assert design.n_runs == 40 + 3
+
+
+def test_box_behnken_rejects_six_or_more_factors():
+    # k>=6: all-pairs would give a larger, non-canonical (non-rotatable) design, so reject it
+    with pytest.raises(ValueError, match="at most 5 factors"):
+        box_behnken(_factors(6))

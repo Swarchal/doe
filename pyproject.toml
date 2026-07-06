@@ -8,7 +8,10 @@ license = { text = "MIT" }
 authors = [{ name = "Scott Warchal", email = "scott.warchal@gmail.com" }]
 dependencies = [
     "numpy>=1.26",
-    "scipy>=1.11",
+    # 1.15 is the first release whose differential_evolution accepts the standardized
+    # ``rng=`` keyword used by analysis.optimize.desirability (older releases only take
+    # the now-deprecated ``seed=``).
+    "scipy>=1.15",
     "pandas>=2.0",
 ]
 

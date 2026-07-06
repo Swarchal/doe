@@ -11,14 +11,15 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from .analysis.diagnostics import correlation_matrix as _correlation_matrix
+from .analysis.diagnostics import leverage as _leverage
 from .analysis.fit import FitResult
 from .analysis.model import _effect_code, build_model_matrix
+from .design import Design
 from .factors import ContinuousFactor, FactorSet
 
 if TYPE_CHECKING:
     from matplotlib.axes import Axes
-
-    from .design import Design
 
 
 def pareto_plot(result: FitResult, ax: Axes | None = None) -> Axes:
@@ -344,13 +345,9 @@ def alias_matrix(
     in :func:`~doe.analysis.model.build_model_matrix`.
     """
     mm = build_model_matrix(design, order=order, interactions=interactions)
-    keep = [
-        i
-        for i, name in enumerate(mm.term_names)
-        if name != "Intercept" and np.std(mm.X[:, i]) > 1e-12
-    ]
-    labels = [mm.term_names[i] for i in keep]
-    corr = np.atleast_2d(np.corrcoef(mm.X[:, keep], rowvar=False))
+    corr_df = _correlation_matrix(mm.X, mm.term_names)
+    labels = list(corr_df.index)
+    corr = corr_df.to_numpy(copy=True)
     np.clip(corr, -1.0, 1.0, out=corr)  # tame rounding drift outside [-1, 1]
     if absolute:
         corr = np.abs(corr)
@@ -433,6 +430,41 @@ def residuals_vs_fitted(result: FitResult, ax: Axes | None = None) -> Axes:
     ax.set_xlabel("Fitted values")
     ax.set_ylabel("Residuals")
     ax.set_title("Residuals vs fitted")
+    return ax
+
+
+def leverage_plot(result_or_design: FitResult | Design, ax: Axes | None = None) -> Axes:
+    """Leverage (hat-matrix diagonal) per run, with the ``2p/n`` high-leverage reference line.
+
+    The design-evaluation companion to the residual diagnostics: leverage measures how much a
+    run's factor settings let it pull on the fit, independent of its response. Runs above the
+    ``2p/n`` rule-of-thumb line are high-leverage points whose loss would most degrade the
+    design. Accepts a fitted :class:`~doe.analysis.fit.FitResult` (uses its model matrix) or a
+    bare :class:`~doe.design.Design` (expands a model matrix first). Draws
+    :func:`doe.analysis.diagnostics.leverage`.
+    """
+    import matplotlib.pyplot as plt
+
+    if isinstance(result_or_design, FitResult):
+        x = result_or_design.model_matrix
+    elif isinstance(result_or_design, Design):
+        x = build_model_matrix(result_or_design).X
+    else:
+        raise TypeError("leverage_plot expects a FitResult or Design")
+
+    h = _leverage(x)
+    n_runs, n_terms = x.shape
+    threshold = 2.0 * n_terms / n_runs
+    run_numbers = np.arange(1, n_runs + 1)
+
+    if ax is None:
+        _, ax = plt.subplots()
+    ax.plot(run_numbers, h, "o-")
+    ax.axhline(threshold, color="grey", linestyle="--", lw=0.8, label="2p/n")
+    ax.set_xlabel("Run")
+    ax.set_ylabel("Leverage")
+    ax.set_title("Leverage by run")
+    ax.legend()
     return ax
 
 

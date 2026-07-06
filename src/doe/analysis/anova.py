@@ -7,6 +7,7 @@ refits). F / t p-values come from ``scipy.stats``, which is already a core depen
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
@@ -21,8 +22,9 @@ from .fit import FitResult
 class LackOfFit:
     """Decomposition of residual variation into lack-of-fit and pure error.
 
-    Pure error comes from replicated center points; a *non*-significant lack-of-fit
-    (large ``p_value``) means the fitted model is adequate.
+    Pure error comes from *every* group of runs sharing identical factor settings
+    (replicated center points, but also any other replicated runs); a *non*-significant
+    lack-of-fit (large ``p_value``) means the fitted model is adequate.
     """
 
     ss_lof: float
@@ -96,34 +98,67 @@ def anova_table(result: FitResult, design: Design, response: np.ndarray) -> pd.D
     return pd.DataFrame(rows, index=index)
 
 
-def lack_of_fit(result: FitResult, design: Design, response: np.ndarray) -> LackOfFit:
-    """Lack-of-fit test against pure error from replicated center points.
+def _pure_error(design: Design, y: np.ndarray) -> tuple[float, int]:
+    """Pure-error SS and df pooled over every group of runs with identical settings.
 
-    Requires at least two center points (so pure error has >= 1 degree of freedom).
+    Any set of runs sharing the same factor settings (replicates) gives a model-free read on
+    the noise: the spread of their responses about their own group mean. Pooling over *all*
+    such groups -- not just center points -- uses every replicate the design provides. Runs
+    with a unique setting contribute nothing (a group of one has zero within-group variation
+    and zero degrees of freedom). Floating-point construction noise is folded into exact
+    groups by rounding the (numeric) factor settings.
+    """
+    factor_values = design.runs[design.factors.names].to_numpy()
+    groups: dict[tuple[object, ...], list[int]] = {}
+    for i, row in enumerate(factor_values):
+        key = tuple(
+            round(float(v), 9) if isinstance(v, (int, float, np.number)) else v for v in row
+        )
+        groups.setdefault(key, []).append(i)
+
+    ss_pe = 0.0
+    df_pe = 0
+    for idx in groups.values():
+        if len(idx) > 1:
+            group = y[idx]
+            ss_pe += float(((group - group.mean()) ** 2).sum())
+            df_pe += len(idx) - 1
+    return ss_pe, df_pe
+
+
+def lack_of_fit(result: FitResult, design: Design, response: np.ndarray) -> LackOfFit:
+    """Lack-of-fit test against pure error from replicated runs.
+
+    Pure error is pooled over every group of runs sharing identical factor settings (replicated
+    center points and any other replicates). Requires at least one such replicate -- i.e. pure
+    error must have >= 1 degree of freedom -- which two center points already provide.
     """
     y = np.asarray(response, dtype=float)
-    center = design.center_indices
-    if len(center) < 2:
-        raise ValueError("lack-of-fit needs at least 2 replicated center points for pure error")
 
     # Pure error: replicate runs share identical factor settings, so any spread among their
     # responses is pure experimental noise -- a model-free yardstick for the residual variance.
-    y_center = y[center]
-    ss_pe = float(((y_center - y_center.mean()) ** 2).sum())
-    df_pe = len(center) - 1
+    ss_pe, df_pe = _pure_error(design, y)
+    if df_pe < 1:
+        raise ValueError(
+            "lack-of-fit needs at least one replicated factor setting for pure error "
+            "(e.g. >= 2 center points)"
+        )
 
     # Lack of fit is whatever residual variation is left after removing pure error: variation
     # the model failed to capture (e.g. missing curvature). The F-test below compares the two;
     # a significant result means the model is inadequate, not merely that the data are noisy.
     ss_res = float(result.residuals @ result.residuals)
     df_resid = result.dof_resid
-    ss_lof = ss_res - ss_pe
     df_lof = df_resid - df_pe
     if df_lof <= 0:
         raise ValueError("no degrees of freedom left for lack-of-fit")
 
+    # ss_res should exceed ss_pe, but a fit that nearly interpolates the replicates can leave a
+    # tiny negative difference from round-off; clamp it to zero rather than report a negative SS.
+    ss_lof = max(0.0, ss_res - ss_pe)
+
     ms_lof = ss_lof / df_lof
-    ms_pe = ss_pe / df_pe
+    ms_pe = ss_pe / df_pe if df_pe > 0 else float("nan")
     f_stat = ms_lof / ms_pe if ms_pe > 0 else float("inf")
     p_value = float(stats.f.sf(f_stat, df_lof, df_pe)) if np.isfinite(f_stat) else 0.0
     return LackOfFit(ss_lof, df_lof, ss_pe, df_pe, f_stat, p_value)
@@ -139,6 +174,14 @@ def press(result: FitResult) -> float:
     """
     h = _leverages(result.model_matrix)
     denom = 1.0 - h
+    # a run with leverage ~1 is fit (near-)exactly, so its deleted residual e_i / (1 - h_i) is
+    # 0/0: PRESS is undefined there. Warn rather than silently return an inf/NaN downstream.
+    if np.any(denom <= 1e-8):
+        warnings.warn(
+            "PRESS is undefined for runs with leverage ~1 (a saturated or near-saturated "
+            "model); the statistic may be infinite or NaN",
+            stacklevel=2,
+        )
     return float(np.sum((result.residuals / denom) ** 2))
 
 

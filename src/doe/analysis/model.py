@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from ..design import Design
-from ..factors import CategoricalFactor, ContinuousFactor, Factor
+from ..factors import CategoricalFactor, ContinuousFactor, Factor, FactorSet
 
 #: A factor's encoded model columns, as ``(term_name, column)`` pairs. A continuous
 #: factor contributes one; a ``k``-level categorical factor contributes ``k - 1``.
@@ -64,6 +64,52 @@ def _encode_factor(factor: Factor, values: np.ndarray) -> _Encoding:
     return [(factor.name, np.asarray(values, dtype=float))]
 
 
+def _categorical_coded_levels(factor: CategoricalFactor) -> np.ndarray:
+    """Numeric coordinates used for categorical levels in candidate regions."""
+    return np.linspace(-1.0, 1.0, len(factor.levels))
+
+
+def _decode_categorical_coded(factor: CategoricalFactor, coded: np.ndarray) -> np.ndarray:
+    """Map categorical candidate-region coordinates back to natural level labels."""
+    coded = np.asarray(coded, dtype=float)
+    levels = _categorical_coded_levels(factor)
+    nearest = np.abs(coded[:, None] - levels[None, :]).argmin(axis=1)
+    valid = np.isclose(coded, levels[nearest], atol=1e-9, rtol=0.0)
+    if not np.all(valid):
+        bad = np.unique(coded[~valid])
+        raise ValueError(
+            f"factor {factor.name!r} categorical candidate coordinate(s) "
+            f"{bad.tolist()} do not match discrete coded levels {levels.tolist()}"
+        )
+    return np.asarray([factor.levels[int(i)] for i in nearest], dtype=object)
+
+
+def coded_design_points(design: Design) -> np.ndarray:
+    """Return design runs as numeric coded coordinates, including categorical factors.
+
+    Continuous factors use their usual ``[-1, +1]`` coding. Categorical factors use the same
+    evenly spaced candidate-region coordinates as :func:`expand_coded_points`, so a
+    label-bearing :class:`Design` and a numeric candidate region can be stacked and expanded
+    through one term layout.
+    """
+    coded = design.coded()
+    cols: list[np.ndarray] = []
+    for factor in design.factors:
+        values = coded[factor.name].to_numpy()
+        if isinstance(factor, CategoricalFactor):
+            level_to_code = dict(zip(factor.levels, _categorical_coded_levels(factor), strict=True))
+            try:
+                cols.append(np.asarray([level_to_code[value] for value in values], dtype=float))
+            except KeyError as exc:
+                raise ValueError(
+                    f"factor {factor.name!r} has unknown level {exc.args[0]!r}; "
+                    f"expected {list(factor.levels)}"
+                ) from exc
+        else:
+            cols.append(np.asarray(values, dtype=float))
+    return np.column_stack(cols)
+
+
 def build_model_matrix(design: Design, order: int = 1, interactions: bool = True) -> ModelMatrix:
     """Build a coded model matrix.
 
@@ -115,6 +161,71 @@ def build_model_matrix(design: Design, order: int = 1, interactions: bool = True
             (name, col) = encoding[0]
             # a pure +/-1 factor has x^2 == 1 (collinear with the intercept); only emit a
             # squared term once the factor actually takes a value off {-1, +1}.
+            if np.any(np.abs(np.abs(col) - 1.0) > 1e-9):
+                cols.append(col**2)
+                term_names.append(f"{name}^2")
+
+    return ModelMatrix(np.column_stack(cols), term_names)
+
+
+def expand_coded_points(
+    points: np.ndarray,
+    factors: FactorSet,
+    *,
+    order: int = 1,
+    interactions: bool = True,
+) -> ModelMatrix:
+    """Expand an ``(m, k)`` array of coded factor points into a model matrix (Phase 3).
+
+    The array-based companion to :func:`build_model_matrix`: same intercept + main-effect +
+    interaction (+ optional quadratic) expansion and identical ``term_names``, but operating on
+    an arbitrary block of coded points rather than a :class:`~doe.design.Design`'s runs. This is
+    the shared core the coordinate-exchange engine (I-optimality) and the G/I-efficiency region
+    sampler use to evaluate the scaled prediction variance ``f(x)^T (X^T X)^-1 f(x)`` at
+    candidate points ``x`` -- neither has a ``Design`` to hand, only coded coordinates.
+
+    Categorical factors use discrete numeric coordinates in the candidate region:
+    ``np.linspace(-1, 1, n_levels)`` maps to the factor's natural levels in order. Those labels
+    are then passed through the same deviation/effect coding as :func:`build_model_matrix`, so
+    mixed continuous/categorical designs and candidate regions share one term layout.
+    ``points`` is ordered to match ``factors``; columns line up with
+    ``build_model_matrix(design, order, interactions)``.
+    """
+    points = np.asarray(points, dtype=float)
+    if points.ndim != 2:
+        raise ValueError("points must be a 2-D array with shape (n_points, n_factors)")
+    if points.shape[1] != len(factors):
+        raise ValueError(
+            f"points has {points.shape[1]} columns but factors has {len(factors)} entries"
+        )
+
+    encodings: list[tuple[Factor, _Encoding]] = []
+    for j, factor in enumerate(factors):
+        if isinstance(factor, CategoricalFactor):
+            labels = _decode_categorical_coded(factor, points[:, j])
+            encodings.append((factor, _effect_code(factor, labels)))
+        else:
+            encodings.append((factor, [(factor.name, points[:, j])]))
+
+    cols: list[np.ndarray] = [np.ones(points.shape[0])]
+    term_names: list[str] = ["Intercept"]
+
+    for _factor, encoding in encodings:
+        for name, col in encoding:
+            cols.append(col)
+            term_names.append(name)
+
+    if interactions:
+        for (_fa, enc_a), (_fb, enc_b) in itertools.combinations(encodings, 2):
+            for (name_a, col_a), (name_b, col_b) in itertools.product(enc_a, enc_b):
+                cols.append(col_a * col_b)
+                term_names.append(f"{name_a}:{name_b}")
+
+    if order >= 2:
+        for factor, encoding in encodings:
+            if not isinstance(factor, ContinuousFactor):
+                continue
+            (name, col) = encoding[0]
             if np.any(np.abs(np.abs(col) - 1.0) > 1e-9):
                 cols.append(col**2)
                 term_names.append(f"{name}^2")

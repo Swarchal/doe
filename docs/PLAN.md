@@ -97,14 +97,20 @@ and an `[optional]` group for plotting/statsmodels.
 
 ## Phased roadmap
 
-1. **Phase 1 — Foundation:** `Factor`, coding, `Design` container, full + fractional factorial,
-   basic OLS fit + effects, main-effect/Pareto plots. This alone is a usable screening library.
-2. **Phase 2 — RSM:** CCD, Box-Behnken, quadratic model fitting, ANOVA, contour/surface plots.
-   See [`PHASE2.md`](PHASE2.md) for the detailed build plan.
-3. **Phase 3 — Optimal designs:** coordinate-exchange engine + D/I-optimality, design diagnostics
-   (efficiency, VIF, alias matrix).
-4. **Phase 4 — Specialized:** space-filling (LHS/QMC), mixture designs, multi-response desirability
-   optimization.
+1. **Phase 1 — Foundation** *(done)*: `Factor`, coding, `Design` container, full + fractional
+   factorial, basic OLS fit + effects, main-effect/Pareto plots. This alone is a usable
+   screening library.
+2. **Phase 2 — RSM** *(done)*: CCD, Box-Behnken, quadratic model fitting, ANOVA, contour/surface
+   plots, plus surface optimization + desirability. See [`PHASE2.md`](PHASE2.md) for the detailed
+   build plan.
+3. **Phase 3 — Optimal designs** *(done)*: coordinate-exchange engine + D/I-optimality, design
+   diagnostics (efficiency, VIF, alias matrix, leverage). See [`PHASE3.md`](PHASE3.md) for the
+   detailed build plan.
+4. **Phase 4 — Specialized:** space-filling (LHS/QMC) and mixture designs. (Multi-response
+   desirability optimization, originally slated here, shipped early in Phase 2b.) **Phase 4a**
+   (space-filling: `latin_hypercube`/`sobol`/`halton` + `discrepancy`/`maximin_distance`) is
+   *done*; **Phase 4b** (mixture designs) is *not yet started*. See [`PHASE4.md`](PHASE4.md) for
+   the detailed build plan.
 
 A good correctness anchor throughout: reproduce canonical designs from Montgomery's *Design and
 Analysis of Experiments* in tests, so generated designs are verified against published references.

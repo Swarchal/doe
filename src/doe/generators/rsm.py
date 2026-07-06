@@ -52,7 +52,8 @@ def _resolve_alpha(alpha: AlphaSpec, n_factorial: int, k: int, center: int) -> f
         return 1.0
     if alpha == "rotatable":
         # alpha = (n_factorial)^(1/4) makes prediction variance depend only on distance from the
-        # center, so the model predicts equally well in every direction -- the usual default.
+        # center, so the model predicts equally well in every direction -- the conventional RSM
+        # textbook choice (this library nonetheless defaults to "faced" to stay within bounds).
         return float(n_factorial**0.25)
     if alpha == "orthogonal":
         # value that makes the second-order terms uncorrelated (NIST e-Handbook form)
@@ -128,25 +129,46 @@ def central_composite(
     )
 
 
+#: Largest ``k`` for which the all-pairs construction below coincides with the canonical
+#: Box-Behnken design. For ``k in {3, 4, 5}`` every factor pair is used and the result is the
+#: textbook rotatable BBD; from ``k = 6`` the canonical design uses only a balanced *subset* of
+#: pairs (a BIBD), so taking all pairs would yield a larger, non-rotatable design under the
+#: wrong name (e.g. k=6 -> 60 edge runs vs. the canonical 48).
+_BOX_BEHNKEN_MAX_FACTORS = 5
+
+
 def box_behnken(factors: Sequence[Factor], *, center: int = 3) -> Design:
     """Generate a Box-Behnken design (BBD).
 
     A spherical 3-level design with no corner runs: for each pair of factors, run the
     ``+/-1`` factorial of that pair with all other factors at 0, then add ``center``
-    center-point replicates. Requires ``k >= 3`` factors.
+    center-point replicates. Supports ``3 <= k <= 5`` factors.
 
     Because it never sets all factors to their extremes at once, a Box-Behnken design avoids
     the (often impossible or unsafe) corner combinations a central composite would visit, while
     still placing points at three levels so curvature is estimable. It is a good choice when the
     corners of the factor region are infeasible.
 
-    Run-count anchors: ``k=3`` -> 12 edge + center; ``k=4`` -> 24 + center.
+    Run-count anchors: ``k=3`` -> 12 edge + center; ``k=4`` -> 24 + center; ``k=5`` -> 40 +
+    center.
+
+    Note:
+        Only ``k <= 5`` is supported. For ``k >= 6`` the canonical Box-Behnken design uses a
+        balanced *incomplete* set of factor pairs rather than all of them, which this all-pairs
+        construction does not reproduce; use :func:`central_composite` instead.
     """
     fs = FactorSet(factors)
     _require_continuous(fs)
     k = len(fs)
     if k < 3:
         raise ValueError("a Box-Behnken design needs at least 3 factors")
+    if k > _BOX_BEHNKEN_MAX_FACTORS:
+        raise ValueError(
+            f"box_behnken supports at most {_BOX_BEHNKEN_MAX_FACTORS} factors "
+            f"(got {k}): the canonical Box-Behnken design for k >= 6 uses a balanced subset "
+            "of factor pairs that this all-pairs construction does not reproduce; "
+            "use central_composite for more factors"
+        )
 
     edges: list[np.ndarray] = []
     for i, j in itertools.combinations(range(k), 2):

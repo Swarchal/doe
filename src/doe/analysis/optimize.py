@@ -405,9 +405,14 @@ def desirability(
     if not goals:
         raise ValueError("need at least one response goal")
 
+    # Every response is optimized over one shared coded box, so the goals must agree not just on
+    # factor *names* but on each factor's definition (bounds/levels) -- otherwise a coded point
+    # would decode to different natural settings per response. Frozen factor dataclasses compare
+    # by value, so tuple equality checks names, order, and coding together.
+    reference = tuple(goals[0].result.factors)
     names = goals[0].result.factors.names
     for goal in goals[1:]:
-        if goal.result.factors.names != names:
+        if tuple(goal.result.factors) != reference:
             raise ValueError("all responses must be fitted over the same factors")
 
     forms = [_quadratic_form(goal.result) for goal in goals]

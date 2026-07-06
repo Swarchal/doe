@@ -1092,6 +1092,315 @@ off-diagonal cells are confounded terms you should know about before you commit 
 
 ---
 
+## Vignette 16 — Is this design good enough?
+
+**Concept: design diagnostics before you run.** By now we have several ways to make designs:
+factorials, fractional screens, Plackett–Burman, CCDs, Box-Behnken. Before committing wells, it is
+useful to ask a separate question: **how well can this particular design estimate the model I plan
+to fit?** Phase 3 adds numeric diagnostics for exactly that.
+
+For the CCD from Vignettes 5–7, judge it against the same quadratic model:
+
+```python
+from doe import condition_number, efficiency, vif
+from doe.plotting import leverage_plot
+
+# ccd/res_ccd are the design and quadratic fit from Vignette 6
+diag = efficiency(ccd, order=2, interactions=True)
+print(f"D={diag.d:.3f}, A={diag.a:.3f}, G={diag.g:.3f}, I={diag.i:.3f}")
+# D=0.408, A=0.324, G=0.632, I=0.574
+
+print(condition_number(res_ccd.model_matrix))
+# 3.13
+
+for name, value in vif(res_ccd.model_matrix, term_names=res_ccd.term_names).items():
+    print(f"{name:>16s}: {value:.2f}")
+#           dna_ng: 1.00
+#         lipid_uL: 1.00
+#  dna_ng:lipid_uL: 1.00
+#         dna_ng^2: 1.12
+#       lipid_uL^2: 1.12
+
+ax = leverage_plot(res_ccd)
+```
+
+How to read those numbers:
+
+- **D/A/G/I efficiencies** are compact summaries of how much information the design carries for
+  the chosen model. Higher is better; they are most useful for comparing candidate designs on the
+  same factor region and model.
+- **Condition number** flags unstable columns. Here ~3 is tame; very large values mean some model
+  terms are nearly redundant.
+- **VIF** asks whether one term is inflated by correlation with the others. Values near 1 are the
+  reassuring case; the CCD's main effects and interaction are orthogonal, and even the squared
+  terms are only mildly coupled.
+
+![Leverage plot for the CCD: factorial/axial runs have moderate leverage, center replicates sit low, and no run crosses the high-leverage reference line](img/v16_leverage.png)
+
+The **leverage plot** shows how much influence each run has on the fitted model. Center
+replicates have low leverage because they repeat the same setting; edge and axial points carry
+more geometric information. A run above the `2p/n` guide line deserves attention: it may be
+essential, but if that well fails it can pull the model around.
+
+**Takeaway.** Diagnostics turn "this looks like a standard design" into a checkable statement:
+the terms are estimable, the geometry is stable, and no single well is quietly dominating the
+fit.
+
+---
+
+## Vignette 17 — When recipes don't fit: optimal designs
+
+**Concept: computer-generated designs.** Named recipes are excellent when their assumptions fit
+your assay. But real constraints are messier: "I only have eight wells", "this reagent has three
+levels", "those combinations are impossible", or "I already ran four corners — what four wells
+should I add?" Phase 3 adds **optimal designs** for those cases. You define a candidate set of
+allowed runs, pick a model, and let the exchange engine choose the most informative subset.
+
+Here is an 8-run quadratic design over a 5×5 DNA/lipid candidate grid. A full 5×5 grid would cost
+25 wells; the optimal design picks only eight.
+
+```python
+from doe import candidate_grid, d_optimal, i_optimal
+from doe import efficiency
+
+region = candidate_grid([dna, lipid], levels=5)
+
+d_design = d_optimal(
+    [dna, lipid], n_runs=8, model="quadratic", region=region, seed=1, n_restarts=50
+)
+i_design = i_optimal(
+    [dna, lipid], n_runs=8, model="quadratic", region=region, seed=1, n_restarts=50
+)
+
+print(d_design.runs)
+#    dna_ng  lipid_uL
+# 0   500.0       0.5
+# 1   300.0       1.5
+# 2   100.0       0.5
+# 3   500.0       2.5
+# 4   500.0       1.5
+# 5   100.0       2.5
+# 6   300.0       0.5
+# 7   100.0       1.5
+
+d_eff = efficiency(d_design, order=2, interactions=True, region=region)
+i_eff = efficiency(i_design, order=2, interactions=True, region=region)
+print(f"D-optimal: D={d_eff.d:.3f}, I={d_eff.i:.3f}")
+print(f"I-optimal: D={i_eff.d:.3f}, I={i_eff.i:.3f}")
+# D-optimal: D=0.454, I=0.576
+# I-optimal: D=0.454, I=0.587
+```
+
+![Candidate grid with D-optimal runs marked as blue squares and I-optimal runs marked as orange triangles](img/v17_optimal_designs.png)
+
+The grey dots are all allowed candidate runs; the markers are the chosen wells. **D-optimality**
+spreads runs to estimate coefficients precisely overall. **I-optimality** shifts the choice to
+reduce average prediction variance across the region. The two designs can look similar, but the
+criterion is different: compare them on a shared region with `efficiency(...).i`, not by comparing
+their stored scores directly.
+
+Optimal design also handles the common "add a few more wells" workflow:
+
+```python
+from doe import augment, full_factorial
+
+base = full_factorial([dna, lipid])       # the four corners already run
+augmented = augment(base, n_runs=4, model="quadratic", seed=2)
+print(augmented.runs)
+#    dna_ng  lipid_uL
+# 0   100.0       0.5
+# 1   100.0       2.5
+# 2   500.0       0.5
+# 3   500.0       2.5
+# 4   300.0       1.5
+# 5   300.0       2.5
+# 6   300.0       0.5
+# 7   100.0       1.5
+print(augmented.point_types)
+# ('existing', 'existing', 'existing', 'existing', 'augment', 'augment', 'augment', 'augment')
+```
+
+The original rows stay at the front, tagged `"existing"`, and only the new rows are searched.
+
+Finally, candidate regions can mix continuous factors with categorical ones. Categorical levels
+are handled as discrete choices, then reported back as labels:
+
+```python
+from doe import CategoricalFactor
+
+reagent = CategoricalFactor("reagent", ("PEI", "Lipo", "FuGENE"))
+mixed = d_optimal([dna, reagent], n_runs=6, model="linear", seed=4)
+print(mixed.runs)
+#    dna_ng reagent
+# 0   100.0     PEI
+# 1   500.0    Lipo
+# 2   500.0     PEI
+# 3   100.0    Lipo
+# 4   100.0  FuGENE
+# 5   500.0  FuGENE
+```
+
+That is useful when "factorised" bench choices matter: reagent brand, plate coating, media
+formulation, transfection chemistry. The model still uses proper effect coding internally; you
+keep reading and writing natural labels.
+
+**Takeaway.** Optimal designs are the custom design tool: give the library the feasible menu of
+runs, the model you want to estimate, and the run budget you can afford. It returns a normal
+`Design`, so all the fitting, diagnostics and plotting tools above still apply.
+
+---
+
+## Vignette 18 — Mapping a space without assuming its shape: space-filling designs
+
+**Concept: coverage instead of a model.** Every design so far — factorial, CCD, Box-Behnken,
+optimal — is built to estimate a _specific_ model efficiently. A CCD puts runs at the corners,
+the axials and the centre precisely because that is where a _quadratic_ needs data. But
+sometimes you don't want to commit to a model shape up front:
+
+- the response might be **wiggly** — a plateau, a shoulder, two peaks — not a tidy dome;
+- you plan to fit something **flexible** (a spline, a Gaussian-process surrogate, an ML model)
+  that learns the shape from the data rather than assuming it;
+- you are running an **expensive simulation** or an _in-silico_ screen and simply want to sample
+  the region evenly before deciding anything.
+
+For these the goal flips: not "estimate these coefficients precisely" but **"cover the region
+uniformly, leaving no large gaps."** That is a **space-filling design**.
+
+The naïve way to cover a box is to scatter random points — and it is worse than intuition
+suggests: random points **clump and leave holes**. A regular **grid** avoids clumps but wastes
+its resolution, because a 4×4 grid only ever tries **four** distinct DNA levels; if DNA turns out
+to be the factor that matters, you spent sixteen wells learning about four doses. Space-filling
+designs thread the needle — the same sixteen wells, spread evenly, with sixteen _distinct_ levels
+on every axis.
+
+```python
+import numpy as np
+from doe import ContinuousFactor, latin_hypercube, sobol, discrepancy
+
+dna   = ContinuousFactor("dna_ng",   100, 500, units="ng/well")
+lipid = ContinuousFactor("lipid_uL", 0.5, 2.5, units="uL/well")
+
+lhs   = latin_hypercube([dna, lipid], n_runs=16, seed=0)
+sob   = sobol([dna, lipid], n_runs=16, seed=0)
+```
+
+**The figure: four ways to place sixteen points.** The panels below show the _same_ box sampled
+four ways, each titled with its **discrepancy** — a single number measuring how far the cloud is
+from perfectly uniform (lower is better; introduced properly below).
+
+![Four scatter panels of 16 points over dna_ng × lipid_uL: random (clumped, discrepancy 0.0395), 4×4 grid (regular but only 4 levels per axis, 0.0314), Latin hypercube (even, 0.0023), and Sobol (even, 0.0020)](img/v18_spacefilling_compare.png)
+
+Read left-to-right, top-to-bottom. **Random** clumps (see the near-touching pair in the middle)
+and leaves a bare patch bottom-left — discrepancy 0.0395, the worst. The **grid** is perfectly
+regular but visibly commits to only four DNA levels and four lipid levels. **Latin hypercube** and
+**Sobol'** fill the plane evenly with no clumps and no holes, and their discrepancies (0.0023 and
+0.0020) are an **order of magnitude** lower than random's. Those two are the designs you want.
+
+**Latin hypercube: one point per stratum.** The "Latin" trick is simple and powerful. Split each
+factor's range into `n_runs` equal **strata** and place exactly one point in each — so every
+factor, _projected onto its own axis_, is perfectly evenly spread, no matter how many factors
+there are.
+
+```python
+lhs8 = latin_hypercube([dna, lipid], n_runs=8, seed=1)
+print(lhs8.runs)
+#        dna_ng  lipid_uL
+# 0  252.060013  1.360171
+# 1  102.923534  1.678099
+# 2  391.595058  1.140592
+# 3  327.853564  1.851922
+# 4  202.267714  0.735126
+# 5  449.711736  2.218780
+# 6  487.115702  0.905230
+# 7  153.438392  2.465137
+print(lhs8.meta)
+# {'sampler': 'lhs', 'criterion': 'maximin', 'seed': 1}
+```
+
+![An 8-run Latin hypercube over dna_ng × lipid_uL with the box divided into an 8×8 grid of strata; red rug ticks on each margin show exactly one point falls in every column-stratum and every row-stratum](img/v18_lhs_stratification.png)
+
+The faint gridlines cut the box into 8 strata per axis. The **red rug ticks** on the bottom and
+left margins are the giveaway: there is exactly **one tick in every column and every row** — one
+point per stratum, on each axis. That one-dimensional uniformity is guaranteed for _any_ run
+count, which is why LHS scales to many factors and odd budgets where a grid cannot (a grid would
+need `mᵏ` runs). The default `criterion="maximin"` goes one step further, drawing several valid
+hypercubes and keeping the one whose points are most spread apart in the _full_ space — reducing
+the residual clumping that pure stratification still allows. Pass `criterion="correlation"` to
+instead minimise cross-factor correlation, or `criterion=None` for the plain stratified draw. The
+design is reproducible and self-describing: `meta` records the sampler, criterion and seed.
+
+**Sobol' and Halton: low-discrepancy sequences.** `sobol` and `halton` are the other route —
+_deterministic_ (then randomly scrambled) sequences engineered so every sub-region gets its fair
+share of points. Unlike a fresh random draw, they get **better as you add points**: each new
+point plugs the biggest current gap. `sobol` achieves its balance guarantees only in blocks of
+`2ᵐ`, so it insists on a power-of-two run count; `halton` takes any count and is the escape hatch
+when your budget isn't a power of two.
+
+```python
+sobol([dna, lipid], n_runs=20)
+# ValueError: sobol requires a power-of-two n_runs; got 20 (nearest valid sizes: 16, 32)
+```
+
+**Judging coverage: two model-free metrics.** Because there is no model to score, space-filling
+designs are judged by how well they _cover_ the region. Two diagnostics do that, both operating on
+the design rescaled to the unit cube — so they judge **any** design, not just these (you can ask
+how well a CCD covers its box, too):
+
+- **`discrepancy`** — how far the cloud is from perfectly uniform. **Lower is better.**
+- **`maximin_distance`** — the distance between the _closest_ pair of runs. **Larger is better**:
+  it means no two wells sit wastefully on top of each other.
+
+```python
+from doe import maximin_distance
+#            design   discrepancy   maximin_distance
+#   random (i.i.d.)        0.0395             0.0153
+#        grid (4×4)        0.0314             0.3333
+#   Latin hypercube        0.0023             0.1404
+#           Sobol'         0.0020             0.1332
+```
+
+The two numbers measure genuinely different things, and the grid row shows why you want both.
+Random is worst on _both_ — its clumping crushes the maximin distance to 0.015 (that near-touching
+pair) and its holes inflate discrepancy. The **grid** actually wins maximin (0.333 — its points
+are maximally separated) yet has poor discrepancy, because even separation is not the same as even
+_coverage_ when you are stuck on four levels per axis. **LHS and Sobol'** get the best of both: an
+order-of-magnitude lower discrepancy than random while keeping points well separated.
+
+**The figure: coverage improves faster for low-discrepancy sequences.** The payoff of Sobol'/Halton
+over random shows up as you scale up. This plots discrepancy against run count (three factors,
+averaged over seeds) on log-log axes:
+
+![Log-log plot of discrepancy vs number of runs for 3 factors: random falls slowly along the top, Latin hypercube below it, and Halton and Sobol steepest and lowest, separating further from random as n grows](img/v18_discrepancy_convergence.png)
+
+```python
+#      n    random       lhs    halton     sobol
+#      8    0.0884    0.0223    0.0246    0.0182
+#     16    0.0474    0.0085    0.0076    0.0054
+#     32    0.0212    0.0038    0.0025    0.0016
+#     64    0.0110    0.0017    0.0008    0.0005
+#    128    0.0046    0.0009    0.0002    0.0001
+```
+
+Every method improves with more runs, but at different _rates_. Random discrepancy falls slowly
+(roughly like `1/√n`); the low-discrepancy sequences fall much faster (closer to `1/n`), so the
+gap **widens** with budget — by 128 runs Sobol' is ~40× more uniform than random. Latin hypercube
+sits in between: better than random everywhere, but Sobol'/Halton pull ahead as `n` grows. The
+practical rule: **LHS** when you want guaranteed one-per-stratum projections and any run count;
+**Sobol'** (power-of-two) when you want the most uniform fill and may extend the sample later;
+**Halton** when you want Sobol'-like coverage at an arbitrary count.
+
+Everything downstream is unchanged: a space-filling design is an ordinary `Design`, so once the
+wells are read out you fit, diagnose and plot exactly as in every vignette above — the difference
+is only that you laid the runs down to _map_ the space rather than to fit a preordained curve.
+
+**Takeaway.** When you know the model shape, spend runs where that model needs them (factorial,
+CCD, optimal). When you _don't_ — an unknown or wiggly surface, a flexible surrogate, an
+exploratory simulation — spread runs to cover the region: `latin_hypercube` for stratified
+coverage at any budget, `sobol`/`halton` for the most uniform fill, and `discrepancy` /
+`maximin_distance` to prove the coverage is good.
+
+---
+
 ## Where to go next
 
 | You want to…                                  | Reach for…                                           |
@@ -1108,6 +1417,9 @@ off-diagonal cells are confounded terms you should know about before you commit 
 | Guard against plate drift                     | `Design.randomize`                                   |
 | Share/explore a design as interactive HTML    | `to_html`                                            |
 | Check a design's aliasing before running       | `correlation_heatmap`, `alias_matrix`                |
+| Judge design quality before running            | `efficiency`, `vif`, `condition_number`, `leverage_plot` |
+| Generate a custom run set under constraints    | `candidate_grid`, `d_optimal`, `i_optimal`, `augment` |
+| Cover a region evenly (no assumed model shape) | `latin_hypercube`, `sobol`, `halton` + `discrepancy`, `maximin_distance` |
 
 Every example above runs in coded units internally but is entered and reported in the real
 units you set at the bench — nanograms, microlitres, percent. That is the whole point: the

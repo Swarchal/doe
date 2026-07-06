@@ -34,6 +34,7 @@ from doe.plotting import (
     half_normal_plot,
     interaction_lines,
     interaction_plot,
+    leverage_plot,
     normal_qq,
     predicted_vs_actual,
     residuals_vs_fitted,
@@ -450,3 +451,25 @@ def test_correlation_heatmap_uses_given_axes():
     out = correlation_heatmap(full_factorial(_factors(2), levels=2), ax=ax)
     assert out is ax
     plt.close(fig)
+
+
+def test_leverage_plot_accepts_design():
+    design = full_factorial(_factors(2), levels=2)
+    ax = leverage_plot(design)
+
+    assert isinstance(ax, Axes)
+    assert ax.get_xlabel() == "Run"
+    assert ax.get_ylabel() == "Leverage"
+    assert ax.lines[0].get_xdata().shape == (design.n_runs,)
+    # reference line is the 2p/n rule, after the run-leverage line
+    assert np.allclose(ax.lines[1].get_ydata(), 2.0)
+    plt.close(ax.figure)
+
+
+def test_leverage_plot_accepts_fit_result():
+    result = _fit_exact()
+    ax = leverage_plot(result)
+
+    assert isinstance(ax, Axes)
+    assert ax.lines[0].get_xdata().shape == (result.model_matrix.shape[0],)
+    plt.close(ax.figure)
