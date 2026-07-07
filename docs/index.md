@@ -30,6 +30,7 @@ pip install -e '.[plotting]'   # plotting extra pulls in matplotlib
 :caption: Guides
 
 VIGNETTES
+WORKFLOW
 SERIALIZATION
 ```
 
