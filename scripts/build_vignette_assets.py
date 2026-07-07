@@ -8,6 +8,7 @@ Figures are written to docs/img/ and console outputs are printed for transcripti
 from __future__ import annotations
 
 import pathlib
+from typing import Any
 
 import matplotlib
 
@@ -129,6 +130,60 @@ for level, z in lines:
 ax = interaction_plot(result, "dna_ng", "lipid_uL")
 save(ax, "v3_interaction.png")
 
+# Vignette 1 figure: OFAT vs factorial on a strongly-interacting surface.
+# A synthetic ground-truth surface with a diagonal ridge (large positive interaction):
+# OFAT walks the axes and stalls partway up the ridge, while the factorial samples all
+# four corners and reveals the (high DNA, high lipid) direction the ridge actually climbs.
+def true_v1(a: Any, b: Any) -> Any:  # coded units; accepts floats or arrays
+    return 50 + 10 * (a + b) + 12 * a * b - 6 * a**2 - 6 * b**2
+
+
+ga = np.linspace(-1.0, 1.0, 200)
+gb = np.linspace(-1.0, 1.0, 200)
+GA, GB = np.meshgrid(ga, gb)
+Zv1 = true_v1(GA, GB)
+NA, NB = dna.decode(GA), lipid.decode(GB)
+
+fig, (axL, axR) = plt.subplots(1, 2, figsize=(11.5, 5.0), sharex=True, sharey=True)
+for ax in (axL, axR):
+    ax.contourf(NA, NB, Zv1, levels=12, cmap="viridis")
+    ax.contour(NA, NB, Zv1, levels=12, colors="white", linewidths=0.4, alpha=0.5)
+    ax.set_xlabel("dna_ng")
+    ax.set_ylabel("lipid_uL")
+
+# OFAT: start low/low, titrate DNA (lipid held low), then titrate lipid at the chosen DNA.
+a1 = -1.0 / 6.0  # argmax over a of true_v1(a, -1)
+b2 = (10.0 + 12.0 * a1) / 12.0  # argmax over b of true_v1(a1, b)
+pa = dna.decode(np.array([-1.0, a1, a1]))
+pb = lipid.decode(np.array([-1.0, -1.0, b2]))
+axL.plot(pa, pb, "-", color="crimson", lw=2, zorder=5)
+for k in range(2):
+    axL.annotate("", xy=(pa[k + 1], pb[k + 1]), xytext=(pa[k], pb[k]),
+                 arrowprops=dict(arrowstyle="->", color="crimson", lw=2))
+axL.scatter(pa, pb, s=55, color="crimson", zorder=6)
+axL.scatter([pa[2]], [pb[2]], s=180, facecolors="none", edgecolors="crimson",
+            linewidths=2.5, zorder=7)
+axL.text(pa[2], pb[2] + 0.13, f"OFAT stalls\n~{true_v1(a1, b2):.0f}% GFP+",
+         color="crimson", fontsize=9, ha="center", va="bottom")
+axL.set_title("One factor at a time\n(titrate DNA, then lipid)", fontsize=10)
+
+ca = np.array([-1.0, -1.0, 1.0, 1.0])
+cb = np.array([-1.0, 1.0, -1.0, 1.0])
+axR.scatter(dna.decode(ca), lipid.decode(cb), s=110, color="white",
+            edgecolors="black", linewidths=1.8, zorder=5)
+best = int(np.argmax(true_v1(ca, cb)))
+axR.scatter([dna.decode(ca[best])], [lipid.decode(cb[best])], s=240, marker="*",
+            color="gold", edgecolors="black", linewidths=1.2, zorder=6)
+axR.text(dna.decode(ca[best]), lipid.decode(cb[best]) - 0.16,
+         f"best corner ~{true_v1(1.0, 1.0):.0f}%", color="black", fontsize=9,
+         ha="center", va="top")
+axR.set_title("Full factorial\n(all four corners)", fontsize=10)
+axL.set_xlim(dna.decode(np.array([-1.08]))[0], dna.decode(np.array([1.08]))[0])
+axL.set_ylim(lipid.decode(np.array([-1.08]))[0], lipid.decode(np.array([1.08]))[0])
+print(f"\nOFAT stalls at ~{true_v1(a1, b2):.0f}% GFP+; the (high, high) corner reaches "
+      f"~{true_v1(1.0, 1.0):.0f}%")
+save(axL, "v1_ofat_vs_factorial.png")
+
 
 # --------------------------------------------------------------------------- #
 # Vignette 4: fractional factorial screen, half-normal plot
@@ -163,9 +218,9 @@ save(ax, "v4_half_normal.png")
 
 
 # --------------------------------------------------------------------------- #
-# Vignette 4b: Plackett-Burman -- the leanest main-effect screen
+# Vignette 5: Plackett-Burman -- the leanest main-effect screen
 # --------------------------------------------------------------------------- #
-banner("Vignette 4b: Plackett-Burman screening")
+banner("Vignette 5: Plackett-Burman screening")
 
 pb_factors = [
     ContinuousFactor("seeding_cells", 5_000, 20_000, units="cells/well"),
@@ -239,13 +294,13 @@ ax1.set_title("PB design: 11 factors in 12 runs\n(red +1, blue −1; every colum
 correlation_heatmap(pb, interactions=True, absolute=True, ax=ax2)
 ax2.set_title("Alias structure: 11 mains + 55 two-factor interactions\n"
               "(mains mutually orthogonal; each leaks |r| = 1/3 into many 2FIs)", fontsize=9)
-save(ax1, "v4b_plackett_burman.png")
+save(ax1, "v5_plackett_burman.png")
 
 
 # --------------------------------------------------------------------------- #
-# Vignettes 5-7: CCD, lack-of-fit, contour, diagnostics
+# Vignettes 6-7: CCD, lack-of-fit, contour, diagnostics
 # --------------------------------------------------------------------------- #
-banner("Vignettes 5-7: central composite design")
+banner("Vignettes 6-7: central composite design")
 
 ccd = central_composite([dna, lipid], alpha="faced", center=4)
 print(f"ccd.n_runs = {ccd.n_runs}, ccd.n_center = {ccd.n_center}")
@@ -274,9 +329,40 @@ print(
     f"(df_lof={lof.df_lof}, df_pe={lof.df_pe})"
 )
 
+# Vignette 6 figure: center points reveal curvature a 2-level design can't see.
+# Slice the fitted quadratic along DNA at the lipid center: the two corner runs (±1)
+# define the straight chord a corners-only design assumes; the center replicates (0)
+# sit well above it, and that gap *is* the curvature the lack-of-fit test detects.
+gx5, gy5, gz5 = surface_grid(res_ccd, "dna_ng", "lipid_uL", resolution=201)
+jcen = int(np.argmin(np.abs(gy5[:, 0] - lipid.decode(np.array([0.0]))[0])))
+xline = gx5[0, :]
+yline = gz5[jcen, :]
+lo_pred, hi_pred, cen_pred = yline[0], yline[-1], yline[len(yline) // 2]
+midchord = 0.5 * (lo_pred + hi_pred)
+xc = dna.decode(np.array([0.0]))[0]
+
+fig, ax = plt.subplots(figsize=(7.2, 5.2))
+ax.plot(xline, yline, color="tab:blue", lw=2, label="true (fitted) quadratic")
+ax.plot([xline[0], xline[-1]], [lo_pred, hi_pred], "--", color="0.5", lw=2,
+        label="what corners alone assume: a line")
+ax.scatter([xline[0], xline[-1]], [lo_pred, hi_pred], s=95, color="tab:blue",
+           edgecolor="white", zorder=5, label="corner runs (coded ±1)")
+ax.scatter([xc], [cen_pred], s=130, marker="D", color="tab:orange",
+           edgecolor="white", zorder=6, label="center points (coded 0)")
+ax.annotate("", xy=(xc, cen_pred), xytext=(xc, midchord),
+            arrowprops=dict(arrowstyle="<->", color="tab:red", lw=1.8))
+ax.text(xc + 8, 0.5 * (cen_pred + midchord), f"curvature\ngap ≈ {cen_pred - midchord:.1f}",
+        color="tab:red", fontsize=9, va="center")
+ax.set_xlabel("dna_ng")
+ax.set_ylabel("predicted % GFP+  (lipid at center)")
+ax.set_title("Center points detect curvature a 2-level design can't")
+ax.legend(fontsize=8, loc="lower right")
+print(f"\ncurvature gap (center vs corner chord): {cen_pred - midchord:.2f}")
+save(ax, "v6_curvature.png")
+
 # contour + surface grid optimum
 ax = contour_plot(res_ccd, "dna_ng", "lipid_uL")
-save(ax, "v6_contour.png")
+save(ax, "v7_contour.png")
 
 opt = res_ccd.optimum()
 print(f"\noptimum repr: {opt!r}")
@@ -287,17 +373,17 @@ print(
 )
 
 ax = residuals_vs_fitted(res_ccd)
-save(ax, "v7_residuals_vs_fitted.png")
+save(ax, "v9_residuals_vs_fitted.png")
 ax = normal_qq(res_ccd)
-save(ax, "v7_normal_qq.png")
+save(ax, "v9_normal_qq.png")
 ax = predicted_vs_actual(res_ccd)
-save(ax, "v7_predicted_vs_actual.png")
+save(ax, "v9_predicted_vs_actual.png")
 
 
 # --------------------------------------------------------------------------- #
-# Vignette 8: ANOVA and significance (reuses the V6 CCD quadratic fit)
+# Vignette 10: ANOVA and significance (reuses the V6 CCD quadratic fit)
 # --------------------------------------------------------------------------- #
-banner("Vignette 8: ANOVA and significance")
+banner("Vignette 10: ANOVA and significance")
 
 tbl = anova_table(res_ccd, ccd, y_ccd)
 print("anova_table(res_ccd, ccd, y_ccd):")
@@ -310,11 +396,33 @@ for name, eff, t, p, (lo, hi) in zip(
 ):
     print(f"  {name:>16s}: effect={eff:+7.3f}  t={t:+7.2f}  p={p:.4f}  CI=[{lo:+.3f}, {hi:+.3f}]")
 
+# Vignette 10 figure: a coefficient "forest plot" -- each coefficient as a point with its
+# 95% CI as a whisker. An interval that clears the zero line is a significant term made
+# visual; the width is how precisely the effect is pinned down.
+names8 = [n for n in res_ccd.term_names if n != "Intercept"]
+idx8 = [res_ccd.term_names.index(n) for n in names8]
+coef8 = res_ccd.coefficients[idx8]
+ci8 = ci[idx8]
+ypos = np.arange(len(names8))[::-1]
+xerr = np.vstack([coef8 - ci8[:, 0], ci8[:, 1] - coef8])
+fig, ax = plt.subplots(figsize=(7.4, 4.4))
+ax.axvline(0.0, color="crimson", lw=1.3, ls="--", zorder=1)
+ax.errorbar(coef8, ypos, xerr=xerr, fmt="none", ecolor="0.4", elinewidth=1.8,
+            capsize=5, zorder=2)
+ax.scatter(coef8, ypos, s=70, zorder=3,
+           color=["tab:blue" if c >= 0 else "tab:red" for c in coef8],
+           edgecolor="black", linewidths=0.6)
+ax.set_yticks(ypos)
+ax.set_yticklabels(names8)
+ax.set_xlabel("coefficient (coded units), with 95% CI")
+ax.set_title("Every term's interval clears zero → all real, not just big")
+save(ax, "v10_coefficients.png")
+
 
 # --------------------------------------------------------------------------- #
-# Vignette 9: how much model is too much -- adjusted & predicted R^2
+# Vignette 11: how much model is too much -- adjusted & predicted R^2
 # --------------------------------------------------------------------------- #
-banner("Vignette 9: adjusted & predicted R^2")
+banner("Vignette 11: adjusted & predicted R^2")
 
 res_lin = fit_ols(ccd, y_ccd, model="linear")  # same data, flat (no curvature) model
 print("linear (flat) model on the CCD data:")
@@ -328,11 +436,55 @@ print(f"  adjusted R^2  = {adjusted_r2(res_ccd):.4f}")
 print(f"  predicted R^2 = {predicted_r2(res_ccd):.4f}")
 print(f"  PRESS         = {press(res_ccd):.2f}")
 
+# Figure: the three R^2 flavours side by side for the wrong (linear) vs right
+# (quadratic) model. The story is the predicted-R^2 group: the linear bar dives
+# below zero while plain R^2 still looks "passable" -- overfitting made visual.
+metrics = ["R²", "adjusted R²", "predicted R² (Q²)"]
+lin_vals = [res_lin.r_squared, adjusted_r2(res_lin), predicted_r2(res_lin)]
+quad_vals = [res_ccd.r_squared, adjusted_r2(res_ccd), predicted_r2(res_ccd)]
+xpos = np.arange(len(metrics))
+width = 0.38
+fig, ax = plt.subplots(figsize=(7.4, 4.8))
+bars_lin = ax.bar(
+    xpos - width / 2, lin_vals, width, label="linear (flat) model",
+    color="#d1495b", edgecolor="black", linewidth=0.6,
+)
+bars_quad = ax.bar(
+    xpos + width / 2, quad_vals, width, label="quadratic model",
+    color="#2e8b57", edgecolor="black", linewidth=0.6,
+)
+ax.axhline(0.0, color="black", linewidth=1.0)
+for rects in (bars_lin, bars_quad):
+    for rect in rects:
+        h = rect.get_height()
+        ax.annotate(
+            f"{h:.2f}",
+            xy=(rect.get_x() + rect.get_width() / 2, h),
+            xytext=(0, 3 if h >= 0 else -12),
+            textcoords="offset points",
+            ha="center", fontsize=9,
+        )
+# call out the collapse: the only bar below zero
+ax.annotate(
+    "worse than\nguessing the mean",
+    xy=(xpos[2] - width / 2, lin_vals[2]),
+    xytext=(xpos[2] - width / 2 - 0.05, -0.62),
+    ha="center", fontsize=9, color="#d1495b",
+    arrowprops=dict(arrowstyle="->", color="#d1495b", linewidth=1.2),
+)
+ax.set_xticks(xpos)
+ax.set_xticklabels(metrics)
+ax.set_ylabel("goodness-of-fit score")
+ax.set_ylim(-0.85, 1.15)
+ax.set_title("R² flatters; predicted R² exposes overfitting")
+ax.legend(loc="lower left", framealpha=0.95)
+save(ax, "v11_r2_metrics.png")
+
 
 # --------------------------------------------------------------------------- #
-# Vignette 10: Box-Behnken -- a leaner 3-factor response surface
+# Vignette 8: Box-Behnken -- a leaner 3-factor response surface
 # --------------------------------------------------------------------------- #
-banner("Vignette 10: Box-Behnken design")
+banner("Vignette 8: Box-Behnken design")
 
 serum = ContinuousFactor("serum_pct", 2, 10, units="%")
 bb = box_behnken([dna, lipid, serum], center=3)
@@ -358,13 +510,13 @@ for k, (c, e) in res_bb.summary().items():
 print(f"R^2 = {res_bb.r_squared:.4f}, predicted R^2 = {predicted_r2(res_bb):.4f}")
 
 ax = contour_plot(res_bb, "dna_ng", "lipid_uL", fixed={"serum_pct": 10})
-save(ax, "v10_box_behnken_contour.png")
+save(ax, "v8_box_behnken_contour.png")
 
 
 # --------------------------------------------------------------------------- #
-# Vignette 11: optimization -- stationary point, canonical analysis, optimum
+# Vignette 12: optimization -- stationary point, canonical analysis, optimum
 # --------------------------------------------------------------------------- #
-banner("Vignette 11: response-surface optimization")
+banner("Vignette 12: response-surface optimization")
 
 # happy case: the V6 dome has an interior maximum, recovered analytically
 sp = stationary_point(res_ccd)
@@ -394,13 +546,13 @@ print(f"  optimum coded={np.array2string(opt_rep.coded, precision=3)}, "
       f"natural={show_nat(opt_rep.natural)}, at_bound={opt_rep.at_bound}")
 
 ax = surface_plot(res_ccd, "dna_ng", "lipid_uL")
-save(ax, "v11_surface.png")
+save(ax, "v12_surface.png")
 
 
 # --------------------------------------------------------------------------- #
-# Vignette 12: multi-response desirability (Derringer-Suich)
+# Vignette 13: multi-response desirability (Derringer-Suich)
 # --------------------------------------------------------------------------- #
-banner("Vignette 12: multi-response desirability")
+banner("Vignette 13: multi-response desirability")
 
 # a second readout on the same CCD: % viable cells, which falls as DNA rises (toxicity)
 viab_true = 80 - 15 * cc[:, 0] - 2 * cc[:, 1] - 3 * cc[:, 0] ** 2
@@ -436,21 +588,87 @@ print(
     f"GFP for much better viability."
 )
 
+# Vignette 13 figure: the overall desirability D as a surface, with the compromise it
+# strikes (gold star) sitting away from the GFP-only optimum (red X). D combines both
+# readouts, so its peak lands where *both* stay acceptable, not where GFP alone is highest.
+gx12, gy12, z_gfp = surface_grid(res_ccd, "dna_ng", "lipid_uL", resolution=201)
+_, _, z_viab = surface_grid(res_viab, "dna_ng", "lipid_uL", resolution=201)
+d_gfp = np.vectorize(goals[0].desirability)(z_gfp)
+d_viab = np.vectorize(goals[1].desirability)(z_viab)
+d_grid = np.sqrt(np.clip(d_gfp, 0.0, None) * np.clip(d_viab, 0.0, None))
+fig, ax = plt.subplots(figsize=(7.4, 5.4))
+cf = ax.contourf(gx12, gy12, d_grid, levels=np.linspace(0.0, float(d_grid.max()), 13),
+                 cmap="viridis")
+fig.colorbar(cf, ax=ax, label="overall desirability D")
+ax.contour(gx12, gy12, d_grid, levels=8, colors="white", linewidths=0.4, alpha=0.5)
+ax.scatter([des.natural["dna_ng"]], [des.natural["lipid_uL"]], s=260, marker="*",
+           color="gold", edgecolors="black", linewidths=1.2, zorder=6,
+           label=f"desirability optimum (D={des.overall:.2f})")
+ax.scatter([opt_gfp.natural["dna_ng"]], [opt_gfp.natural["lipid_uL"]], s=130, marker="X",
+           color="crimson", edgecolors="white", linewidths=1.2, zorder=6,
+           label="GFP-only optimum")
+ax.set_xlabel("dna_ng")
+ax.set_ylabel("lipid_uL")
+ax.set_title("Desirability balances %GFP+ against viability")
+ax.legend(loc="lower left", fontsize=8)
+save(ax, "v13_desirability.png")
+
 
 # --------------------------------------------------------------------------- #
-# Vignette 13: randomise run order
+# Vignette 14: randomise run order
 # --------------------------------------------------------------------------- #
-banner("Vignette 13: randomise run order")
+banner("Vignette 14: randomise run order")
 
 plate_order = ccd.randomize(seed=42)
 print("plate_order.runs.head():")
 print(plate_order.runs.head())
 
+# Vignette 14 figure: why run order matters. A lurking plate/time drift (grey dashed) runs
+# across the pipetting order. If you run the plate SORTED by DNA, DNA's level marches with
+# that drift and the two are confounded -- the drift masquerades as a DNA effect. Randomising
+# the order decorrelates them, so the drift becomes noise spread across all factors.
+cc_dna = ccd.coded().to_numpy(dtype=float)[:, 0]
+n13 = len(cc_dna)
+order_sorted = np.argsort(cc_dna, kind="stable")
+order_rand = plate_order.runs["std_order"].to_numpy()
+run_idx = np.arange(1, n13 + 1)
+drift = np.linspace(-1.0, 1.0, n13)
+
+
+def _corr(a: np.ndarray, b: np.ndarray) -> float:
+    a = a - a.mean()
+    b = b - b.mean()
+    denom = float(np.sqrt((a * a).sum() * (b * b).sum()))
+    return float((a * b).sum() / denom) if denom else 0.0
+
+
+fig, (axL, axR) = plt.subplots(1, 2, figsize=(11.5, 4.6), sharey=True)
+for ax, order, title in [
+    (axL, order_sorted, "Sorted run order (DNA ascending)"),
+    (axR, order_rand, "Randomised run order (seed=42)"),
+]:
+    dna_lvl = cc_dna[order]
+    r = _corr(run_idx.astype(float), dna_lvl)
+    ax.bar(run_idx, dna_lvl, width=0.62,
+           color=["tab:red" if v > 0 else "tab:blue" if v < 0 else "0.7" for v in dna_lvl],
+           alpha=0.85, zorder=2, label="DNA coded level")
+    ax.plot(run_idx, drift, color="0.35", lw=2, ls="--", zorder=3, label="plate/time drift")
+    ax.axhline(0.0, color="black", lw=0.8, zorder=1)
+    ax.set_xlabel("pipetting order (run #)")
+    ax.set_ylim(-1.25, 1.25)
+    ax.set_title(f"{title}\ncorr(drift, DNA) = {r:+.2f}", fontsize=10)
+axL.set_ylabel("coded level / normalised drift")
+axL.legend(loc="lower right", fontsize=8)
+r_sorted = _corr(run_idx.astype(float), cc_dna[order_sorted])
+r_rand = _corr(run_idx.astype(float), cc_dna[order_rand])
+print(f"\nconfounding with a linear drift: corr sorted={r_sorted:+.2f}, randomised={r_rand:+.2f}")
+save(axL, "v14_randomization.png")
+
 
 # --------------------------------------------------------------------------- #
-# Vignette 14: interactive HTML view of the design
+# Vignette 15: interactive HTML view of the design
 # --------------------------------------------------------------------------- #
-banner("Vignette 14: interactive HTML view of the design")
+banner("Vignette 15: interactive HTML view of the design")
 
 DOCS = pathlib.Path(__file__).resolve().parent.parent / "docs"
 # the randomised CCD doubles as a bench run sheet: 'run' is the pipetting order and
@@ -461,9 +679,9 @@ print(f"wrote docs/example_design.html ({len(html)} bytes)")
 
 
 # --------------------------------------------------------------------------- #
-# Vignette 15: alias-structure heatmap (correlation_heatmap)
+# Vignette 16: alias-structure heatmap (correlation_heatmap)
 # --------------------------------------------------------------------------- #
-banner("Vignette 15: alias-structure heatmap")
+banner("Vignette 16: alias-structure heatmap")
 
 # a 2^(4-1) fraction with short factor names so the term labels match the generator
 demo = fractional_factorial(
@@ -477,13 +695,13 @@ for left, right in [("A:B", "C:D"), ("A:C", "B:D"), ("A:D", "B:C")]:
     print(f"  {left} = {right}: r = {alias15[idx15[left], idx15[right]]:+.0f}")
 
 ax = correlation_heatmap(demo, interactions=True)
-save(ax, "v15_alias.png")
+save(ax, "v16_alias.png")
 
 
 # --------------------------------------------------------------------------- #
-# Vignette 16: design diagnostics before running the plate
+# Vignette 17: design diagnostics before running the plate
 # --------------------------------------------------------------------------- #
-banner("Vignette 16: design diagnostics")
+banner("Vignette 17: design diagnostics")
 
 diag = efficiency(ccd, order=2, interactions=True)
 print("efficiency(ccd, order=2, interactions=True):")
@@ -497,13 +715,13 @@ for name, value in vif(res_ccd.model_matrix, term_names=res_ccd.term_names).item
     print(f"  {name:>16s}: {value:.2f}")
 
 ax = leverage_plot(res_ccd)
-save(ax, "v16_leverage.png")
+save(ax, "v17_leverage.png")
 
 
 # --------------------------------------------------------------------------- #
-# Vignette 17: computer-generated optimal designs
+# Vignette 18: computer-generated optimal designs
 # --------------------------------------------------------------------------- #
-banner("Vignette 17: optimal and augmented designs")
+banner("Vignette 18: optimal and augmented designs")
 
 region = candidate_grid([dna, lipid], levels=5)
 d_design = d_optimal(
@@ -554,7 +772,7 @@ ax.set_xlabel("dna_ng")
 ax.set_ylabel("lipid_uL")
 ax.set_title("Candidate grid with D- and I-optimal 8-run choices")
 ax.legend(loc="best")
-save(ax, "v17_optimal_designs.png")
+save(ax, "v18_optimal_designs.png")
 
 augmented = augment(full_factorial([dna, lipid]), n_runs=4, model="quadratic", seed=2)
 print("\naugment(full_factorial([dna, lipid]), n_runs=4):")
@@ -568,9 +786,9 @@ print(mixed.runs)
 
 
 # --------------------------------------------------------------------------- #
-# Vignette 18: space-filling designs (LHS, Sobol', Halton) + coverage metrics
+# Vignette 19: space-filling designs (LHS, Sobol', Halton) + coverage metrics
 # --------------------------------------------------------------------------- #
-banner("Vignette 18: space-filling designs")
+banner("Vignette 19: space-filling designs")
 
 
 def design_from_coded(coded: np.ndarray, factors: list[ContinuousFactor]) -> Design:
@@ -608,7 +826,7 @@ for ax, (title, d) in zip(axes.ravel(), panels, strict=True):
     ax.set_ylabel("lipid_uL")
     ax.set_xlim(90, 510)
     ax.set_ylim(0.45, 2.55)
-save(axes[0, 0], "v18_spacefilling_compare.png")
+save(axes[0, 0], "v19_spacefilling_compare.png")
 
 print("coverage of the four 16-run designs over [dna_ng, lipid_uL]:")
 for label, d in panels:
@@ -644,7 +862,7 @@ ax.set_ylim(0.5, 2.5)
 ax.set_xlabel("dna_ng")
 ax.set_ylabel("lipid_uL")
 ax.set_title("Latin hypercube: exactly one point per stratum, on every axis (n = 8)")
-save(ax, "v18_lhs_stratification.png")
+save(ax, "v19_lhs_stratification.png")
 
 # sobol' rejects non-power-of-two run counts
 try:
@@ -689,6 +907,6 @@ ax.set_title("Coverage improves faster for low-discrepancy sequences (3 factors)
 ax.set_xticks(ns)
 ax.set_xticklabels([str(nn) for nn in ns])
 ax.legend()
-save(ax, "v18_discrepancy_convergence.png")
+save(ax, "v19_discrepancy_convergence.png")
 
 print("\nDONE")

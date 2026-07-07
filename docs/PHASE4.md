@@ -326,8 +326,22 @@ Test-first throughout; each step keeps pytest + ruff + mypy green.
 
 ## 7. After Phase 4 (Phase 5 preview)
 
-With Phase 4 done, every generator family in `PLAN.md` §2 is covered except
-**classical/blocking**: randomized complete block designs, Latin squares, blocked factorials
-(assigning fractions to blocks via defining contrasts), and richer run-order utilities.
+With Phase 4 done, the natural Phase 5 pool is **screening & restricted randomization** —
+the mainstream families `PLAN.md` §2 gestures at but has not yet planned in detail:
+
+- **Definitive screening designs (DSD)** — Jones–Nachtsheim (2011) conference-matrix designs
+  that screen main effects *and* detect curvature / two-factor interactions in `2k + 1` runs,
+  collapsing the classic full-factorial → CCD two-stage screen. A generator-only addition:
+  the existing coded model matrix + OLS/RSM analysis consume DSD designs unchanged, so it is
+  low-risk and high-demand for general screening.
+- **Split-plot / hard-to-change factors** — restricted randomization for factors that cannot
+  be reset every run (the industrial norm, e.g. oven temperature). Unlike the generators above
+  this reaches into the analysis layer: `Design` needs whole-plot / sub-plot structure, and the
+  fit path needs GLS/REML (two error strata) rather than plain OLS — the first analysis-layer
+  extension since the Scheffé no-intercept path.
+- **Classical / blocking** — randomized complete block designs, Latin squares, blocked
+  factorials (fractions assigned to blocks via defining contrasts), and richer run-order
+  utilities.
+
 That — plus the deferred items above (combined mixture-process designs, simplex-constrained
-optimization, pseudo-components) — is the natural Phase 5 pool.
+optimization, pseudo-components) — is the Phase 5 pool.

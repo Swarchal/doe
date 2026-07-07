@@ -111,6 +111,15 @@ and an `[optional]` group for plotting/statsmodels.
    (space-filling: `latin_hypercube`/`sobol`/`halton` + `discrepancy`/`maximin_distance`) is
    *done*; **Phase 4b** (mixture designs) is *not yet started*. See [`PHASE4.md`](PHASE4.md) for
    the detailed build plan.
+5. **Phase 5 — Screening & restricted randomization** *(not yet started)*:
+   - **Definitive screening designs (DSD)** — Jones–Nachtsheim conference-matrix designs that
+     screen main effects and detect curvature/2FIs in few runs, avoiding the full-factorial →
+     CCD two-stage flow. Reuses the existing OLS/RSM analysis machinery unchanged.
+   - **Split-plot / hard-to-change factors** — restricted randomization for factors that cannot
+     be reset every run (the industrial norm). Touches the analysis layer, not just generation:
+     needs a whole-plot/sub-plot structure on `Design` and a GLS/REML fit path rather than OLS.
+   - **Classical / blocking** — randomized complete block, Latin square, blocked factorials
+     (fractions assigned to blocks via defining contrasts), richer run-order utilities.
 
 A good correctness anchor throughout: reproduce canonical designs from Montgomery's *Design and
 Analysis of Experiments* in tests, so generated designs are verified against published references.

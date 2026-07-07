@@ -22,12 +22,31 @@ reporter readout). The factors are things you actually pipette and set on an inc
 >
 > Every console output and figure below is real: it is produced by running the snippets
 > via `scripts/build_vignette_assets.py`, which writes the figures to `docs/img/`. The
-> readouts in Vignettes 5–12 use a synthetic-but-realistic dome surface so the examples are
+> readouts in Vignettes 6–13 use a synthetic-but-realistic dome surface so the examples are
 > fully reproducible; swap in your own plate data and the same calls apply.
+
+**The road ahead.** The nineteen vignettes are grouped into seven short parts that follow the
+arc of a real study — screen, model, trust, decide, run — so you can read straight through as a
+course or jump to the part that answers your question:
+
+- **Part I — Foundations.** Why vary factors together, and how to read a fitted effect.
+- **Part II — Screening.** Many suspect factors, few wells: cheaply find the ones that matter.
+- **Part III — Response surfaces.** Map a curved readout, and lay out runs that can capture the curvature.
+- **Part IV — Trusting the model.** Before you act on a fitted surface, confirm it is not lying to you.
+- **Part V — Locating & balancing the optimum.** Pin the best settings down exactly, and reconcile readouts that conflict.
+- **Part VI — Running the experiment.** Randomise the order and export a run sheet so the plate can't fool you.
+- **Part VII — Evaluating & generating designs.** Judge a design before you run it — and build a custom one when the named recipes don't fit.
+
+The "Where to go next" table at the very end maps common tasks straight to the right tool and
+the part that covers it.
 
 ---
 
-## Vignette 1 — Why not change one thing at a time?
+## Part I — Foundations: reading a designed experiment
+
+*Why design experiments at all, and how to read what one tells you.*
+
+### Vignette 1 — Why not change one thing at a time?
 
 **Concept: OFAT vs. factorial.** The instinct at the bench is _one factor at a time_
 (OFAT): fix everything, titrate DNA, pick the best, then fix DNA and titrate lipid. It
@@ -62,12 +81,31 @@ Four wells (plus replicates) buy you both main effects **and** their interaction
 same four numbers under OFAT would give you main effects only, and only along the edges
 you happened to walk.
 
+**The figure: watching OFAT stall.** The picture below makes the first failure mode
+concrete. Both panels show the _same_ underlying %GFP+ landscape — a surface with a strong
+DNA×lipid interaction, so its best region runs as a **diagonal ridge** climbing toward high
+DNA _and_ high lipid together (the brightest corner, top-right). On the left, OFAT starts at
+low DNA / low lipid, titrates DNA with lipid held low (the horizontal arrow along the bottom
+edge), picks the best DNA, then fixes it and titrates lipid (the vertical arrow). Because it
+only ever moves along one axis at a time — and the first leg was run at the _wrong_ lipid
+level — it climbs the side of the ridge and **stops at ~51% GFP+**, circled in red, nowhere
+near the peak. On the right, the four factorial corners _straddle_ the ridge; the top-right
+corner alone already reads **~70%**, and fitting all four reveals the "push both up together"
+direction OFAT never sees.
+
+![Left: an OFAT path (titrate DNA along the bottom edge, then lipid) stalling at ~51% GFP+ partway up a diagonal ridge. Right: the four factorial corners spanning the same surface, with the high-DNA/high-lipid corner reaching ~70%.](img/v1_ofat_vs_factorial.png)
+
+The gap between ~51% and ~70% is not noise or bad luck — it is a structural consequence of
+the interaction. Whenever the best level of one factor depends on another, an axis-by-axis
+walk can only find a point that is optimal _along each axis in turn_, which is generally not
+the global optimum. The factorial grid escapes the trap by refusing to hold anything constant.
+
 **Takeaway.** Factorial designs are not just "more conditions" — they are a _geometry_
 that makes each well do double duty. Everything else in this guide builds on that grid.
 
 ---
 
-## Vignette 2 — Coded units and main effects
+### Vignette 2 — Coded units and main effects
 
 **Concept: coding, and reading a main effect.** Suppose you ran the 2×2 above in
 triplicate and measured % GFP-positive cells. Fit a linear model and look at the effects.
@@ -132,7 +170,7 @@ effects you read in the table are twice these.)
 
 ---
 
-## Vignette 3 — The thing OFAT misses: interactions
+### Vignette 3 — The thing OFAT misses: interactions
 
 **Concept: interaction effects.** Look again at the GFP numbers. Going from low to high
 lipid adds ~+9 points _at low DNA_ (22→31) but ~+20 points _at high DNA_ (40→60). The
@@ -194,7 +232,11 @@ call.
 
 ---
 
-## Vignette 4 — Screening: which of _many_ factors matter?
+## Part II — Screening: finding the factors that matter
+
+*Many candidate factors, few wells: cheaply isolate the vital few.*
+
+### Vignette 4 — Screening: which of _many_ factors matter?
 
 **Concept: fractional factorials.** Early in assay development you often have a long list of
 suspects: seeding density, serum %, DMSO %, compound concentration, incubation time,
@@ -292,7 +334,7 @@ study.
 
 ---
 
-## Vignette 4b — Plackett–Burman: the leanest screen
+### Vignette 5 — Plackett–Burman: the leanest screen
 
 **Concept: saturated main-effect screening.** A half-fraction got 4 factors into 8 runs.
 But what if the suspect list is _long_ — eleven candidate factors, and you can only afford a
@@ -333,7 +375,7 @@ orthogonality is what lets you estimate all eleven main effects independently fr
 wells.
 
 The catch is the right panel — the **alias-structure heatmap** (`correlation_heatmap`, the
-general design-diagnostic tool introduced in Vignette 15). It shows the correlation between every
+general design-diagnostic tool introduced in Vignette 16). It shows the correlation between every
 pair of model terms: the eleven main effects are mutually orthogonal (the off-diagonal `0`s among
 them), but each two-factor interaction is _partially_ aliased (correlation `0` or exactly `±1/3`)
 with **many** main effects, not cleanly confounded with one. This "complex aliasing" is the price
@@ -341,7 +383,7 @@ of the lean run count, and it is the visual signature that distinguishes PB from
 (whose interactions would be either fully aliased, `±1`, or not at all, `0`). With 66 terms the
 numbers are too dense to read — the _pattern_ is the message.
 
-![Left: the 12×11 Plackett–Burman design matrix as a balanced red/blue ±1 grid. Right: the alias-structure heatmap over all 66 terms — mains mutually orthogonal, each leaking |r| = 1/3 into many two-factor interactions.](img/v4b_plackett_burman.png)
+![Left: the 12×11 Plackett–Burman design matrix as a balanced red/blue ±1 grid. Right: the alias-structure heatmap over all 66 terms — mains mutually orthogonal, each leaking |r| = 1/3 into many two-factor interactions.](img/v5_plackett_burman.png)
 
 Because of that aliasing, you fit **main effects only** — asking for interactions on twelve
 runs over-parameterises the model and smears the real effects across their aliases. With a
@@ -374,7 +416,7 @@ for name, (coef, eff) in sorted(result.summary().items(), key=lambda kv: -abs(kv
 
 Three factors (`compound_uM`, `dna_ng`, `serum_pct`) stand an order of magnitude above a
 floor of near-zero terms — the eight inert factors. Eleven suspects narrowed to three in
-twelve wells. Take those three into a response-surface study (Vignettes 5–6); the partial
+twelve wells. Take those three into a response-surface study (Vignettes 6–7); the partial
 aliasing means a PB hit is a candidate worth confirming, not yet a quantified effect.
 
 > **PB vs. fractional factorial.** Reach for Plackett–Burman when you have many factors, you
@@ -386,7 +428,11 @@ aliasing means a PB hit is a candidate worth confirming, not yet a quantified ef
 
 ---
 
-## Vignette 5 — Replication, center points, and "is it just curved?"
+## Part III — Response surfaces: designing for a curved landscape
+
+*Once a factor matters, map its curved response — and lay out runs that can capture the curvature.*
+
+### Vignette 6 — Replication, center points, and "is it just curved?"
 
 **Concept: center points and pure error.** Two-level designs only ever sample the _corners_,
 so they can fit a _plane_ (mains + interactions) but can't see **curvature** — the very
@@ -418,7 +464,7 @@ lipid = ContinuousFactor("lipid_uL", 0.5, 2.5)
 design = central_composite([dna, lipid], center=4)
 print(design.n_runs, design.n_center)   # 12 4
 
-# measured % GFP+, one value per run (this is the same readout used in Vignette 6).
+# measured % GFP+, one value per run (this is the same readout used in Vignette 7).
 # Runs 8-11 are the four center-point replicates: 60.0, 59.1, 60.9, 60.8 -- nearly
 # identical, and their spread *is* the pure-error estimate.
 y = np.array([30.3, 37.0, 46.8, 66.9, 38.0, 60.7,
@@ -432,13 +478,33 @@ A p-value of **0.36** is comfortably large: the model's misses are no bigger tha
 well-to-well noise the center replicates revealed, so the quadratic surface is adequate. A
 small p here (say < 0.05) would have been the cue that real structure is escaping the model.
 
+**The figure: what curvature looks like, and why corners miss it.** The plot below is a
+one-dimensional slice through the fitted surface along the DNA axis (lipid held at its
+center). It shows exactly what a two-level design can and cannot see. The two blue points are
+the **corner runs** at coded `−1` and `+1`; a design that samples _only_ corners has no
+choice but to connect them with a **straight line** (the grey dashed chord) — a first-order
+model is, by construction, flat between its endpoints. The orange diamond is the **center
+point** at coded `0`. If the true response were linear, it would land _on_ the chord. Instead
+it sits **~9.8 points above** it (the red arrow): the readout at the middle setting is higher
+than the average of the two ends, which can only happen if the surface bows.
+
+![A slice of predicted %GFP+ versus DNA at center lipid: two corner runs at ±1 joined by a straight chord, with the center point at 0 sitting ~9.8 points above the chord and the fitted quadratic curving through all three.](img/v6_curvature.png)
+
+That vertical gap _is_ the curvature, and it is precisely the signal the lack-of-fit test
+turns into a p-value: it measures how far the center-point average departs from what the
+corners predict, scaled against pure error. A corners-only design would have drawn the dashed
+line straight through and reported the middle as ~50% GFP+; the center replicates catch the
+readout actually sitting near 60% and say "there's a dome here — fit the curve." (The size of
+the gap, ~9.8, is essentially the magnitude of the `dna_ng²` coefficient from the Vignette 7
+fit; negative curvature of that size is what bends the chord down into the interior.)
+
 **Rule of thumb.** Always salt a design with a few center-point replicates. They cost a
 handful of wells and buy you both an honest noise estimate and an early warning that you
 need a curved model.
 
 ---
 
-## Vignette 6 — Response surfaces: finding the optimum, not just the direction
+### Vignette 7 — Response surfaces: finding the optimum, not just the direction
 
 **Concept: response-surface methodology (RSM).** Screening tells you _which_ factors matter
 and _which direction_ helps. To actually **locate an optimum** — the DNA:lipid ratio that
@@ -493,7 +559,7 @@ from doe.plotting import contour_plot
 ax = contour_plot(result, "dna_ng", "lipid_uL")
 ```
 
-![Contour plot of fitted % GFP+ over dna_ng and lipid_uL, with a bright optimum toward high DNA and high lipid](img/v6_contour.png)
+![Contour plot of fitted % GFP+ over dna_ng and lipid_uL, with a bright optimum toward high DNA and high lipid](img/v7_contour.png)
 
 Read it like a topographic map: the bright yellow island in the upper right (high DNA, high
 lipid) is the predicted optimum, and the contour rings nest around it. The bands are not
@@ -535,190 +601,9 @@ surface _at_ 10% serum; change the fixed value to see how the landscape shifts.
 
 ---
 
-## Vignette 7 — Trusting the model: diagnostics before decisions
+### Vignette 8 — A leaner surface: Box-Behnken designs
 
-**Concept: residual diagnostics.** A model can have a beautiful R² and still be lying to
-you — a missed curvature, a single toxic outlier well, or variance that grows with signal.
-Before you commit reagents to the "optimum," check the **residuals** (observed − fitted).
-Two quick plots catch most problems.
-
-**Residuals vs. fitted.** `residuals_vs_fitted(result)` scatters each residual against its
-fitted value, with a line at zero. You want a **structureless cloud** centred on zero. What
-the patterns mean at the bench:
-
-- A **funnel** (residuals fan out as fitted values grow) → variance scales with signal;
-  consider a log transform of the readout (common for luminescence/fluorescence).
-- A **U or arch** → systematic curvature the model missed; add quadratic terms (Vignette 6).
-- **One point far out** → a suspect well (edge effect, a bubble, a pipetting slip). Check the
-  plate map before trusting or discarding it.
-
-```python
-from doe.plotting import residuals_vs_fitted
-ax = residuals_vs_fitted(result)   # uses the Vignette 6 quadratic fit
-```
-
-![Residuals vs fitted: a structureless band of points scattered around the zero line](img/v7_residuals_vs_fitted.png)
-
-This is what "healthy" looks like: residuals scatter in a roughly even band around zero
-across the whole fitted range (~30 to ~67% GFP+), with no funnel and no arch. The points
-bunched near a fitted value of ~60 are the four center replicates — their tight vertical
-spread is the pure-error noise the lack-of-fit test in Vignette 5 leaned on. Nothing here
-argues for a transform or extra terms.
-
-**Normal Q-Q.** `normal_qq(result)` plots the ordered residuals against normal quantiles.
-If the noise is roughly Gaussian (the assumption behind the p-values and confidence
-intervals), the points hug the diagonal. Heavy tails or a strong S-curve mean the
-significance calls are on shaky ground.
-
-```python
-from doe.plotting import normal_qq
-ax = normal_qq(result)
-```
-
-![Normal Q-Q plot: residuals fall close to the diagonal reference line](img/v7_normal_qq.png)
-
-The points track the red reference line closely, with only mild wander at the tails (normal
-for a 12-run design) — no strong S-curve, no points flung far off the line. The Gaussian-noise
-assumption behind the p-values and confidence intervals holds, so the significance calls from
-the fit can be trusted.
-
-**Predicted vs. actual.** `predicted_vs_actual(result)` scatters each predicted value against
-the value you actually measured, with a 45° reference line. It is the most direct "does the
-model agree with the wells?" check: points hugging the line mean the model reproduces the data,
-while systematic departures — a single run flung off the line, or a banana-shaped bend through
-the cloud — flag a suspect well or a missing term. The title carries R², the same goodness-of-fit
-number made visual.
-
-```python
-from doe.plotting import predicted_vs_actual
-ax = predicted_vs_actual(res_ccd)   # the Vignette 6 quadratic fit
-```
-
-![Predicted vs actual: points lie tight against the 45-degree line across the 30-67% GFP+ range, R² = 0.997](img/v7_predicted_vs_actual.png)
-
-Every point sits tight against the diagonal across the whole 30 → 67% GFP+ range — the visual
-face of the R² ≈ 0.997 from Vignette 6. No run strays from the line (no suspect well), and there
-is no curvature in the cloud that would betray a term the model is missing. The little knot near
-60% is the four center replicates again, predicted almost identically. Read alongside the two
-residual plots, this is a model you can act on.
-
-**Takeaway.** Diagnostics are cheap insurance. A few plots stand between a tidy summary table
-and a wasted confirmation experiment.
-
----
-
-## Vignette 8 — Big vs. real: ANOVA and significance
-
-**Concept: significance testing.** Every vignette so far has ranked terms by the _size_ of
-their effect. But size alone can mislead: a large effect estimated from noisy wells may be a
-fluke, while a modest one measured cleanly may be rock-solid. To separate "big" from
-"trustworthy" you need the **standard error** of each estimate — and that needs spare runs.
-A design with more runs than model terms has **residual degrees of freedom**, and those let
-you compute p-values and confidence intervals. (This is exactly what the unreplicated,
-aliased screen in Vignette 4 lacked: it could rank effect _sizes_, never test them. The CCD
-from Vignettes 5–6 has 12 runs for a 6-term model, leaving 6 residual degrees of freedom —
-enough to do statistics.)
-
-The **ANOVA table** partitions the total variation in the readout into a piece for each term
-plus a leftover **residual**. Each term's mean square is compared (an **F-ratio**) against
-the residual: a large F — and the small p-value that goes with it — means that term explains
-far more variation than noise alone would.
-
-```python
-from doe.analysis import anova_table
-
-# res_ccd is the quadratic fit from Vignette 6
-tbl = anova_table(res_ccd, design, y)
-print(tbl)
-#                    SS  df     MS      F          p
-# dna_ng          795.8   1  795.8  880.4  9.716e-08
-# lipid_uL        272.0   1  272.0  301.0  2.351e-06
-# dna_ng:lipid_uL  44.9   1   44.9   49.7  4.083e-04
-# dna_ng^2        395.6   1  395.6  437.7  7.769e-07
-# lipid_uL^2       72.1   1   72.1   79.8  1.099e-04
-# Residual          5.4   6    0.9    NaN        NaN
-# Total          1586.0  11    NaN    NaN        NaN
-```
-
-Every term clears significance comfortably (all p < 0.001): the two main effects, the
-interaction, _and_ both quadratic terms are real, not artefacts. Note how small the
-`Residual` SS (5.4) is next to the term SS — the model captures almost all the variation, the
-numerical echo of the R² ≈ 0.997 from Vignette 6.
-
-The companion view is a **confidence interval** on each coefficient. `res_ccd.conf_int(0.95)`
-returns a two-sided interval per term; an interval that excludes zero is the same verdict as
-"p < 0.05," but it also tells you _how precisely_ the effect is pinned down.
-
-```python
-ci = res_ccd.conf_int(0.95)   # (n_terms, 2): [low, high] per coefficient
-# coefficient (not effect) and its 95% CI:
-#   dna_ng         : 11.52   CI [10.57, 12.47]
-#   lipid_uL       :  6.73   CI [ 5.78,  7.68]
-#   dna_ng:lipid_uL:  3.35   CI [ 2.19,  4.51]
-#   dna_ng^2       : -9.75   CI [-11.18, -8.33]
-#   lipid_uL^2     : -5.20   CI [-6.63, -3.78]
-```
-
-None of these intervals straddle zero, so every term earns its place. The negative quadratic
-intervals (both entirely below zero) are the statistical confirmation of the dome from
-Vignette 6: the downward curvature that gives the surface a peak is not an accident of the
-fit.
-
-**Takeaway.** Rank by effect size to _find_ candidates; test with ANOVA / confidence intervals
-to _keep_ them. The price of admission is spare runs — design in a few more than your model
-has terms, and significance testing comes for free.
-
----
-
-## Vignette 9 — How much model is too much? Adjusted and predicted R²
-
-**Concept: overfitting and model parsimony.** Plain **R²** has a fatal flaw for choosing
-between models: it _never goes down_ when you add a term. Throw in enough interactions and
-powers and R² marches toward 1.0 — even if the extra terms are fitting noise. Two corrected
-versions keep you honest:
-
-- **Adjusted R²** penalises each added term, so it only rises when a new term explains more
-  than a random one would. It rewards _parsimony_.
-- **Predicted R²** (also called **Q²**) is the real test of _generalisation_. It is built from
-  the **PRESS** statistic: refit the model leaving out each run in turn, predict that
-  held-out run, and accumulate the errors. A model that merely memorised its own data — rather
-  than learning the surface — predicts left-out points badly, and predicted R² collapses (it
-  can even go _negative_, meaning "worse than guessing the mean").
-
-The cleanest demonstration is to fit the _wrong_ model to the Vignette 6 dome data — a flat
-(linear) model that ignores curvature — and compare it to the right (quadratic) one:
-
-```python
-from doe.analysis import adjusted_r2, predicted_r2, press
-
-res_lin  = fit_ols(design, y, model="linear")     # flat: no squared terms
-res_quad = fit_ols(design, y, model="quadratic")  # the Vignette 6 fit
-
-#               R²      adj R²    pred R²    PRESS
-# linear      0.7017    0.5898    -0.3591   2155.3
-# quadratic   0.9966    0.9937     0.9835     26.2
-```
-
-Read across the rows. The flat model's R² of 0.70 looks passable — but its **predicted R² is
-_negative_** (−0.36): asked to predict a well it hadn't seen, it does worse than just guessing
-the average. That is the signature of a model fighting curvature it has no terms for. The
-quadratic model, by contrast, holds up under cross-validation (predicted R² ≈ 0.98), and its
-PRESS is ~80× smaller — it genuinely _learned the dome_ rather than papering over it.
-
-A healthy fit shows all three R² values **close together and high**. A large gap between R²
-and predicted R² is the warning that you have over-fit: the model is describing this particular
-plate's noise, not the underlying biology, and its "optimum" may not reproduce.
-
-**Takeaway.** Never select a model on R² alone — it is the metric that can only flatter you.
-Let adjusted R² guard against needless terms and predicted R² (Q²) prove the model can predict
-wells it has not seen. Together they are the difference between a model that _fits_ and a model
-you can _act on_.
-
----
-
-## Vignette 10 — A leaner surface: Box-Behnken designs
-
-**Concept: an alternative response-surface design.** The CCD in Vignette 6 finds an optimum
+**Concept: an alternative response-surface design.** The CCD in Vignette 7 finds an optimum
 beautifully, but it has two awkward features. Its rotatable/circumscribed form places **axial
 points outside the box** (you'd have to pipette beyond your stated limits), and even the faced
 version runs the **extreme corners** — every factor at its high simultaneously. With three or
@@ -780,14 +665,14 @@ print(f"R^2 = {result.r_squared:.4f}")   # R^2 = 0.9982
 All three factors help, all three quadratics are negative (a dome in 3-D), and serum's two
 interactions are negligible — serum acts independently here. With a third factor the surface
 lives in 3-D, so to _see_ it you fix one factor and slice the other two (as introduced at the
-end of Vignette 6):
+end of Vignette 7):
 
 ```python
 from doe.plotting import contour_plot
 ax = contour_plot(result, "dna_ng", "lipid_uL", fixed={"serum_pct": 10})
 ```
 
-![Box-Behnken contour of fitted % GFP+ over dna_ng and lipid_uL at 10% serum, optimum toward high DNA and high lipid](img/v10_box_behnken_contour.png)
+![Box-Behnken contour of fitted % GFP+ over dna_ng and lipid_uL at 10% serum, optimum toward high DNA and high lipid](img/v8_box_behnken_contour.png)
 
 This is the DNA×lipid landscape _at 10% serum_; change `fixed` to slice at a different serum
 level and watch the whole surface lift or drop with serum's main effect.
@@ -799,9 +684,228 @@ the box with fewer runs. For three factors BBD is the economical, safe-by-constr
 
 ---
 
-## Vignette 11 — From contour to coordinates: the optimum, exactly
+## Part IV — Trusting the model
 
-**Concept: analytic optimisation of the fitted surface.** In Vignette 6 we _read_ the optimum
+*Before you act on a fitted surface, check that it is not lying to you.*
+
+### Vignette 9 — Trusting the model: diagnostics before decisions
+
+**Concept: residual diagnostics.** A model can have a beautiful R² and still be lying to
+you — a missed curvature, a single toxic outlier well, or variance that grows with signal.
+Before you commit reagents to the "optimum," check the **residuals** (observed − fitted).
+Two quick plots catch most problems.
+
+**Residuals vs. fitted.** `residuals_vs_fitted(result)` scatters each residual against its
+fitted value, with a line at zero. You want a **structureless cloud** centred on zero. What
+the patterns mean at the bench:
+
+- A **funnel** (residuals fan out as fitted values grow) → variance scales with signal;
+  consider a log transform of the readout (common for luminescence/fluorescence).
+- A **U or arch** → systematic curvature the model missed; add quadratic terms (Vignette 7).
+- **One point far out** → a suspect well (edge effect, a bubble, a pipetting slip). Check the
+  plate map before trusting or discarding it.
+
+```python
+from doe.plotting import residuals_vs_fitted
+ax = residuals_vs_fitted(result)   # uses the Vignette 7 quadratic fit
+```
+
+![Residuals vs fitted: a structureless band of points scattered around the zero line](img/v9_residuals_vs_fitted.png)
+
+This is what "healthy" looks like: residuals scatter in a roughly even band around zero
+across the whole fitted range (~30 to ~67% GFP+), with no funnel and no arch. The points
+bunched near a fitted value of ~60 are the four center replicates — their tight vertical
+spread is the pure-error noise the lack-of-fit test in Vignette 6 leaned on. Nothing here
+argues for a transform or extra terms.
+
+**Normal Q-Q.** `normal_qq(result)` plots the ordered residuals against normal quantiles.
+If the noise is roughly Gaussian (the assumption behind the p-values and confidence
+intervals), the points hug the diagonal. Heavy tails or a strong S-curve mean the
+significance calls are on shaky ground.
+
+```python
+from doe.plotting import normal_qq
+ax = normal_qq(result)
+```
+
+![Normal Q-Q plot: residuals fall close to the diagonal reference line](img/v9_normal_qq.png)
+
+The points track the red reference line closely, with only mild wander at the tails (normal
+for a 12-run design) — no strong S-curve, no points flung far off the line. The Gaussian-noise
+assumption behind the p-values and confidence intervals holds, so the significance calls from
+the fit can be trusted.
+
+**Predicted vs. actual.** `predicted_vs_actual(result)` scatters each predicted value against
+the value you actually measured, with a 45° reference line. It is the most direct "does the
+model agree with the wells?" check: points hugging the line mean the model reproduces the data,
+while systematic departures — a single run flung off the line, or a banana-shaped bend through
+the cloud — flag a suspect well or a missing term. The title carries R², the same goodness-of-fit
+number made visual.
+
+```python
+from doe.plotting import predicted_vs_actual
+ax = predicted_vs_actual(res_ccd)   # the Vignette 7 quadratic fit
+```
+
+![Predicted vs actual: points lie tight against the 45-degree line across the 30-67% GFP+ range, R² = 0.997](img/v9_predicted_vs_actual.png)
+
+Every point sits tight against the diagonal across the whole 30 → 67% GFP+ range — the visual
+face of the R² ≈ 0.997 from Vignette 7. No run strays from the line (no suspect well), and there
+is no curvature in the cloud that would betray a term the model is missing. The little knot near
+60% is the four center replicates again, predicted almost identically. Read alongside the two
+residual plots, this is a model you can act on.
+
+**Takeaway.** Diagnostics are cheap insurance. A few plots stand between a tidy summary table
+and a wasted confirmation experiment.
+
+---
+
+### Vignette 10 — Big vs. real: ANOVA and significance
+
+**Concept: significance testing.** Every vignette so far has ranked terms by the _size_ of
+their effect. But size alone can mislead: a large effect estimated from noisy wells may be a
+fluke, while a modest one measured cleanly may be rock-solid. To separate "big" from
+"trustworthy" you need the **standard error** of each estimate — and that needs spare runs.
+A design with more runs than model terms has **residual degrees of freedom**, and those let
+you compute p-values and confidence intervals. (This is exactly what the unreplicated,
+aliased screen in Vignette 4 lacked: it could rank effect _sizes_, never test them. The CCD
+from Vignettes 6–7 has 12 runs for a 6-term model, leaving 6 residual degrees of freedom —
+enough to do statistics.)
+
+The **ANOVA table** partitions the total variation in the readout into a piece for each term
+plus a leftover **residual**. Each term's mean square is compared (an **F-ratio**) against
+the residual: a large F — and the small p-value that goes with it — means that term explains
+far more variation than noise alone would.
+
+```python
+from doe.analysis import anova_table
+
+# res_ccd is the quadratic fit from Vignette 7
+tbl = anova_table(res_ccd, design, y)
+print(tbl)
+#                    SS  df     MS      F          p
+# dna_ng          795.8   1  795.8  880.4  9.716e-08
+# lipid_uL        272.0   1  272.0  301.0  2.351e-06
+# dna_ng:lipid_uL  44.9   1   44.9   49.7  4.083e-04
+# dna_ng^2        395.6   1  395.6  437.7  7.769e-07
+# lipid_uL^2       72.1   1   72.1   79.8  1.099e-04
+# Residual          5.4   6    0.9    NaN        NaN
+# Total          1586.0  11    NaN    NaN        NaN
+```
+
+Every term clears significance comfortably (all p < 0.001): the two main effects, the
+interaction, _and_ both quadratic terms are real, not artefacts. Note how small the
+`Residual` SS (5.4) is next to the term SS — the model captures almost all the variation, the
+numerical echo of the R² ≈ 0.997 from Vignette 7.
+
+The companion view is a **confidence interval** on each coefficient. `res_ccd.conf_int(0.95)`
+returns a two-sided interval per term; an interval that excludes zero is the same verdict as
+"p < 0.05," but it also tells you _how precisely_ the effect is pinned down.
+
+```python
+ci = res_ccd.conf_int(0.95)   # (n_terms, 2): [low, high] per coefficient
+# coefficient (not effect) and its 95% CI:
+#   dna_ng         : 11.52   CI [10.57, 12.47]
+#   lipid_uL       :  6.73   CI [ 5.78,  7.68]
+#   dna_ng:lipid_uL:  3.35   CI [ 2.19,  4.51]
+#   dna_ng^2       : -9.75   CI [-11.18, -8.33]
+#   lipid_uL^2     : -5.20   CI [-6.63, -3.78]
+```
+
+**The figure: a coefficient plot with intervals.** The table above is easier to read as a
+picture. `res_ccd` here is the Vignette 7 quadratic fit; plotting each coefficient as a point
+with its 95% CI as a whisker turns "is this term real?" into a one-glance geometric check —
+**does the whisker cross the red zero line?**
+
+![A forest plot of the five model coefficients: dna_ng, lipid_uL and the interaction as positive points to the right of zero, dna_ng² and lipid_uL² as negative points to the left, every 95%-CI whisker clearly clear of the dashed zero line.](img/v10_coefficients.png)
+
+Every interval sits entirely to one side of zero, so every term earns its place. Two things
+the picture adds over the number table: the **whisker length** shows how precisely each
+effect is pinned down (all tight here — the CCD estimates every term cleanly), and the
+**sign** is immediate — the two quadratic terms (red, left of zero) are the downward
+curvature that makes the surface a dome, while the three positive terms (blue) push the
+readout up. None of these intervals straddle zero, so every term earns its place. The
+negative quadratic intervals (both entirely below zero) are the statistical confirmation of
+the dome from Vignette 7: the downward curvature that gives the surface a peak is not an
+accident of the fit.
+
+**Takeaway.** Rank by effect size to _find_ candidates; test with ANOVA / confidence intervals
+to _keep_ them. The price of admission is spare runs — design in a few more than your model
+has terms, and significance testing comes for free.
+
+---
+
+### Vignette 11 — How much model is too much? Adjusted and predicted R²
+
+**Concept: overfitting and model parsimony.** Plain **R²** has a fatal flaw for choosing
+between models: it _never goes down_ when you add a term. Throw in enough interactions and
+powers and R² marches toward 1.0 — even if the extra terms are fitting noise. Two corrected
+versions keep you honest:
+
+- **Adjusted R²** penalises each added term, so it only rises when a new term explains more
+  than a random one would. It rewards _parsimony_.
+- **Predicted R²** (also called **Q²**) is the real test of _generalisation_. It is built from
+  the **PRESS** statistic: refit the model leaving out each run in turn, predict that
+  held-out run, and accumulate the errors. A model that merely memorised its own data — rather
+  than learning the surface — predicts left-out points badly, and predicted R² collapses (it
+  can even go _negative_, meaning "worse than guessing the mean").
+
+The cleanest demonstration is to fit the _wrong_ model to the Vignette 7 dome data — a flat
+(linear) model that ignores curvature — and compare it to the right (quadratic) one:
+
+```python
+from doe.analysis import adjusted_r2, predicted_r2, press
+
+res_lin  = fit_ols(design, y, model="linear")     # flat: no squared terms
+res_quad = fit_ols(design, y, model="quadratic")  # the Vignette 7 fit
+
+#               R²      adj R²    pred R²    PRESS
+# linear      0.7017    0.5898    -0.3591   2155.3
+# quadratic   0.9966    0.9937     0.9835     26.2
+```
+
+Read across the rows. The flat model's R² of 0.70 looks passable — but its **predicted R² is
+_negative_** (−0.36): asked to predict a well it hadn't seen, it does worse than just guessing
+the average. That is the signature of a model fighting curvature it has no terms for. The
+quadratic model, by contrast, holds up under cross-validation (predicted R² ≈ 0.98), and its
+PRESS is ~80× smaller — it genuinely _learned the dome_ rather than papering over it.
+
+**The figure: where each metric tells the truth.** The bar chart puts the three R² flavours
+side by side for both models, and the story lives in the _rightmost_ group. Plain **R²** (left
+group) barely flinches between the wrong model and the right one — 0.70 vs 1.00 — which is
+exactly why it is the metric that can only flatter you: even a model with no curvature terms
+scores a "passable" 0.70 on curved data. **Adjusted R²** (middle) shaves the linear model down
+a little for its wasted terms but still reports a reassuring 0.59. Only **predicted R²** (right)
+sounds the alarm: the linear bar plunges through zero to **−0.36** — the lone bar below the
+axis — meaning that when the flat model is asked to predict a well it has not seen, it does
+_worse than just guessing the average readout_. The quadratic model, meanwhile, holds near the
+top in all three (1.00 / 0.99 / 0.98), which is the signature of a fit that generalises.
+
+![Grouped bar chart of R², adjusted R² and predicted R² for the linear vs quadratic model. R² and adjusted R² look respectable for both, but the linear model's predicted R² dives below zero to −0.36 while the quadratic stays near 1.0.](img/v11_r2_metrics.png)
+
+The visual lesson is that the three metrics disagree _most_ exactly where it matters. A model
+that is overfitting looks fine on R², slightly worse on adjusted R², and is only unmasked by the
+cross-validated predicted R². Reading only the first bar would have sent you to the bench with a
+flat model and a wrong optimum.
+
+A healthy fit shows all three R² values **close together and high**. A large gap between R²
+and predicted R² is the warning that you have over-fit: the model is describing this particular
+plate's noise, not the underlying biology, and its "optimum" may not reproduce.
+
+**Takeaway.** Never select a model on R² alone — it is the metric that can only flatter you.
+Let adjusted R² guard against needless terms and predicted R² (Q²) prove the model can predict
+wells it has not seen. Together they are the difference between a model that _fits_ and a model
+you can _act on_.
+
+---
+
+## Part V — Locating and balancing the optimum
+
+*Pin the optimum down exactly, and reconcile readouts that pull against each other.*
+
+### Vignette 12 — From contour to coordinates: the optimum, exactly
+
+**Concept: analytic optimisation of the fitted surface.** In Vignette 7 we _read_ the optimum
 off the contour map (and confirmed it with `result.optimum()`). That works, but it is still a
 numerical search. Once you have a quadratic fit the optimum has a closed form — and the same
 algebra tells you something the picture can't: whether that point is a genuine peak, a valley,
@@ -814,7 +918,7 @@ Setting the gradient to zero gives the **stationary point** `x_s = −½ B⁻¹ 
 ```python
 from doe import stationary_point
 
-# res_ccd is the quadratic fit from Vignette 6
+# res_ccd is the quadratic fit from Vignette 7
 sp = stationary_point(res_ccd)
 print(sp.coded)       # [0.7429 0.8867]   (coded units)
 print(sp.natural)     # {'dna_ng': 448.6, 'lipid_uL': 2.387}
@@ -823,7 +927,7 @@ print(sp.kind)        # 'maximum'
 print(sp.eigenvalues) # [-10.30  -4.65]
 ```
 
-This lands on the same well Vignette 6's constrained optimiser found (~448 ng DNA, ~2.39 µL lipid,
+This lands on the same well Vignette 7's constrained optimiser found (~448 ng DNA, ~2.39 µL lipid,
 ~67% GFP+) — but as an exact solution, decoded into pipette units, in one call.
 
 **Canonical analysis: is it actually a peak?** The `kind` and `eigenvalues` come from the
@@ -836,7 +940,7 @@ eigenvalues classify the stationary point:
   single best point, and you should optimise _along_ the rising direction).
 
 Here both eigenvalues are negative, so the surface is a true dome and `x_s` is its peak — the
-statistical confirmation of the "both squared terms are negative" reading from Vignette 6.
+statistical confirmation of the "both squared terms are negative" reading from Vignette 7.
 
 **The figure: a 3-D surface plot.** `surface_plot` is the companion to the contour map — the
 same fitted surface, drawn as a landscape you can see the dome in directly.
@@ -846,11 +950,11 @@ from doe.plotting import surface_plot
 ax = surface_plot(res_ccd, "dna_ng", "lipid_uL")
 ```
 
-![3-D surface of fitted % GFP+ over dna_ng and lipid_uL, climbing to a bright dome toward high DNA and high lipid](img/v11_surface.png)
+![3-D surface of fitted % GFP+ over dna_ng and lipid_uL, climbing to a bright dome toward high DNA and high lipid](img/v12_surface.png)
 
 The surface climbs from ~30% GFP+ at low DNA/low lipid (front, dark) to a bright ridge near
 high DNA/high lipid (back, ~67%), bending over into the dome whose peak the stationary point
-pinned down. It is the Vignette 6 contour map with the height axis made literal.
+pinned down. It is the Vignette 7 contour map with the height axis made literal.
 
 **When the peak is outside the box: the constrained optimum.** The stationary point is
 _unconstrained_ — the algebra doesn't know your factor limits. If the true peak lies beyond
@@ -874,7 +978,7 @@ print(opt.at_bound)   # True
 `at_bound=True` is the message that matters: your best feasible setting is pressed against a
 limit (here the top of the DNA range). The model's true peak is past where you pipetted, so
 this is a cue to run a follow-up that **extends the DNA range upward** rather than trusting
-500 ng as the answer. For the well-behaved Vignette 6 dome, by contrast, `optimum(res_ccd)`
+500 ng as the answer. For the well-behaved Vignette 7 dome, by contrast, `optimum(res_ccd)`
 returns the interior stationary point with `at_bound=False` — the optimum is real, not an
 artefact of where you stopped looking.
 
@@ -885,7 +989,7 @@ design.
 
 ---
 
-## Vignette 12 — Two readouts at once: desirability
+### Vignette 13 — Two readouts at once: desirability
 
 **Concept: multi-response optimisation.** Real assay development almost never optimises a
 single number. You want high transfection **and** healthy cells; a bright reporter **and** low
@@ -904,7 +1008,7 @@ scores zero, exactly as it should. `desirability` then finds the factor settings
 ```python
 from doe import ResponseGoal, desirability
 
-# res_ccd  : the %GFP+ quadratic from Vignette 6 (more DNA helps, up to the dome's peak)
+# res_ccd  : the %GFP+ quadratic from Vignette 7 (more DNA helps, up to the dome's peak)
 # res_viab : a % viable-cell readout on the same CCD (falls as DNA rises -- toxicity)
 goals = [
     ResponseGoal(res_ccd,  goal="max", low=40.0, high=70.0),   # want %GFP+ toward 70
@@ -925,11 +1029,25 @@ middle-of-the-range DNA amount giving a predicted **62% GFP+ at 78% viability**,
 individual desirabilities healthy (~0.7) and an overall `D` of 0.73.
 
 **Why not just maximise GFP?** Because the readouts conflict. Optimising %GFP+ _alone_ (the
-Vignette 11 result) drives DNA to ~449 ng for ~67% GFP+ — but read the viability surface at
+Vignette 12 result) drives DNA to ~449 ng for ~67% GFP+ — but read the viability surface at
 that same well and it has dropped to ~65%. Desirability deliberately gives back a few points of
 GFP (67 → 62) to buy a large gain in viability (65 → 78), because the geometric mean rewards
 keeping _both_ acceptable over maxing one out. That balance — not the single-response peak — is
 usually the setting that actually reproduces and scales.
+
+**The figure: the compromise, mapped.** The plot below is the _combined_ desirability `D`
+drawn as a contour map over DNA and lipid — one surface that already folds both readouts
+together. Bright yellow is where `D` is highest: where %GFP+ and viability are _both_ good.
+
+![Contour map of overall desirability D over dna_ng and lipid_uL: a bright high-D plateau centred near 310 ng DNA where a gold star marks the desirability optimum, and a red X marking the GFP-only optimum out at ~450 ng DNA where D has fallen into a duller green band.](img/v13_desirability.png)
+
+The two markers tell the whole story. The **gold star** is the desirability optimum
+(~311 ng DNA, `D` ≈ 0.73), sitting squarely on the bright plateau. The **red X** is the
+GFP-only optimum from Vignette 12 (~449 ng DNA) — and notice it has slid _off_ the plateau
+into a duller band, because the extra DNA that maximised GFP has started to cost viability.
+Optimising GFP alone walks you to the X; desirability walks you to the star. The star is not
+where either single readout peaks — it is where their _product_ does, which is exactly the
+setting most likely to survive a scale-up.
 
 Tuning the trade-off is just editing the goals: tighten viability's `low` to refuse anything
 below, say, 70% viable; add a `weight > 1` to a `ResponseGoal` to make its ramp steeper (insist
@@ -942,7 +1060,11 @@ trade-off it struck — explicitly, in the units you pipette.
 
 ---
 
-## Vignette 13 — Run order: randomise to protect yourself
+## Part VI — Running the experiment
+
+*Get the runs onto plates in an order that protects you from the plate itself.*
+
+### Vignette 14 — Run order: randomise to protect yourself
 
 **Concept: randomisation.** Plates drift. The first columns you pipette sit in reagent
 longer; the incubator has a thermal gradient; cells settle in the tube as you dispense. If
@@ -972,20 +1094,37 @@ The shuffled design keeps a `std_order` column so you can map each well back to 
 row when you enter readouts. Randomise the **physical layout** you pipette, then re-join to
 the design for analysis.
 
+**The figure: how randomisation breaks confounding.** The picture below makes the danger and
+the fix concrete. In each panel the grey dashed line is a **lurking drift** — anything that
+changes steadily across the run order (reagent sitting longer, an incubator gradient, cells
+settling in the tube). The bars are each run's coded DNA level. On the **left**, the plate is
+run _sorted by DNA_: every low-DNA well is pipetted first, every high-DNA well last, so DNA's
+level climbs in lockstep with the drift — `corr(drift, DNA) = +0.92`. Any signal the drift
+produces will be credited to DNA; the two are **confounded**, and the model can't tell them
+apart. On the **right**, the same runs in **randomised** order: DNA levels are scattered
+across the timeline, the correlation collapses to `+0.00`, and the drift no longer masquerades
+as a DNA effect — it just adds a little noise, spread across every factor.
+
+![Two bar panels of DNA coded level versus pipetting order, each with a grey dashed drift line. Left (sorted): DNA climbs with the drift, corr +0.92. Right (randomised): DNA is scattered, corr +0.00.](img/v14_randomization.png)
+
+That collapse from +0.92 to ~0 is the entire point of randomising. You cannot remove the
+drift — plates drift — but you can stop it from lining up with a factor, which turns a _bias_
+you would never notice into _variance_ you can see and account for.
+
 **Takeaway.** Design _what_ to run with a factorial/RSM; randomise _the order you run it in_.
 The first protects you from interactions and curvature; the second protects you from the
 plate itself.
 
 ---
 
-## Vignette 14 — Sharing the design: interactive HTML
+### Vignette 15 — Sharing the design: interactive HTML
 
 **Concept: a self-contained, explorable view of the design.** Every figure so far has been a
 PNG of an _analysis_. But before any wells are filled, the design itself is worth looking at —
 and worth handing to a colleague who doesn't run Python. `to_html` writes the whole design to a
 single, self-contained HTML file: one row per run, in both the natural units you pipette and the
 coded `±1` units the maths uses, colour-coded so the structure is obvious at a glance. Apply it to
-a _randomised_ design (Vignette 13) and you get a ready-to-use bench **run sheet**.
+a _randomised_ design (Vignette 14) and you get a ready-to-use bench **run sheet**.
 
 ```python
 from doe import ContinuousFactor, central_composite, to_html
@@ -1011,12 +1150,12 @@ work:
   — you can _see_ the CCD's structure without reading a single number.
 - When the design tracks point types (as a CCD does), the **`type` column is tinted** — centre
   replicates in amber, axial runs in blue — so the run categories the lack-of-fit test relies on
-  (Vignette 5) are obvious.
+  (Vignette 6) are obvious.
 
 The `run` column is the **pipetting order** (1, 2, 3 …). For a randomised design a **`std_order`**
 column appears alongside it, carrying each well's original design-row index — so after you pipette
 in the shuffled physical order you can re-join your readouts back to the design (exactly the
-mapping introduced in Vignette 13).
+mapping introduced in Vignette 14).
 
 A few practical notes:
 
@@ -1033,10 +1172,14 @@ bench.
 
 ---
 
-## Vignette 15 — Reading a design's alias structure
+## Part VII — Evaluating and generating designs
+
+*Judge a design before you run it — and build a custom one when the named recipes do not fit.*
+
+### Vignette 16 — Reading a design's alias structure
 
 **Concept: check aliasing _before_ you run.** Vignette 4 traded away the ability to resolve some
-interactions to save runs, and Vignette 4b showed Plackett–Burman's tangled "complex aliasing".
+interactions to save runs, and Vignette 5 showed Plackett–Burman's tangled "complex aliasing".
 Both are decisions you want to _see_ before committing wells — which terms can this design estimate
 independently, and which are confounded? `correlation_heatmap` answers that for **any** design, and
 `alias_matrix` is its headless, numeric core.
@@ -1063,7 +1206,7 @@ for left, right in [("A:B", "C:D"), ("A:C", "B:D"), ("A:D", "B:C")]:
 ax = correlation_heatmap(demo, interactions=True)
 ```
 
-![Alias-structure heatmap of the 2^(4-1) fraction: orthogonal main effects on the diagonal, and the three confounded interaction pairs A:B=C:D, A:C=B:D, A:D=B:C as off-diagonal blocks](img/v15_alias.png)
+![Alias-structure heatmap of the 2^(4-1) fraction: orthogonal main effects on the diagonal, and the three confounded interaction pairs A:B=C:D, A:C=B:D, A:D=B:C as off-diagonal blocks](img/v16_alias.png)
 
 How to read it:
 
@@ -1082,7 +1225,7 @@ A few notes:
   aliasing to assess — the same knobs as `fit_ols`/`build_model_matrix`. It handles categorical
   factors too (via their effect-coded contrast columns).
 - Pass `absolute=True` for `|r|` on a sequential scale — handy for spotting _any_ aliasing
-  regardless of sign on a busy design (this is the form Vignette 4b uses for Plackett–Burman).
+  regardless of sign on a busy design (this is the form Vignette 5 uses for Plackett–Burman).
 - For an orthogonal design (a full factorial, or a Plackett–Burman's main effects) the off-diagonal
   is all zeros — a clean diagonal is the picture of "everything estimable independently".
 
@@ -1092,20 +1235,20 @@ off-diagonal cells are confounded terms you should know about before you commit 
 
 ---
 
-## Vignette 16 — Is this design good enough?
+### Vignette 17 — Is this design good enough?
 
 **Concept: design diagnostics before you run.** By now we have several ways to make designs:
 factorials, fractional screens, Plackett–Burman, CCDs, Box-Behnken. Before committing wells, it is
 useful to ask a separate question: **how well can this particular design estimate the model I plan
 to fit?** Phase 3 adds numeric diagnostics for exactly that.
 
-For the CCD from Vignettes 5–7, judge it against the same quadratic model:
+For the CCD from Vignette 7, judge it against the same quadratic model:
 
 ```python
 from doe import condition_number, efficiency, vif
 from doe.plotting import leverage_plot
 
-# ccd/res_ccd are the design and quadratic fit from Vignette 6
+# ccd/res_ccd are the design and quadratic fit from Vignette 7
 diag = efficiency(ccd, order=2, interactions=True)
 print(f"D={diag.d:.3f}, A={diag.a:.3f}, G={diag.g:.3f}, I={diag.i:.3f}")
 # D=0.408, A=0.324, G=0.632, I=0.574
@@ -1135,7 +1278,7 @@ How to read those numbers:
   reassuring case; the CCD's main effects and interaction are orthogonal, and even the squared
   terms are only mildly coupled.
 
-![Leverage plot for the CCD: factorial/axial runs have moderate leverage, center replicates sit low, and no run crosses the high-leverage reference line](img/v16_leverage.png)
+![Leverage plot for the CCD: factorial/axial runs have moderate leverage, center replicates sit low, and no run crosses the high-leverage reference line](img/v17_leverage.png)
 
 The **leverage plot** shows how much influence each run has on the fitted model. Center
 replicates have low leverage because they repeat the same setting; edge and axial points carry
@@ -1148,7 +1291,7 @@ fit.
 
 ---
 
-## Vignette 17 — When recipes don't fit: optimal designs
+### Vignette 18 — When recipes don't fit: optimal designs
 
 **Concept: computer-generated designs.** Named recipes are excellent when their assumptions fit
 your assay. But real constraints are messier: "I only have eight wells", "this reagent has three
@@ -1191,7 +1334,7 @@ print(f"I-optimal: D={i_eff.d:.3f}, I={i_eff.i:.3f}")
 # I-optimal: D=0.454, I=0.587
 ```
 
-![Candidate grid with D-optimal runs marked as blue squares and I-optimal runs marked as orange triangles](img/v17_optimal_designs.png)
+![Candidate grid with D-optimal runs marked as blue squares and I-optimal runs marked as orange triangles](img/v18_optimal_designs.png)
 
 The grey dots are all allowed candidate runs; the markers are the chosen wells. **D-optimality**
 spreads runs to estimate coefficients precisely overall. **I-optimality** shifts the choice to
@@ -1250,7 +1393,7 @@ runs, the model you want to estimate, and the run budget you can afford. It retu
 
 ---
 
-## Vignette 18 — Mapping a space without assuming its shape: space-filling designs
+### Vignette 19 — Mapping a space without assuming its shape: space-filling designs
 
 **Concept: coverage instead of a model.** Every design so far — factorial, CCD, Box-Behnken,
 optimal — is built to estimate a _specific_ model efficiently. A CCD puts runs at the corners,
@@ -1288,7 +1431,7 @@ sob   = sobol([dna, lipid], n_runs=16, seed=0)
 four ways, each titled with its **discrepancy** — a single number measuring how far the cloud is
 from perfectly uniform (lower is better; introduced properly below).
 
-![Four scatter panels of 16 points over dna_ng × lipid_uL: random (clumped, discrepancy 0.0395), 4×4 grid (regular but only 4 levels per axis, 0.0314), Latin hypercube (even, 0.0023), and Sobol (even, 0.0020)](img/v18_spacefilling_compare.png)
+![Four scatter panels of 16 points over dna_ng × lipid_uL: random (clumped, discrepancy 0.0395), 4×4 grid (regular but only 4 levels per axis, 0.0314), Latin hypercube (even, 0.0023), and Sobol (even, 0.0020)](img/v19_spacefilling_compare.png)
 
 Read left-to-right, top-to-bottom. **Random** clumps (see the near-touching pair in the middle)
 and leaves a bare patch bottom-left — discrepancy 0.0395, the worst. The **grid** is perfectly
@@ -1317,7 +1460,7 @@ print(lhs8.meta)
 # {'sampler': 'lhs', 'criterion': 'maximin', 'seed': 1}
 ```
 
-![An 8-run Latin hypercube over dna_ng × lipid_uL with the box divided into an 8×8 grid of strata; red rug ticks on each margin show exactly one point falls in every column-stratum and every row-stratum](img/v18_lhs_stratification.png)
+![An 8-run Latin hypercube over dna_ng × lipid_uL with the box divided into an 8×8 grid of strata; red rug ticks on each margin show exactly one point falls in every column-stratum and every row-stratum](img/v19_lhs_stratification.png)
 
 The faint gridlines cut the box into 8 strata per axis. The **red rug ticks** on the bottom and
 left margins are the giveaway: there is exactly **one tick in every column and every row** — one
@@ -1370,7 +1513,7 @@ order-of-magnitude lower discrepancy than random while keeping points well separ
 over random shows up as you scale up. This plots discrepancy against run count (three factors,
 averaged over seeds) on log-log axes:
 
-![Log-log plot of discrepancy vs number of runs for 3 factors: random falls slowly along the top, Latin hypercube below it, and Halton and Sobol steepest and lowest, separating further from random as n grows](img/v18_discrepancy_convergence.png)
+![Log-log plot of discrepancy vs number of runs for 3 factors: random falls slowly along the top, Latin hypercube below it, and Halton and Sobol steepest and lowest, separating further from random as n grows](img/v19_discrepancy_convergence.png)
 
 ```python
 #      n    random       lhs    halton     sobol
@@ -1403,23 +1546,23 @@ coverage at any budget, `sobol`/`halton` for the most uniform fill, and `discrep
 
 ## Where to go next
 
-| You want to…                                  | Reach for…                                           |
-| --------------------------------------------- | ---------------------------------------------------- |
-| See which factors matter (cheap, many inputs) | `fractional_factorial` + `half_normal_plot`          |
-| Quantify main effects & interactions          | `full_factorial` + `fit_ols` + `pareto_plot` / `interaction_plot` |
-| Locate an optimum (curved surface)            | `central_composite` / `box_behnken` + `contour_plot` |
-| Pinpoint & classify the optimum exactly       | `stationary_point` (canonical analysis), `surface_plot` |
-| Find the best _feasible_ setting in bounds    | `optimum` (reports `at_bound`)                       |
-| Balance several readouts at once              | `desirability` + `ResponseGoal`                      |
-| Test whether effects are real, not just big   | `anova_table`, `FitResult.conf_int`                  |
-| Check the model is trustworthy                | `residuals_vs_fitted`, `normal_qq`, `predicted_vs_actual`, `lack_of_fit` |
-| Guard against over-fitting (choose a model)   | `adjusted_r2`, `predicted_r2` (Q²), `press`          |
-| Guard against plate drift                     | `Design.randomize`                                   |
-| Share/explore a design as interactive HTML    | `to_html`                                            |
-| Check a design's aliasing before running       | `correlation_heatmap`, `alias_matrix`                |
-| Judge design quality before running            | `efficiency`, `vif`, `condition_number`, `leverage_plot` |
-| Generate a custom run set under constraints    | `candidate_grid`, `d_optimal`, `i_optimal`, `augment` |
-| Cover a region evenly (no assumed model shape) | `latin_hypercube`, `sobol`, `halton` + `discrepancy`, `maximin_distance` |
+| You want to…                                  | Reach for…                                           | Part |
+| --------------------------------------------- | ---------------------------------------------------- | ---- |
+| Quantify main effects & interactions          | `full_factorial` + `fit_ols` + `pareto_plot` / `interaction_plot` | I |
+| See which factors matter (cheap, many inputs) | `fractional_factorial` / `plackett_burman` + `half_normal_plot` | II |
+| Locate an optimum on a curved surface         | `central_composite` / `box_behnken` + `contour_plot` | III |
+| Test whether effects are real, not just big   | `anova_table`, `FitResult.conf_int`                  | IV |
+| Check the model is trustworthy                | `residuals_vs_fitted`, `normal_qq`, `predicted_vs_actual`, `lack_of_fit` | IV |
+| Guard against over-fitting (choose a model)   | `adjusted_r2`, `predicted_r2` (Q²), `press`          | IV |
+| Pinpoint & classify the optimum exactly       | `stationary_point` (canonical analysis), `surface_plot` | V |
+| Find the best _feasible_ setting in bounds    | `optimum` (reports `at_bound`)                       | V |
+| Balance several readouts at once              | `desirability` + `ResponseGoal`                      | V |
+| Guard against plate drift                     | `Design.randomize`                                   | VI |
+| Share/explore a design as interactive HTML    | `to_html`                                            | VI |
+| Check a design's aliasing before running      | `correlation_heatmap`, `alias_matrix`                | VII |
+| Judge design quality before running           | `efficiency`, `vif`, `condition_number`, `leverage_plot` | VII |
+| Generate a custom run set under constraints   | `candidate_grid`, `d_optimal`, `i_optimal`, `augment` | VII |
+| Cover a region evenly (no assumed model shape) | `latin_hypercube`, `sobol`, `halton` + `discrepancy`, `maximin_distance` | VII |
 
 Every example above runs in coded units internally but is entered and reported in the real
 units you set at the bench — nanograms, microlitres, percent. That is the whole point: the
