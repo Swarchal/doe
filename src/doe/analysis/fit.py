@@ -16,12 +16,14 @@ from .model import build_model_matrix
 if TYPE_CHECKING:
     from .optimize import Bounds, Optimum, StationaryPoint
 
-ModelSpec = Literal["linear", "quadratic"]
+ModelSpec = Literal["linear", "quadratic", "scheffe-linear", "scheffe-quadratic"]
 
 #: Convenience model names -> ``(order, interactions)``.
 _MODEL_SPECS: dict[str, tuple[int, bool]] = {
     "linear": (1, True),
     "quadratic": (2, True),
+    "scheffe-linear": (1, False),
+    "scheffe-quadratic": (2, False),
 }
 
 
@@ -94,10 +96,28 @@ def fit_ols(
 
     ``model`` is a convenience over ``order``/``interactions``: ``"linear"`` == ``order=1,
     interactions=True`` and ``"quadratic"`` == ``order=2, interactions=True``.
+
+    **Mixture designs** (all-:class:`~doe.factors.MixtureFactor` factor sets) are fitted with
+    Scheffé blending models -- no intercept, ``order=1`` for linear blending, ``order=2`` for
+    quadratic (the ``"scheffe-linear"``/``"scheffe-quadratic"`` model names make the intent
+    explicit and additionally *require* a mixture design). Two conventions to know:
+
+    * ``r_squared`` stays *centered* (against ``sum((y - mean(y))^2)``). This is valid for
+      Scheffé models -- the proportions sum to 1, so the constant lies in the model's column
+      space and residuals still sum to zero -- and it keeps R^2 comparable with intercept
+      models, avoiding the inflated "uncorrected" R^2 that no-intercept fits report in some
+      packages (the statsmodels gotcha).
+    * ``effects`` is all-NaN: the classic factorial effect is the -1 -> +1 coded swing
+      (``2 x coefficient``), which has no meaning for blending coefficients on proportions.
     """
     if model is not None:
         if model not in _MODEL_SPECS:
             raise ValueError(f"unknown model {model!r}; expected one of {sorted(_MODEL_SPECS)}")
+        if model.startswith("scheffe") and not design.factors.is_mixture:
+            raise ValueError(
+                f"model {model!r} requires an all-mixture design "
+                "(every factor a MixtureFactor)"
+            )
         order, interactions = _MODEL_SPECS[model]
 
     y = np.asarray(response, dtype=float)
@@ -149,9 +169,13 @@ def fit_ols(
 
     # an "effect" is the response change over the full -1 -> +1 swing of a coded factor, i.e.
     # twice the coefficient (the slope per coded unit). This is the classic factorial-effect
-    # scale that the Pareto/half-normal plots and most DoE textbooks report.
-    effects = 2.0 * coef
-    effects[0] = coef[0]  # intercept is the grand mean, not a swing -- leave it untouched
+    # scale that the Pareto/half-normal plots and most DoE textbooks report. Scheffé blending
+    # coefficients live on proportions with no -1 -> +1 swing, so mixture fits get NaN.
+    if design.factors.is_mixture:
+        effects = np.full_like(coef, np.nan)
+    else:
+        effects = 2.0 * coef
+        effects[0] = coef[0]  # intercept is the grand mean, not a swing -- leave it untouched
     return FitResult(
         mm.term_names,
         coef,

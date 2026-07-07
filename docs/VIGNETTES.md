@@ -1544,6 +1544,97 @@ coverage at any budget, `sobol`/`halton` for the most uniform fill, and `discrep
 
 ---
 
+### Vignette 20 — When the factors are proportions: mixture designs
+
+Every design so far has varied factors _independently_ over a box: DNA and lipid could each be
+set high or low without regard to the other. But some experiments aren't like that. Blend three
+co-solvents for a coating and their proportions **must sum to 1** — push water up and something
+else has to come down. The response depends only on the _blend_, not the total amount. The design
+region is no longer a box; it's a triangle (a **simplex**), and the modelling changes with it.
+
+A `MixtureFactor` is a proportion in `[0, 1]`. The classic support is the **simplex-lattice**
+design — every blend on a `1/m` grid:
+
+```python
+from doe import MixtureFactor, simplex_lattice
+
+solvents = [MixtureFactor("water"), MixtureFactor("ethanol"), MixtureFactor("acetone")]
+simplex_lattice(solvents, degree=2).runs
+#    water  ethanol  acetone
+# 0    0.0      0.0      1.0
+# 1    0.0      0.5      0.5
+# 2    0.0      1.0      0.0
+# 3    0.5      0.0      0.5
+# 4    0.5      0.5      0.0
+# 5    1.0      0.0      0.0
+```
+
+Six runs: the three **pure** blends (a vertex each) and the three binary **50/50** blends (an
+edge midpoint each) — every row summing to 1. The related `simplex_centroid(solvents)` adds the
+overall centroid and gives `2³ − 1 = 7` runs (each non-empty subset of components blended
+equally). Both tag runs via `point_types` (`"vertex"`, `"edge-centroid"`, `"centroid"`), so a
+replicated centroid drives lack-of-fit exactly as center points do in a box design.
+
+**Fitting: Scheffé blending models.** Because the proportions sum to 1, an intercept would be
+perfectly confounded with the sum of the linear terms — so mixture models _drop the intercept_
+and fit **Scheffé polynomials**: `ŷ = Σ βᵢxᵢ` (linear) or `+ ΣΣ βᵢⱼxᵢxⱼ` (quadratic). `fit_ols`
+recognises an all-mixture design; the `"scheffe-linear"` / `"scheffe-quadratic"` model names make
+the intent explicit:
+
+```python
+result = fit_ols(meas, gloss, model="scheffe-quadratic")
+for name, coef in zip(result.term_names, result.coefficients):
+    print(f"{name!r}: {coef:+.2f}")
+# 'water': +39.88
+# 'ethanol': +55.50
+# 'acetone': +60.58
+# 'water:ethanol': -25.59
+# 'water:acetone': -0.59
+# 'ethanol:acetone': +36.71
+#
+# R^2 = 0.9999
+# model matrix has no intercept column: True
+```
+
+Read them as _blending_ coefficients: a linear term is the response of the **pure** component
+(pure acetone ≈ 60), and a positive cross term is **synergy** (ethanol + acetone blend higher than
+either alone, `+36.7`), a negative one **antagonism** (water sours an ethanol blend, `−25.6`). The
+factorial "effect" (the −1→+1 swing) has no meaning on proportions, so `FitResult.effects` is
+`NaN` for a mixture fit — a deliberate signal, not a bug.
+
+![Ternary contour of fitted gloss over the water/ethanol/acetone simplex, with the seven centroid-design blends overlaid; the response climbs toward the ethanol–acetone edge](img/v20_ternary_contour.png)
+
+`ternary_contour(result, design)` draws the fitted surface over the triangle — each corner a pure
+component, each edge a binary blend — and overlays the design points. The optimum is read straight
+off it: gloss climbs toward the ethanol–acetone edge, away from the water corner, just as the
+coefficients said.
+
+**Constrained regions and odd budgets.** Real formulations carry bounds — "water at least 30%,
+acetone at most 50%". That clips the simplex to a smaller polygon, and the lattice/centroid recipes
+no longer apply; `extreme_vertices` enumerates the corners of the constrained region (plus its
+centroid):
+
+```python
+constrained = [
+    MixtureFactor("water", low=0.30, high=1.0),
+    MixtureFactor("ethanol", low=0.0, high=0.60),
+    MixtureFactor("acetone", low=0.0, high=0.50),
+]
+extreme_vertices(constrained).runs   # 5 vertices + the region centroid, each summing to 1
+```
+
+And for an arbitrary run budget, the constrained candidate set feeds Phase 3's optimal-design
+engine directly — `d_optimal(solvents, n_runs=7, model="quadratic", region=mixture_candidates(solvents))`
+returns a seven-run D-optimal blend set whose rows still sum to 1 (the engine exchanges whole
+candidate points, so the constraint is preserved by construction).
+
+**Takeaway.** When the factors are _proportions of a whole_, reach for the mixture family:
+`simplex_lattice` / `simplex_centroid` for the unconstrained triangle, `extreme_vertices` for a
+bounded region, `fit_ols(..., model="scheffe-quadratic")` for the blending model, and
+`ternary_contour` to see and locate the best blend.
+
+---
+
 ## Where to go next
 
 | You want to…                                  | Reach for…                                           | Part |
@@ -1563,6 +1654,7 @@ coverage at any budget, `sobol`/`halton` for the most uniform fill, and `discrep
 | Judge design quality before running           | `efficiency`, `vif`, `condition_number`, `leverage_plot` | VII |
 | Generate a custom run set under constraints   | `candidate_grid`, `d_optimal`, `i_optimal`, `augment` | VII |
 | Cover a region evenly (no assumed model shape) | `latin_hypercube`, `sobol`, `halton` + `discrepancy`, `maximin_distance` | VII |
+| Design & fit a blend whose parts sum to 1     | `simplex_lattice` / `simplex_centroid` / `extreme_vertices` + `fit_ols(model="scheffe-quadratic")` + `ternary_contour` | VII |
 
 Every example above runs in coded units internally but is entered and reported in the real
 units you set at the bench — nanograms, microlitres, percent. That is the whole point: the

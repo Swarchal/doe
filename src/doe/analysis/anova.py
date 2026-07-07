@@ -47,6 +47,12 @@ def anova_table(result: FitResult, design: Design, response: np.ndarray) -> pd.D
     One row per non-intercept term (added in model order), plus ``Residual`` and ``Total``
     rows. Columns: ``SS, df, MS, F, p``. The term SS sum to the model SS, and the ``Total``
     SS equals the total corrected sum of squares.
+
+    For a Scheffé (no-intercept mixture) fit the table follows the textbook mixture-ANOVA
+    convention: the component columns jointly absorb the mean, so they are reported as one
+    ``Linear blending`` row with ``k - 1`` degrees of freedom (their sequential SS minus the
+    mean correction), followed by a 1-df row per blending cross product. The ``Total`` row
+    stays mean-corrected and everything still adds up.
     """
     del design  # signature symmetry with lack_of_fit; SS come from the model matrix
     y = np.asarray(response, dtype=float)
@@ -64,16 +70,40 @@ def anova_table(result: FitResult, design: Design, response: np.ndarray) -> pd.D
     ss_tot = float(((y - y.mean()) ** 2).sum())
     ms_resid = ss_res / dof_resid if dof_resid > 0 else float("nan")
 
+    def _f_and_p(ms: float, df: float) -> tuple[float, float]:
+        # The F-ratio asks whether the variation a term explains is large relative to the
+        # residual noise; the p-value is the chance of an F that big were the effect zero.
+        f = ms / ms_resid if ms_resid and np.isfinite(ms_resid) and ms_resid > 0 else float("nan")
+        p = float(stats.f.sf(f, df, dof_resid)) if np.isfinite(f) else float("nan")
+        return f, p
+
     rows: dict[str, list[float]] = {"SS": [], "df": [], "MS": [], "F": [], "p": []}
     index: list[str] = []
-    # skip the intercept (column 0): its SS is the mean-correction, not a model term
-    for name, ss in zip(result.term_names[1:], seq_ss[1:], strict=True):
-        # each term has 1 df, so its mean square equals its sum of squares. The F-ratio asks
-        # whether the variation this term explains is large relative to the residual noise; the
-        # p-value is the chance of an F that big if the term's true effect were zero.
+
+    if result.term_names[0] == "Intercept":
+        # skip the intercept (column 0): its SS is the mean-correction, not a model term
+        term_rows = list(zip(result.term_names[1:], seq_ss[1:], strict=True))
+    else:
+        # Scheffé mixture fit: the k component columns span the constant (proportions sum
+        # to 1), so their combined sequential SS includes the mean correction. Subtract it
+        # and report them as one k-1 df "Linear blending" row (Cornell's convention).
+        k = len(result.factors)
+        ss_linear = max(0.0, float(seq_ss[:k].sum()) - n_runs * float(y.mean()) ** 2)
+        df_linear = float(k - 1)
+        ms_linear = ss_linear / df_linear if df_linear > 0 else float("nan")
+        f, p = _f_and_p(ms_linear, df_linear)
+        index.append("Linear blending")
+        rows["SS"].append(ss_linear)
+        rows["df"].append(df_linear)
+        rows["MS"].append(ms_linear)
+        rows["F"].append(f)
+        rows["p"].append(p)
+        term_rows = list(zip(result.term_names[k:], seq_ss[k:], strict=True))
+
+    for name, ss in term_rows:
+        # each remaining term has 1 df, so its mean square equals its sum of squares
         ms = float(ss)
-        f = ms / ms_resid if ms_resid and np.isfinite(ms_resid) and ms_resid > 0 else float("nan")
-        p = float(stats.f.sf(f, 1, dof_resid)) if np.isfinite(f) else float("nan")
+        f, p = _f_and_p(ms, 1.0)
         index.append(name)
         rows["SS"].append(float(ss))
         rows["df"].append(1.0)

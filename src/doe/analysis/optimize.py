@@ -51,8 +51,9 @@ def _quadratic_form(result: FitResult) -> tuple[float, np.ndarray, np.ndarray]:
     ]
     if non_continuous:
         raise TypeError(
-            "surface optimization requires all-continuous factors; "
-            f"got categorical factor(s) {non_continuous}"
+            "surface optimization requires all-continuous factors (the coded box); "
+            f"got non-continuous factor(s) {non_continuous} -- for mixture fits read "
+            "the optimum off plotting.ternary_contour instead"
         )
     names = result.factors.names
     index = {name: i for i, name in enumerate(names)}

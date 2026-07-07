@@ -22,6 +22,7 @@ from doe import (
     ContinuousFactor,
     Design,
     FactorSet,
+    MixtureFactor,
     ResponseGoal,
     augment,
     box_behnken,
@@ -32,6 +33,7 @@ from doe import (
     desirability,
     discrepancy,
     efficiency,
+    extreme_vertices,
     fit_ols,
     fractional_factorial,
     full_factorial,
@@ -39,8 +41,11 @@ from doe import (
     i_optimal,
     latin_hypercube,
     maximin_distance,
+    mixture_candidates,
     optimum,
     plackett_burman,
+    simplex_centroid,
+    simplex_lattice,
     sobol,
     stationary_point,
     to_html,
@@ -68,6 +73,7 @@ from doe.plotting import (
     residuals_vs_fitted,
     surface_grid,
     surface_plot,
+    ternary_contour,
 )
 
 IMG = pathlib.Path(__file__).resolve().parent.parent / "docs" / "img"
@@ -909,5 +915,67 @@ ax.set_xticks(ns)
 ax.set_xticklabels([str(nn) for nn in ns])
 ax.legend()
 save(ax, "v19_discrepancy_convergence.png")
+
+
+# --------------------------------------------------------------------------- #
+# Vignette 20: mixture designs -- a three-solvent formulation
+# --------------------------------------------------------------------------- #
+banner("Vignette 20: mixture designs")
+
+# Three co-solvents whose proportions must sum to 1: the response (a coating's gloss)
+# depends only on the *blend*, not the absolute amount. This is a mixture problem.
+solvents = [
+    MixtureFactor("water"),
+    MixtureFactor("ethanol"),
+    MixtureFactor("acetone"),
+]
+
+lattice = simplex_lattice(solvents, degree=2)
+print("simplex_lattice(solvents, degree=2).runs:")
+print(lattice.runs)
+print("\npoint_types:", lattice.point_types)
+
+centroid = simplex_centroid(solvents)
+print(f"\nsimplex_centroid: {centroid.n_runs} runs (2^3 - 1)")
+
+# A synthetic ground-truth blending surface (Scheffe quadratic): ethanol/acetone
+# blends synergise, water antagonises. Measure gloss on the centroid design (with the
+# overall centroid replicated so a pure-error / lack-of-fit read is possible).
+def true_gloss(w: Any, e: Any, a: Any) -> Any:
+    return 40 * w + 55 * e + 60 * a + 40 * e * a - 25 * w * e
+
+
+meas = simplex_centroid(solvents).replicate(1)
+props = meas.runs.to_numpy(dtype=float)
+rng = np.random.default_rng(20)
+gloss = true_gloss(props[:, 0], props[:, 1], props[:, 2]) + rng.normal(0, 0.4, len(props))
+
+result = fit_ols(meas, gloss, model="scheffe-quadratic")
+print("\nfit_ols(meas, gloss, model='scheffe-quadratic'):")
+for name, coef in zip(result.term_names, result.coefficients, strict=True):
+    print(f"  {name!r}: {coef:+.2f}")
+print(f"\nR^2 = {result.r_squared:.4f}")
+print("model matrix has no intercept column:", "Intercept" not in result.term_names)
+
+# a constrained region: water must stay >= 30%, acetone <= 50% -- the recipes above
+# assume the full simplex, so a bounded region goes to extreme_vertices.
+constrained = [
+    MixtureFactor("water", low=0.30, high=1.0),
+    MixtureFactor("ethanol", low=0.0, high=0.60),
+    MixtureFactor("acetone", low=0.0, high=0.50),
+]
+ev = extreme_vertices(constrained)
+print("\nextreme_vertices(constrained).runs:")
+print(ev.runs)
+
+# D-optimal mixture design for an odd run budget: the Phase 3 engine over the mixture
+# candidate set. Every row still sums to 1 (whole-candidate exchanges preserve it).
+region = mixture_candidates(solvents, resolution=4)
+dopt = d_optimal(solvents, n_runs=7, model="quadratic", region=region, n_restarts=8, seed=0)
+row_sums = dopt.runs.to_numpy(dtype=float).sum(axis=1)
+print(f"\nd_optimal mixture (7 runs): row sums all 1.0 -> {np.allclose(row_sums, 1.0)}")
+
+ax = ternary_contour(result, meas)
+save(ax, "v20_ternary_contour.png")
 
 print("\nDONE")

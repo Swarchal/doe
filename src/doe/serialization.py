@@ -46,7 +46,8 @@ def validate_design_dict(data: Mapping[str, Any], *, check_ranges: bool = False)
 
     * a supported ``schema_version`` (same major version as this build);
     * a non-empty, well-formed, uniquely-named ``factors`` list (continuous factors need
-      ``high > low``; categorical factors need >= 2 unique ``levels``);
+      ``high > low``; categorical factors need >= 2 unique ``levels``; mixture factors
+      need proportion bounds ``0 <= low < high <= 1``);
     * every run carrying a value for every declared factor;
     * categorical run values drawn from the declared ``levels``;
     * continuous run values numeric;
@@ -110,6 +111,18 @@ def validate_design_dict(data: Mapping[str, Any], *, check_ranges: bool = False)
                     errors.append(f"factor {name!r}: categorical levels must be unique")
                 if name is not None:
                     categorical_levels[name] = set(levels)
+        elif kind == "mixture":
+            low = fd.get("low", 0.0)
+            high = fd.get("high", 1.0)
+            if not isinstance(low, int | float) or not isinstance(high, int | float):
+                errors.append(f"factor {name!r}: mixture 'low'/'high' must be numbers")
+            elif not 0.0 <= low < high <= 1.0:
+                errors.append(
+                    f"factor {name!r}: mixture bounds must satisfy 0 <= low < high <= 1, "
+                    f"got [{low}, {high}]"
+                )
+            elif name is not None:
+                continuous_bounds[name] = (float(low), float(high))
         else:
             errors.append(f"factor {name!r}: unknown type {kind!r}")
         if name is not None:

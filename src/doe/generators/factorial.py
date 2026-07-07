@@ -39,20 +39,33 @@ def _coded_levels(n_levels: int) -> np.ndarray:
     return np.linspace(-1.0, 1.0, n_levels)
 
 
+def _require_box_factors(factors: FactorSet) -> None:
+    """Reject mixture components -- factorial recipes cover a box, not the simplex."""
+    mixture = [f.name for f in factors if not isinstance(f, ContinuousFactor | CategoricalFactor)]
+    if mixture:
+        raise TypeError(
+            f"factorial designs do not support mixture components {mixture}; "
+            "use the generators in doe.generators.mixture"
+        )
+
+
 def _decode(factors: FactorSet, coded: np.ndarray) -> pd.DataFrame:
     """Turn a coded design matrix into a natural-unit runs frame."""
     cols: dict[str, np.ndarray | list[object]] = {}
     for j, factor in enumerate(factors):
         if isinstance(factor, ContinuousFactor):
             cols[factor.name] = factor.decode(coded[:, j])
-        else:
+        elif isinstance(factor, CategoricalFactor):
             idx = ((coded[:, j] + 1) / 2 * (len(factor.levels) - 1)).round().astype(int)
             cols[factor.name] = [factor.levels[int(i)] for i in idx]
+        else:  # pragma: no cover - _require_box_factors rejects these up front
+            raise TypeError(f"unsupported factor type for {factor!r}")
     return pd.DataFrame(cols)
 
 
 def _validate_two_level_categoricals(factors: FactorSet) -> None:
     """Reject categorical factors that a strictly two-level design cannot encode."""
+    _require_box_factors(factors)
     bad = [
         factor.name
         for factor in factors
@@ -74,6 +87,7 @@ def full_factorial(factors: Sequence[Factor], levels: int | Sequence[int] = 2) -
             Categorical factors always use their own number of levels.
     """
     fs = FactorSet(factors)
+    _require_box_factors(fs)
     if isinstance(levels, int):
         per = [levels] * len(fs)
     else:
@@ -81,7 +95,7 @@ def full_factorial(factors: Sequence[Factor], levels: int | Sequence[int] = 2) -
         if len(per) != len(fs):
             raise ValueError("levels sequence length must match number of factors")
     per = [
-        len(f.levels) if not isinstance(f, ContinuousFactor) else int(n)
+        len(f.levels) if isinstance(f, CategoricalFactor) else int(n)
         for f, n in zip(fs, per, strict=True)
     ]
 

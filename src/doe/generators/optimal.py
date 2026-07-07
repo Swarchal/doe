@@ -26,7 +26,7 @@ import pandas as pd
 from ..analysis.diagnostics import log_det_information
 from ..analysis.model import coded_design_points, expand_coded_points
 from ..design import Design, _draw_seed
-from ..factors import CategoricalFactor, ContinuousFactor, Factor, FactorSet
+from ..factors import CategoricalFactor, ContinuousFactor, Factor, FactorSet, MixtureFactor
 
 Criterion = Literal["D", "I"]
 ModelSpec = Literal["linear", "quadratic"]
@@ -67,6 +67,11 @@ def candidate_grid(factors: Sequence[Factor], *, levels: int = 3) -> np.ndarray:
             axes.append(np.linspace(-1.0, 1.0, levels))
         elif isinstance(factor, CategoricalFactor):
             axes.append(np.linspace(-1.0, 1.0, len(factor.levels)))
+        elif isinstance(factor, MixtureFactor):
+            raise TypeError(
+                "candidate_grid covers the coded box, not the mixture simplex; use "
+                "doe.generators.mixture.mixture_candidates for mixture components"
+            )
         else:  # pragma: no cover - Factor is currently exhaustive
             raise TypeError(f"unsupported factor type for {factor!r}")
 
@@ -190,6 +195,8 @@ def _decode_design(factors: FactorSet, coded: np.ndarray) -> pd.DataFrame:
     for j, factor in enumerate(factors):
         if isinstance(factor, ContinuousFactor):
             columns[factor.name] = factor.decode(coded[:, j])
+        elif isinstance(factor, MixtureFactor):
+            columns[factor.name] = coded[:, j]  # proportions are already natural units
         else:
             levels = np.linspace(-1.0, 1.0, len(factor.levels))
             nearest = np.abs(coded[:, [j]] - levels[None, :]).argmin(axis=1)
@@ -267,7 +274,10 @@ def coordinate_exchange(
     and keeps the best, guarding against local optima.
 
     ``model`` selects the term set (``"linear"``/``"quadratic"``); ``region`` is an explicit
-    candidate set (defaults to :func:`candidate_grid`); ``seed`` makes the search reproducible.
+    candidate set (defaults to :func:`candidate_grid`, or to
+    :func:`~doe.generators.mixture.mixture_candidates` for an all-mixture factor set -- whose
+    points are proportions, expanded through the Scheffé model, and exchanged whole so
+    sum-to-1 holds by construction); ``seed`` makes the search reproducible.
     The seed actually used is recorded in ``meta["seed"]`` -- when ``seed`` is ``None`` a
     concrete one is drawn first (as :meth:`doe.Design.randomize` does), so a serialized
     optimal design can always regenerate its search.
@@ -283,9 +293,15 @@ def coordinate_exchange(
 
     fs = FactorSet(factors)
     n_factors = len(fs)
-    region = _validate_region(
-        candidate_grid(list(fs)) if region is None else region, n_factors=n_factors
-    )
+    if region is None:
+        if fs.is_mixture:
+            # the default box grid is infeasible on the simplex; use the mixture lattice
+            from .mixture import mixture_candidates
+
+            region = mixture_candidates(list(fs))
+        else:
+            region = candidate_grid(list(fs))
+    region = _validate_region(region, n_factors=n_factors)
     fixed = _validate_fixed_runs(fixed_runs, n_factors=n_factors, n_runs=n_runs)
     order, interactions = _model_spec(model)
 

@@ -42,12 +42,19 @@ from .factors import (
     ContinuousFactor,
     Factor,
     FactorSet,
+    MixtureFactor,
     factor_from_dict,
 )
 from .generators.factorial import (
     fractional_factorial,
     full_factorial,
     plackett_burman,
+)
+from .generators.mixture import (
+    extreme_vertices,
+    mixture_candidates,
+    simplex_centroid,
+    simplex_lattice,
 )
 from .generators.optimal import (
     OptimalDesign,
@@ -72,6 +79,7 @@ __all__ = [
     "FactorSet",
     "FitResult",
     "LackOfFit",
+    "MixtureFactor",
     "Optimum",
     "OptimalDesign",
     "ResponseGoal",
@@ -90,6 +98,7 @@ __all__ = [
     "desirability",
     "discrepancy",
     "efficiency",
+    "extreme_vertices",
     "factor_from_dict",
     "fit_ols",
     "fractional_factorial",
@@ -102,10 +111,13 @@ __all__ = [
     "leverage",
     "log_det_information",
     "maximin_distance",
+    "mixture_candidates",
     "optimum",
     "plackett_burman",
     "predicted_r2",
     "press",
+    "simplex_centroid",
+    "simplex_lattice",
     "sobol",
     "stationary_point",
     "to_html",

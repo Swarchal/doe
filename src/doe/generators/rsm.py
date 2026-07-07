@@ -29,7 +29,7 @@ def _require_continuous(fs: FactorSet) -> None:
     bad = [f.name for f in fs if not isinstance(f, ContinuousFactor)]
     if bad:
         raise ValueError(
-            f"response-surface designs require continuous factors; got categorical: {bad}"
+            f"response-surface designs require continuous factors; got non-continuous: {bad}"
         )
 
 

@@ -106,11 +106,13 @@ and an `[optional]` group for plotting/statsmodels.
 3. **Phase 3 — Optimal designs** *(done)*: coordinate-exchange engine + D/I-optimality, design
    diagnostics (efficiency, VIF, alias matrix, leverage). See [`PHASE3.md`](PHASE3.md) for the
    detailed build plan.
-4. **Phase 4 — Specialized:** space-filling (LHS/QMC) and mixture designs. (Multi-response
-   desirability optimization, originally slated here, shipped early in Phase 2b.) **Phase 4a**
-   (space-filling: `latin_hypercube`/`sobol`/`halton` + `discrepancy`/`maximin_distance`) is
-   *done*; **Phase 4b** (mixture designs) is *not yet started*. See [`PHASE4.md`](PHASE4.md) for
-   the detailed build plan.
+4. **Phase 4 — Specialized** *(done)*: space-filling (LHS/QMC) and mixture designs.
+   (Multi-response desirability optimization, originally slated here, shipped early in Phase 2b.)
+   **Phase 4a** (space-filling: `latin_hypercube`/`sobol`/`halton` +
+   `discrepancy`/`maximin_distance`) and **Phase 4b** (mixture designs: `MixtureFactor`,
+   `simplex_lattice`/`simplex_centroid`/`extreme_vertices`/`mixture_candidates`, Scheffé
+   blending models, `ternary_contour`) are both *done*. See [`PHASE4.md`](PHASE4.md) for the
+   detailed build plan.
 5. **Phase 5 — Screening & restricted randomization** *(not yet started)*:
    - **Definitive screening designs (DSD)** — Jones–Nachtsheim conference-matrix designs that
      screen main effects and detect curvature/2FIs in few runs, avoiding the full-factorial →

@@ -16,7 +16,7 @@ from .analysis.diagnostics import leverage as _leverage
 from .analysis.fit import FitResult
 from .analysis.model import _effect_code, build_model_matrix
 from .design import Design
-from .factors import ContinuousFactor, FactorSet
+from .factors import CategoricalFactor, ContinuousFactor, FactorSet
 
 if TYPE_CHECKING:
     from matplotlib.axes import Axes
@@ -139,7 +139,8 @@ def _coded_columns(
                 coded[name] = np.full_like(sample, factor.code(np.asarray(fixed[name])))
             else:
                 coded[name] = np.zeros_like(sample)  # held at center
-        else:  # categorical -> one constant column per effect-coded contrast
+        elif isinstance(factor, CategoricalFactor):
+            # categorical -> one constant column per effect-coded contrast
             if name in fixed:
                 # _effect_code validates the level and yields the contrast values for it
                 encoding = _effect_code(factor, np.asarray([fixed[name]], dtype=object))
@@ -545,4 +546,96 @@ def half_normal_plot(result: FitResult, ax: Axes | None = None) -> Axes:
     ax.set_xlabel("half-normal quantile")
     ax.set_ylabel("|effect|")
     ax.set_title("Half-normal plot of effects")
+    return ax
+
+
+# --------------------------------------------------------------------------- #
+# Phase 4b: mixture (ternary) plots
+# --------------------------------------------------------------------------- #
+
+
+def ternary_grid(
+    result: FitResult, *, resolution: int = 100
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Evaluate a fitted Scheffé model over the 3-component simplex (headless core).
+
+    Samples the ``1/resolution`` lattice over the full simplex, predicts through the same
+    Scheffé expansion the model was fitted with, and maps barycentric proportions
+    ``(a, b, c)`` to Cartesian plot coordinates (component vertices at ``(0, 0)``,
+    ``(1, 0)``, and ``(0.5, sqrt(3)/2)``). Returns ``(x, y, z, points)`` where ``x``/``y``/
+    ``z`` are flat arrays for triangular contouring and ``points`` is the ``(n, 3)`` array
+    of proportions. This is the headless core :func:`ternary_contour` draws.
+    """
+    from .analysis.model import expand_coded_points
+
+    fs = result.factors
+    if not fs.is_mixture or len(fs) != 3:
+        raise ValueError(
+            "ternary_grid requires a fit over exactly 3 mixture components; for more "
+            "components, fix all but three and refit, or read the coefficients directly"
+        )
+    if resolution < 2:
+        raise ValueError("resolution must be at least 2")
+
+    # the 1/resolution lattice over the whole simplex
+    pts = []
+    for i in range(resolution + 1):
+        for j in range(resolution + 1 - i):
+            k = resolution - i - j
+            pts.append((i / resolution, j / resolution, k / resolution))
+    points = np.asarray(pts, dtype=float)
+
+    mm = expand_coded_points(points, fs, order=result.order, interactions=result.interactions)
+    z = mm.X @ result.coefficients
+
+    x = points[:, 1] + 0.5 * points[:, 2]
+    y = (np.sqrt(3.0) / 2.0) * points[:, 2]
+    return x, y, np.asarray(z, dtype=float), points
+
+
+def ternary_contour(
+    result: FitResult,
+    design: Design | None = None,
+    *,
+    resolution: int = 100,
+    ax: Axes | None = None,
+    filled: bool = True,
+) -> Axes:
+    """Ternary (simplex) contour of a fitted 3-component Scheffé blending model.
+
+    The mixture counterpart of :func:`contour_plot`: the fitted surface is drawn over the
+    triangular composition space, with each vertex a pure component. Pass the ``design`` to
+    overlay its blends as points. Requires exactly 3 mixture components (see
+    :func:`ternary_grid`).
+    """
+    import matplotlib.pyplot as plt
+
+    x, y, z, _points = ternary_grid(result, resolution=resolution)
+
+    if ax is None:
+        _, ax = plt.subplots()
+    if filled:
+        mappable = ax.tricontourf(x, y, z, levels=12)
+        ax.figure.colorbar(mappable, ax=ax, label="fitted response")
+    lines = ax.tricontour(x, y, z, levels=8, colors="k", linewidths=0.5)
+    ax.clabel(lines, inline=True, fontsize=8)
+
+    names = result.factors.names
+    height = np.sqrt(3.0) / 2.0
+    triangle_x = [0.0, 1.0, 0.5, 0.0]
+    triangle_y = [0.0, 0.0, height, 0.0]
+    ax.plot(triangle_x, triangle_y, color="k", lw=1.0)
+    ax.annotate(names[0], (0.0, 0.0), textcoords="offset points", xytext=(-8, -12))
+    ax.annotate(names[1], (1.0, 0.0), textcoords="offset points", xytext=(2, -12))
+    ax.annotate(names[2], (0.5, height), textcoords="offset points", xytext=(0, 6))
+
+    if design is not None:
+        props = design.runs[names].to_numpy(dtype=float)
+        px = props[:, 1] + 0.5 * props[:, 2]
+        py = height * props[:, 2]
+        ax.scatter(px, py, color="k", s=18, zorder=3)
+
+    ax.set_aspect("equal")
+    ax.set_axis_off()
+    ax.set_title("Fitted blending surface")
     return ax

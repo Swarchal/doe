@@ -1,4 +1,4 @@
-"""Space-filling design generators (Phase 4a) -- NOT YET IMPLEMENTED.
+"""Space-filling design generators (Phase 4a).
 
 Designs that target *coverage* of the region rather than efficient estimation of a fixed
 polynomial model -- for computer experiments, surrogate modelling, and exploratory

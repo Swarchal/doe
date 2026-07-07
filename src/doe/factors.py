@@ -109,7 +109,51 @@ class CategoricalFactor:
         )
 
 
-Factor = ContinuousFactor | CategoricalFactor
+@dataclass(frozen=True)
+class MixtureFactor:
+    """A mixture component: a proportion of the whole, in ``[low, high] ⊆ [0, 1]``.
+
+    Mixture components are *proportions that sum to 1* across a run, so their design region
+    is a simplex, not a box. Proportions are already dimensionless and bounded, so mixture
+    columns are deliberately **not** rescaled to ``[-1, +1]``: :meth:`doe.Design.coded`
+    passes them through unchanged, and Scheffé blending models (see
+    :func:`doe.analysis.model.build_model_matrix`) are defined directly on the proportions.
+    A ``FactorSet`` must be *all* mixture components or none (see :class:`FactorSet`).
+    """
+
+    name: str
+    low: float = 0.0
+    high: float = 1.0
+    units: str | None = None
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.low < self.high <= 1.0:
+            raise ValueError(
+                f"factor {self.name!r}: proportion bounds must satisfy "
+                f"0 <= low < high <= 1, got [{self.low}, {self.high}]"
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        """JSON-ready representation, tagged with ``"type"`` for dispatch on load."""
+        return {
+            "type": "mixture",
+            "name": self.name,
+            "low": self.low,
+            "high": self.high,
+            "units": self.units,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> MixtureFactor:
+        return cls(
+            name=str(data["name"]),
+            low=float(data.get("low", 0.0)),
+            high=float(data.get("high", 1.0)),
+            units=data.get("units"),
+        )
+
+
+Factor = ContinuousFactor | CategoricalFactor | MixtureFactor
 
 
 def factor_from_dict(data: Mapping[str, Any]) -> Factor:
@@ -119,7 +163,11 @@ def factor_from_dict(data: Mapping[str, Any]) -> Factor:
         return ContinuousFactor.from_dict(data)
     if kind == "categorical":
         return CategoricalFactor.from_dict(data)
-    raise ValueError(f"unknown factor type {kind!r}; expected 'continuous' or 'categorical'")
+    if kind == "mixture":
+        return MixtureFactor.from_dict(data)
+    raise ValueError(
+        f"unknown factor type {kind!r}; expected 'continuous', 'categorical', or 'mixture'"
+    )
 
 
 class FactorSet:
@@ -129,6 +177,27 @@ class FactorSet:
         names = [f.name for f in factors]
         if len(names) != len(set(names)):
             raise ValueError("factor names must be unique")
+        mixture = [f for f in factors if isinstance(f, MixtureFactor)]
+        if mixture and len(mixture) != len(factors):
+            # mixture-plus-process-variable designs are deferred (see docs/PHASE4.md):
+            # proportions live on a simplex and Scheffé models have no intercept, so
+            # mixing the two factor kinds would need a combined model form we don't have.
+            other = sorted(f.name for f in factors if not isinstance(f, MixtureFactor))
+            raise ValueError(
+                f"mixture components cannot be combined with other factor types; "
+                f"non-mixture factor(s): {other}"
+            )
+        if mixture:
+            if len(mixture) < 2:
+                raise ValueError("a mixture design needs at least 2 components")
+            sum_low = sum(f.low for f in mixture)
+            sum_high = sum(f.high for f in mixture)
+            if not sum_low <= 1.0 <= sum_high:
+                raise ValueError(
+                    "mixture component bounds leave no feasible blend: need "
+                    f"sum(low) <= 1 <= sum(high), got sum(low)={sum_low}, "
+                    f"sum(high)={sum_high}"
+                )
         self._factors: tuple[Factor, ...] = tuple(factors)
 
     def __iter__(self) -> Iterator[Factor]:
@@ -148,6 +217,13 @@ class FactorSet:
     @property
     def names(self) -> list[str]:
         return [f.name for f in self._factors]
+
+    @property
+    def is_mixture(self) -> bool:
+        """``True`` iff every factor is a :class:`MixtureFactor` (all-mixture designs only)."""
+        return bool(self._factors) and all(
+            isinstance(f, MixtureFactor) for f in self._factors
+        )
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the ordered factor list; order fixes model-matrix column order."""

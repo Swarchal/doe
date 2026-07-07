@@ -473,3 +473,61 @@ def test_leverage_plot_accepts_fit_result():
     assert isinstance(ax, Axes)
     assert ax.lines[0].get_xdata().shape == (result.model_matrix.shape[0],)
     plt.close(ax.figure)
+
+
+# --------------------------------------------------------------------------- #
+# Phase 4b: ternary (mixture) plots
+# --------------------------------------------------------------------------- #
+
+
+def _yarn_fit():
+    """A Scheffé-quadratic fit over Cornell's yarn components (exact synthetic response)."""
+    from doe.factors import MixtureFactor
+    from doe.generators.mixture import simplex_centroid
+
+    components = [MixtureFactor("a"), MixtureFactor("b"), MixtureFactor("c")]
+    design = simplex_centroid(components)
+    x = design.runs.to_numpy(dtype=float)
+    # known blending surface: y = 2a + 3b + 4c + 6ab
+    y = 2 * x[:, 0] + 3 * x[:, 1] + 4 * x[:, 2] + 6 * x[:, 0] * x[:, 1]
+    return fit_ols(design, y, model="scheffe-quadratic"), design
+
+
+def test_ternary_grid_predicts_known_blending_surface():
+    from doe.plotting import ternary_grid
+
+    result, _design = _yarn_fit()
+    x, y, z, points = ternary_grid(result, resolution=10)
+
+    assert x.shape == y.shape == z.shape == (points.shape[0],)
+    assert np.allclose(points.sum(axis=1), 1.0, atol=1e-12)
+    expected = (
+        2 * points[:, 0] + 3 * points[:, 1] + 4 * points[:, 2]
+        + 6 * points[:, 0] * points[:, 1]
+    )
+    assert np.allclose(z, expected, atol=1e-8)
+    # Cartesian mapping puts the three pure blends at the triangle's corners
+    assert x.min() == pytest.approx(0.0) and x.max() == pytest.approx(1.0)
+    assert y.min() == pytest.approx(0.0)
+    assert y.max() == pytest.approx(np.sqrt(3.0) / 2.0)
+
+
+def test_ternary_grid_requires_three_mixture_components():
+    from doe.plotting import ternary_grid
+
+    result = _fit_exact()  # a non-mixture fit
+    with pytest.raises(ValueError, match="3 mixture components"):
+        ternary_grid(result)
+
+
+def test_ternary_contour_draws_and_overlays_design_points():
+    from doe.plotting import ternary_contour
+
+    result, design = _yarn_fit()
+    ax = ternary_contour(result, design, resolution=15)
+
+    assert isinstance(ax, Axes)
+    # the design overlay is present with one marker per run
+    offsets = ax.collections[-1].get_offsets()
+    assert offsets.shape[0] == design.n_runs
+    plt.close(ax.figure)

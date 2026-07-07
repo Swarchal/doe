@@ -106,7 +106,9 @@ Actual output of `Design.to_dict()` for a randomized central-composite design
 Shape conventions:
 
 - `factors` is a flat list with a `"type"` discriminator; categorical factors carry
-  `"levels"` instead of `low`/`high`.
+  `"levels"` instead of `low`/`high`. Mixture components (`"type": "mixture"`) carry
+  proportion bounds `low`/`high` in `[0, 1]` (defaulting to the full `[0, 1]`), and a
+  factor set is either all-mixture or mixture-free.
 - `runs` records are flat `{column: value}` maps (factor columns plus any
   `std_order` / response columns), not a nested `values` object.
 - `point_types` is a single array aligned to `runs`, not a per-run field.

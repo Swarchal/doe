@@ -23,6 +23,9 @@ module by module.
 :mod:`doe.generators.spacefilling`
     Space-filling designs (Latin hypercube, Sobol, Halton).
 
+:mod:`doe.generators.mixture`
+    Mixture designs (simplex-lattice, simplex-centroid, extreme vertices).
+
 :mod:`doe.analysis.model`
     Model-matrix construction in coded units.
 
@@ -57,6 +60,7 @@ module by module.
    generators.rsm
    generators.optimal
    generators.spacefilling
+   generators.mixture
    analysis.model
    analysis.fit
    analysis.anova

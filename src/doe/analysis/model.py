@@ -110,6 +110,28 @@ def coded_design_points(design: Design) -> np.ndarray:
     return np.column_stack(cols)
 
 
+def _scheffe_matrix(points: np.ndarray, names: list[str], order: int) -> ModelMatrix:
+    """Scheffé blending model matrix for mixture proportions (Phase 4b).
+
+    Because the proportions sum to 1, an intercept would be exactly collinear with the sum
+    of the linear terms, and a squared term ``x_i^2 = x_i (1 - sum_{j!=i} x_j)`` is a linear
+    combination of the linear and cross terms -- so the Scheffé form drops both:
+
+    * ``order=1`` (linear blending): ``y-hat = sum_i b_i x_i``
+    * ``order=2`` (quadratic blending): adds the ``i < j`` cross products ``b_ij x_i x_j``
+
+    Term names are the component names and ``A:B`` products, consistent with the standard
+    naming, so ANOVA/VIF/plots that key off ``term_names`` work unchanged.
+    """
+    cols: list[np.ndarray] = [points[:, j] for j in range(points.shape[1])]
+    term_names = list(names)
+    if order >= 2:
+        for i, j in itertools.combinations(range(points.shape[1]), 2):
+            cols.append(points[:, i] * points[:, j])
+            term_names.append(f"{names[i]}:{names[j]}")
+    return ModelMatrix(np.column_stack(cols), term_names)
+
+
 def build_model_matrix(design: Design, order: int = 1, interactions: bool = True) -> ModelMatrix:
     """Build a coded model matrix.
 
@@ -125,8 +147,16 @@ def build_model_matrix(design: Design, order: int = 1, interactions: bool = True
     categorical-by-categorical interaction contributes one column per combination of
     contrasts. Squared terms are emitted only for continuous factors that actually take a
     value off ``{-1, +1}`` (a pure +/-1 column squares to the intercept).
+
+    An all-mixture design takes the Scheffé path instead (see :func:`_scheffe_matrix`):
+    no intercept, ``order`` selects linear vs quadratic blending, and ``interactions`` is
+    ignored (mixture cross products are part of the quadratic blending model, not an
+    independent choice).
     """
     coded = design.coded()
+    if design.factors.is_mixture:
+        points = coded.to_numpy(dtype=float)
+        return _scheffe_matrix(points, design.factors.names, order)
     encodings: list[tuple[Factor, _Encoding]] = [
         (factor, _encode_factor(factor, coded[factor.name].to_numpy()))
         for factor in design.factors
@@ -198,6 +228,11 @@ def expand_coded_points(
         raise ValueError(
             f"points has {points.shape[1]} columns but factors has {len(factors)} entries"
         )
+
+    # mixture candidate points are proportions; expand them through the same Scheffé
+    # path as build_model_matrix so the optimal-design engine scores the right model.
+    if factors.is_mixture:
+        return _scheffe_matrix(points, factors.names, order)
 
     encodings: list[tuple[Factor, _Encoding]] = []
     for j, factor in enumerate(factors):
