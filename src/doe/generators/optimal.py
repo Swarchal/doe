@@ -307,9 +307,7 @@ def coordinate_exchange(
 
     n_terms = expand_coded_points(region, fs, order=order, interactions=interactions).X.shape[1]
     if n_runs < n_terms:
-        raise ValueError(
-            f"n_runs={n_runs} cannot estimate the {n_terms}-term {model!r} model"
-        )
+        raise ValueError(f"n_runs={n_runs} cannot estimate the {n_terms}-term {model!r} model")
 
     # resolve an unset seed to a concrete drawn value (as Design.randomize does) so the
     # search recorded in meta is always regenerable from a serialized design.
@@ -424,9 +422,7 @@ def d_optimal(
     :class:`~doe.design.Design` with the search diagnostics (criterion, score, d_efficiency,
     n_restarts, seed) carried in ``design.meta``.
     """
-    return coordinate_exchange(
-        factors, n_runs=n_runs, model=model, criterion="D", **kwargs
-    ).design
+    return coordinate_exchange(factors, n_runs=n_runs, model=model, criterion="D", **kwargs).design
 
 
 def i_optimal(
@@ -439,9 +435,7 @@ def i_optimal(
     in ``design.meta``. For the same model/budget it has lower average prediction variance than
     the D-optimal design (the criteria genuinely differ).
     """
-    return coordinate_exchange(
-        factors, n_runs=n_runs, model=model, criterion="I", **kwargs
-    ).design
+    return coordinate_exchange(factors, n_runs=n_runs, model=model, criterion="I", **kwargs).design
 
 
 def augment(

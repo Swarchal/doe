@@ -277,9 +277,7 @@ def _unit_cube_coords(design: Design) -> np.ndarray:
     return (coded + 1.0) / 2.0
 
 
-def discrepancy(
-    design: Design, *, method: Literal["CD", "WD", "MD", "L2-star"] = "CD"
-) -> float:
+def discrepancy(design: Design, *, method: Literal["CD", "WD", "MD", "L2-star"] = "CD") -> float:
     """Uniformity of a design's coverage via ``scipy.stats.qmc.discrepancy``.
 
     Lower is more uniform. ``method`` is forwarded to scipy (``"CD"`` centered

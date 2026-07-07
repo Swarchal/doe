@@ -116,9 +116,7 @@ def central_composite(
     center_block = np.zeros((center, k), dtype=float)
 
     coded = np.vstack([core, axial, center_block])
-    point_types = (
-        ["factorial"] * n_factorial + ["axial"] * (2 * k) + ["center"] * center
-    )
+    point_types = ["factorial"] * n_factorial + ["axial"] * (2 * k) + ["center"] * center
     runs = _decode_coded(fs, coded)
     meta: dict[str, object] = {
         # the requested spec (e.g. alpha="rotatable") regenerates the design; the resolved

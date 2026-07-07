@@ -172,9 +172,7 @@ class FitResult:
 
         return stationary_point(self)
 
-    def optimum(
-        self, *, maximize: bool = True, bounds: Bounds = (-1.0, 1.0)
-    ) -> Optimum:
+    def optimum(self, *, maximize: bool = True, bounds: Bounds = (-1.0, 1.0)) -> Optimum:
         """Constrained optimum over the coded design box (see :func:`optimize.optimum`)."""
         from .optimize import optimum
 
@@ -282,8 +280,7 @@ def fit_ols(
             raise ValueError(f"unknown model {model!r}; expected one of {sorted(_MODEL_SPECS)}")
         if model.startswith("scheffe") and not design.factors.is_mixture:
             raise ValueError(
-                f"model {model!r} requires an all-mixture design "
-                "(every factor a MixtureFactor)"
+                f"model {model!r} requires an all-mixture design (every factor a MixtureFactor)"
             )
         order, interactions = _MODEL_SPECS[model]
 

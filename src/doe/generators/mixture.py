@@ -45,9 +45,7 @@ def _validate_mixture(factors: Sequence[Factor]) -> FactorSet:
 def _require_unconstrained(fs: FactorSet, generator: str) -> None:
     """Lattice/centroid recipes cover the *full* simplex; bounds need extreme_vertices."""
     constrained = [
-        f.name
-        for f in fs
-        if isinstance(f, MixtureFactor) and (f.low > 0.0 or f.high < 1.0)
+        f.name for f in fs if isinstance(f, MixtureFactor) and (f.low > 0.0 or f.high < 1.0)
     ]
     if constrained:
         raise ValueError(
@@ -177,9 +175,7 @@ def _vertex_candidates(fs: FactorSet) -> np.ndarray:
     return unique
 
 
-def extreme_vertices(
-    factors: Sequence[Factor], *, include_centroid: bool = True
-) -> Design:
+def extreme_vertices(factors: Sequence[Factor], *, include_centroid: bool = True) -> Design:
     """Extreme-vertices design for a bound-constrained mixture region.
 
     Enumerates the vertices of the simplex clipped by the components' ``low``/``high``
@@ -231,9 +227,7 @@ def mixture_candidates(factors: Sequence[Factor], *, resolution: int = 10) -> np
     lattice = []
     for dividers in itertools.combinations(range(resolution + k - 1), k - 1):
         bounds = (-1, *dividers, resolution + k - 1)
-        row = np.array(
-            [(bounds[i + 1] - bounds[i] - 1) / resolution for i in range(k)]
-        )
+        row = np.array([(bounds[i + 1] - bounds[i] - 1) / resolution for i in range(k)])
         if np.all(row >= lows - 1e-12) and np.all(row <= highs + 1e-12):
             lattice.append(row)
 

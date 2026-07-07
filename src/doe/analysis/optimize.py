@@ -46,7 +46,8 @@ def _quadratic_form(result: FitResult) -> tuple[float, np.ndarray, np.ndarray]:
     # factor names, and optimizing a smooth surface over a discrete dimension is not defined,
     # so reject such fits with a clear error rather than a KeyError deep in the parse below.
     non_continuous = [
-        name for name in result.factors.names
+        name
+        for name in result.factors.names
         if not isinstance(result.factors[name], ContinuousFactor)
     ]
     if non_continuous:
@@ -104,11 +105,7 @@ def _format_point(natural: dict[str, float]) -> str:
 
 def _box(bounds: Bounds, k: int) -> list[tuple[float, float]]:
     """Normalise ``bounds`` into a per-factor list of ``(low, high)`` pairs."""
-    if (
-        len(bounds) == 2
-        and np.isscalar(bounds[0])
-        and np.isscalar(bounds[1])
-    ):
+    if len(bounds) == 2 and np.isscalar(bounds[0]) and np.isscalar(bounds[1]):
         lo, hi = float(bounds[0]), float(bounds[1])  # type: ignore[arg-type]
         return [(lo, hi)] * k
     pairs = [(float(lo), float(hi)) for lo, hi in bounds]  # type: ignore[misc]
@@ -138,10 +135,7 @@ class StationaryPoint:
     kind: Literal["maximum", "minimum", "saddle"]
 
     def __repr__(self) -> str:
-        return (
-            f"StationaryPoint({self.kind}: {_format_point(self.natural)} "
-            f"-> {self.response:.4g})"
-        )
+        return f"StationaryPoint({self.kind}: {_format_point(self.natural)} -> {self.response:.4g})"
 
 
 def stationary_point(result: FitResult) -> StationaryPoint:
@@ -205,10 +199,7 @@ class Optimum:
     def __repr__(self) -> str:
         direction = "max" if self.maximize else "min"
         bound = " (at bound)" if self.at_bound else ""
-        return (
-            f"Optimum({direction}: {_format_point(self.natural)} "
-            f"-> {self.response:.4g}{bound})"
-        )
+        return f"Optimum({direction}: {_format_point(self.natural)} -> {self.response:.4g}{bound})"
 
 
 def _multistart_minimize(

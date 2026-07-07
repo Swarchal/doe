@@ -100,9 +100,7 @@ class Design:
         """Positional indices of the center-point runs (empty when none/untracked)."""
         if self.point_types is None:
             return np.empty(0, dtype=int)
-        return np.array(
-            [i for i, t in enumerate(self.point_types) if t == "center"], dtype=int
-        )
+        return np.array([i for i, t in enumerate(self.point_types) if t == "center"], dtype=int)
 
     def coded(self) -> pd.DataFrame:
         """Return the factor columns mapped to coded units.
@@ -158,8 +156,7 @@ class Design:
             raise ValueError("response values must be one-dimensional")
         if col.shape[0] != self.n_runs:
             raise ValueError(
-                f"response {name!r} has {col.shape[0]} values but there are "
-                f"{self.n_runs} runs"
+                f"response {name!r} has {col.shape[0]} values but there are {self.n_runs} runs"
             )
         runs = self.runs.copy()
         runs[name] = col
@@ -196,9 +193,7 @@ class Design:
         point_types = (
             tuple(self.point_types[i] for i in idx) if self.point_types is not None else None
         )
-        return Design(
-            runs, self.factors, self.name, {**self.meta, "replicates": n}, point_types
-        )
+        return Design(runs, self.factors, self.name, {**self.meta, "replicates": n}, point_types)
 
     def randomize(self, seed: int | None = None) -> Design:
         """Return a copy with the run order shuffled (records the original order).
@@ -238,9 +233,7 @@ class Design:
         shuffled["std_order"] = base_order[order]
         shuffled = shuffled[["std_order", *[c for c in shuffled.columns if c != "std_order"]]]
         point_types = (
-            tuple(self.point_types[i] for i in order)
-            if self.point_types is not None
-            else None
+            tuple(self.point_types[i] for i in order) if self.point_types is not None else None
         )
         return Design(
             shuffled,

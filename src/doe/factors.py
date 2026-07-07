@@ -261,10 +261,8 @@ class FactorSet:
 
     @property
     def is_mixture(self) -> bool:
-        """``True`` iff every factor is a :class:`MixtureFactor` (all-mixture designs only)."""
-        return bool(self._factors) and all(
-            isinstance(f, MixtureFactor) for f in self._factors
-        )
+        """``True`` if every factor is a :class:`MixtureFactor` (all-mixture designs only)."""
+        return bool(self._factors) and all(isinstance(f, MixtureFactor) for f in self._factors)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the ordered factor list; order fixes model-matrix column order."""

@@ -220,8 +220,7 @@ def build_model_matrix(design: Design, order: int = 1, interactions: bool = True
         points = coded.to_numpy(dtype=float)
         return _scheffe_matrix(points, design.factors.names, order)
     encodings: list[tuple[Factor, _Encoding]] = [
-        (factor, _encode_factor(factor, coded[factor.name].to_numpy()))
-        for factor in design.factors
+        (factor, _encode_factor(factor, coded[factor.name].to_numpy())) for factor in design.factors
     ]
 
     cols: list[np.ndarray] = [np.ones(len(coded))]

@@ -374,9 +374,7 @@ def correlation_heatmap(
     """
     import matplotlib.pyplot as plt
 
-    labels, corr = alias_matrix(
-        design, order=order, interactions=interactions, absolute=absolute
-    )
+    labels, corr = alias_matrix(design, order=order, interactions=interactions, absolute=absolute)
     n = len(labels)
 
     if ax is None:
@@ -632,23 +630,24 @@ def ternary_contour(
     triangle_x = [0.0, 1.0, 0.5, 0.0]
     triangle_y = [0.0, 0.0, height, 0.0]
     ax.plot(triangle_x, triangle_y, color="k", lw=1.0)
-    ax.annotate(
-        names[0], (0.0, 0.0), textcoords="offset points", xytext=(-8, -12), ha="right"
-    )
-    ax.annotate(
-        names[1], (1.0, 0.0), textcoords="offset points", xytext=(0, -14), ha="right"
-    )
-    ax.annotate(
-        names[2], (0.5, height), textcoords="offset points", xytext=(0, 8), ha="center"
-    )
+    ax.annotate(names[0], (0.0, 0.0), textcoords="offset points", xytext=(-8, -12), ha="right")
+    ax.annotate(names[1], (1.0, 0.0), textcoords="offset points", xytext=(0, -14), ha="right")
+    ax.annotate(names[2], (0.5, height), textcoords="offset points", xytext=(0, 8), ha="center")
 
     if design is not None:
         props = design.runs[names].to_numpy(dtype=float)
         px = props[:, 1] + 0.5 * props[:, 2]
         py = height * props[:, 2]
         ax.scatter(
-            px, py, marker="o", color="crimson", s=55, zorder=3,
-            edgecolors="white", linewidths=1.2, clip_on=False,
+            px,
+            py,
+            marker="o",
+            color="crimson",
+            s=55,
+            zorder=3,
+            edgecolors="white",
+            linewidths=1.2,
+            clip_on=False,
         )
 
     ax.set_aspect("equal")
