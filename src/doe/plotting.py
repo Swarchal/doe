@@ -608,6 +608,7 @@ def ternary_contour(
     overlay its blends as points. Requires exactly 3 mixture components (see
     :func:`ternary_grid`).
     """
+    import matplotlib.patheffects as pe
     import matplotlib.pyplot as plt
 
     x, y, z, _points = ternary_grid(result, resolution=resolution)
@@ -617,25 +618,43 @@ def ternary_contour(
     if filled:
         mappable = ax.tricontourf(x, y, z, levels=12)
         ax.figure.colorbar(mappable, ax=ax, label="fitted response")
-    lines = ax.tricontour(x, y, z, levels=8, colors="k", linewidths=0.5)
-    ax.clabel(lines, inline=True, fontsize=8)
+    # A white halo keeps the black contour lines and their labels legible over both
+    # the dark (low) and bright (high) ends of the filled surface.
+    halo: list[pe.AbstractPathEffect] = [pe.withStroke(linewidth=1.6, foreground="white")]
+    lines = ax.tricontour(x, y, z, levels=8, colors="k", linewidths=0.8)
+    lines.set(path_effects=halo)
+    labels = ax.clabel(lines, inline=True, fontsize=8)
+    for label in labels:
+        label.set_path_effects(halo)
 
     names = result.factors.names
     height = np.sqrt(3.0) / 2.0
     triangle_x = [0.0, 1.0, 0.5, 0.0]
     triangle_y = [0.0, 0.0, height, 0.0]
     ax.plot(triangle_x, triangle_y, color="k", lw=1.0)
-    ax.annotate(names[0], (0.0, 0.0), textcoords="offset points", xytext=(-8, -12))
-    ax.annotate(names[1], (1.0, 0.0), textcoords="offset points", xytext=(2, -12))
-    ax.annotate(names[2], (0.5, height), textcoords="offset points", xytext=(0, 6))
+    ax.annotate(
+        names[0], (0.0, 0.0), textcoords="offset points", xytext=(-8, -12), ha="right"
+    )
+    ax.annotate(
+        names[1], (1.0, 0.0), textcoords="offset points", xytext=(0, -14), ha="right"
+    )
+    ax.annotate(
+        names[2], (0.5, height), textcoords="offset points", xytext=(0, 8), ha="center"
+    )
 
     if design is not None:
         props = design.runs[names].to_numpy(dtype=float)
         px = props[:, 1] + 0.5 * props[:, 2]
         py = height * props[:, 2]
-        ax.scatter(px, py, color="k", s=18, zorder=3)
+        ax.scatter(
+            px, py, marker="o", color="crimson", s=55, zorder=3,
+            edgecolors="white", linewidths=1.2, clip_on=False,
+        )
 
     ax.set_aspect("equal")
     ax.set_axis_off()
-    ax.set_title("Fitted blending surface")
+    # Extra margins + title pad so the apex label clears the title and the
+    # bottom-right vertex label clears the colorbar.
+    ax.margins(x=0.08, y=0.08)
+    ax.set_title("Fitted blending surface", pad=22)
     return ax

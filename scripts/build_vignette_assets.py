@@ -74,6 +74,7 @@ from doe.plotting import (
     surface_grid,
     surface_plot,
     ternary_contour,
+    ternary_grid,
 )
 
 IMG = pathlib.Path(__file__).resolve().parent.parent / "docs" / "img"
@@ -956,6 +957,21 @@ for name, coef in zip(result.term_names, result.coefficients, strict=True):
     print(f"  {name!r}: {coef:+.2f}")
 print(f"\nR^2 = {result.r_squared:.4f}")
 print("model matrix has no intercept column:", "Intercept" not in result.term_names)
+
+# Mixture ANOVA: the k linear terms collapse into one "Linear blending" row (k-1 df),
+# then a 1-df row per cross product -- the textbook convention. Confirms which
+# synergy/antagonism terms are statistically real, not just large.
+mix_tbl = anova_table(result, meas, gloss)
+print("\nanova_table(result, meas, gloss):")
+print(mix_tbl.round(3))
+
+# Read the best blend straight off the fitted surface: argmax over the ternary grid.
+gx, gy, gz, gpts = ternary_grid(result, resolution=200)
+best = gpts[int(np.argmax(gz))]
+print(
+    f"\nbest grid blend: water={best[0]:.2f}, ethanol={best[1]:.2f}, "
+    f"acetone={best[2]:.2f} -> gloss={gz.max():.1f}"
+)
 
 # a constrained region: water must stay >= 30%, acetone <= 50% -- the recipes above
 # assume the full simplex, so a bounded region goes to extreme_vertices.

@@ -1602,12 +1602,50 @@ either alone, `+36.7`), a negative one **antagonism** (water sours an ethanol bl
 factorial "effect" (the −1→+1 swing) has no meaning on proportions, so `FitResult.effects` is
 `NaN` for a mixture fit — a deliberate signal, not a bug.
 
+**Which terms are real?** As in Vignette 10, a large coefficient isn't automatically a significant
+one. `anova_table` works on a mixture fit, following the textbook mixture convention: the `k`
+linear terms collapse into a single **Linear blending** row (`k − 1` df), then one 1-df row per
+cross product:
+
+```python
+from doe import anova_table
+
+anova_table(result, meas, gloss).round(3)
+#                       SS   df       MS         F      p
+# Linear blending  482.269  2.0  241.134  4114.405  0.011
+# water:ethanol     35.389  1.0   35.389   603.836  0.026
+# water:acetone      0.250  1.0    0.250     4.263  0.287
+# ethanol:acetone   64.282  1.0   64.282  1096.831  0.019
+# Residual           0.059  1.0    0.059       NaN    NaN
+# Total            582.249  6.0      NaN       NaN    NaN
+```
+
+The two blends the coefficients called out are both significant (`ethanol:acetone` synergy
+`p ≈ 0.019`, `water:ethanol` antagonism `p ≈ 0.026`), while the near-zero `water:acetone` cross
+term (`−0.59`) is _not_ (`p ≈ 0.29`) — exactly what a `−0.6` coefficient on a 40-to-60 surface
+should be: noise.
+
 ![Ternary contour of fitted gloss over the water/ethanol/acetone simplex, with the seven centroid-design blends overlaid; the response climbs toward the ethanol–acetone edge](img/v20_ternary_contour.png)
 
 `ternary_contour(result, design)` draws the fitted surface over the triangle — each corner a pure
 component, each edge a binary blend — and overlays the design points. The optimum is read straight
 off it: gloss climbs toward the ethanol–acetone edge, away from the water corner, just as the
-coefficients said.
+coefficients said. `ternary_grid` — the headless core the plot draws — hands back the sampled
+composition points and their fitted response, so the best blend can be pulled out numerically
+rather than eyeballed:
+
+```python
+from doe.plotting import ternary_grid
+import numpy as np
+
+x, y, z, points = ternary_grid(result, resolution=200)
+best = points[int(np.argmax(z))]
+print(f"water={best[0]:.2f}, ethanol={best[1]:.2f}, acetone={best[2]:.2f} -> gloss={z.max():.1f}")
+# water=0.00, ethanol=0.43, acetone=0.57 -> gloss=67.4
+```
+
+No water at all, and a roughly 43/57 ethanol–acetone split — squarely on the high edge the contour
+picked out.
 
 **Constrained regions and odd budgets.** Real formulations carry bounds — "water at least 30%,
 acetone at most 50%". That clips the simplex to a smaller polygon, and the lattice/centroid recipes

@@ -18,10 +18,16 @@ stationary point + canonical analysis, constrained optimum, Derringer–Suich de
 `vif`, `condition_number`, `correlation_matrix`/`alias_matrix`, `leverage`) is implemented.
 Phase 4a (space-filling generators — `latin_hypercube`, `sobol`, `halton`, thin wrappers over
 `scipy.stats.qmc` — plus the model-free coverage diagnostics `discrepancy` and
-`maximin_distance`) is implemented; Phase 4b (mixture designs) is not yet started.
-`build_model_matrix` expands categorical factors via deviation (effect) coding, so OLS
-analysis handles mixed continuous/categorical designs. See `docs/PLAN.md` for the full roadmap
-and `docs/PHASE2.md`/`docs/PHASE3.md`/`docs/PHASE4.md` for the detailed build plans.
+`maximin_distance`) is implemented. Phase 4b (mixture designs — the `MixtureFactor` proportion
+type, `simplex_lattice`/`simplex_centroid`/`extreme_vertices` generators plus
+`mixture_candidates` feeding the Phase 3 optimal engine, Scheffé no-intercept blending models in
+`build_model_matrix`/`fit_ols`, and the `ternary_contour` plot) is implemented, completing
+Phase 4. Phase 5 (screening & restricted randomization — definitive screening designs,
+split-plot/hard-to-change factors, classical/blocking) is not yet started; see
+`docs/PLAN.md`/`docs/PHASE4.md` §7 for the scoped pool. `build_model_matrix` expands categorical
+factors via deviation (effect) coding, so OLS analysis handles mixed continuous/categorical
+designs. See `docs/PLAN.md` for the full roadmap and
+`docs/PHASE2.md`/`docs/PHASE3.md`/`docs/PHASE4.md` for the detailed build plans.
 
 ## Commands
 
@@ -33,6 +39,7 @@ uv run pytest                            # run the test suite
 uv run pytest tests/test_fit.py::test_fit_recovers_known_effects   # a single test
 uv run ruff check .                      # lint
 uv run mypy                              # type-check (strict; checks src/)
+uv run --extra docs sphinx-build -b html docs docs/_build/html   # build the HTML docs
 ```
 
 CI (`.github/workflows/ci.yml`) runs these same three checks — `ruff check .`, `mypy`,
@@ -44,9 +51,13 @@ and `pytest` — via `uv run --extra dev` on a Python 3.11/3.12/3.13 matrix, on 
 Everything flows through a coded design matrix. Generation produces a `Design`; analysis
 consumes one.
 
-- `factors.py` — `ContinuousFactor`/`CategoricalFactor` and `FactorSet`. Owns the
-  natural↔coded translation: continuous factors map to `[-1, +1]`. Designs are built and
-  fitted in *coded* units but stored/reported in *natural* units.
+- `factors.py` — `ContinuousFactor`/`CategoricalFactor`/`MixtureFactor` and `FactorSet`. Owns
+  the natural↔coded translation: continuous factors map to `[-1, +1]`. Designs are built and
+  fitted in *coded* units but stored/reported in *natural* units. `MixtureFactor` (Phase 4b) is
+  a proportion in `[low, high] ⊆ [0, 1]`; its columns are *not* rescaled (`coded()` passes them
+  through as proportions — the simplex has no box coding). A `FactorSet` is all-mixture or
+  mixture-free (`is_mixture` property; mixing raises), and mixture bounds must leave a feasible
+  blend (`Σ low ≤ 1 ≤ Σ high`).
 - `design.py` — `Design`: a `pandas.DataFrame` of runs (natural units) plus its `FactorSet`.
   `.coded()` is the bridge to analysis; `.replicate()` and `.randomize()` handle replication
   and run order. The optional `point_types` tuple tags each run (e.g. `"center"`); it drives
@@ -75,18 +86,35 @@ consumes one.
   `halton` (any count). Thin wrappers over `scipy.stats.qmc`: samples in `[0, 1]^k` map to
   coded `[-1, +1]` then decode to natural units. Continuous factors only; reproducible and
   self-describing via `meta` (`sampler`/`seed`/`criterion`/`scramble`).
+- `generators/mixture.py` (Phase 4b) — mixture (simplex) designs whose rows sum to 1:
+  `simplex_lattice` (`{k, m}` lattice), `simplex_centroid` (`2^k − 1` subset centroids),
+  `extreme_vertices` (McLean–Anderson XVERT vertices of a bound-constrained simplex, + centroid),
+  and `mixture_candidates` (a discrete simplex candidate set shaped like `candidate_grid` output,
+  so it feeds the Phase 3 `coordinate_exchange` engine — the engine exchanges whole rows, so
+  sum-to-1 is preserved; `d_optimal(..., region=mixture_candidates(...))` gives odd-budget
+  D-optimal blends). All-mixture factor sets only; `point_types` tags vertices/centroids.
 - `analysis/model.py` — `build_model_matrix` expands a `Design` into intercept + main-effect
   + interaction (+ optional quadratic) columns in coded units. Squared terms are only emitted
   for continuous factors that actually take values off `{-1, +1}` (a pure ±1 column squares to
   the intercept). Categorical factors are expanded by deviation (effect) coding into `k-1`
   contrast columns named `factor[level]` (first level is the `-1` reference); interactions are
-  products of the participating factors' encoded columns.
+  products of the participating factors' encoded columns. An all-mixture design instead takes
+  the Scheffé path (`_scheffe_matrix`): no intercept, `order=1` linear blending (`Σ βᵢxᵢ`),
+  `order=2` adds the `i<j` cross products (`interactions` is ignored). Term names are the
+  component names and `A:B` products, so ANOVA/VIF/plots key off them unchanged.
 - `analysis/fit.py` — `fit_ols` returns a `FitResult` (coefficients, effects, std errors,
   t/p-values, `conf_int`, `r_squared`). Note: in coded units an *effect* is `2 × coefficient`
   (the −1→+1 swing), which the tests rely on. A saturated model (residual dof 0) warns and
-  yields NaN standard errors rather than erroring.
+  yields NaN standard errors rather than erroring. Mixture designs fit Scheffé blending models
+  (`model="scheffe-linear"`/`"scheffe-quadratic"`, which additionally *require* a mixture design):
+  no intercept, R² stays *centered* (valid — the constant is in the Scheffé column space, so this
+  avoids the inflated uncorrected-R² gotcha), and `effects` is all-NaN (the ±1 swing is
+  meaningless on proportions).
 - `analysis/anova.py` — `anova_table` (sequential/Type I SS via QR), `lack_of_fit` (needs ≥2
   center points for pure error), and predictive metrics `press`/`predicted_r2`/`adjusted_r2`.
+  For a Scheffé (no-intercept) fit the table reports the `k` component columns as one
+  `Linear blending` row with `k−1` df (their sequential SS minus the mean correction), then a
+  1-df row per cross product — the textbook mixture-ANOVA convention.
 - `analysis/diagnostics.py` — model-based design diagnostics (Phase 3a) that judge *any* design
   against a model: `information_matrix`/`condition_number`/`log_det_information`, `vif`,
   `leverage`, `correlation_matrix` (alias structure), and `efficiency` (D/A/G/I, normalised so
@@ -104,9 +132,10 @@ consumes one.
   `interaction_plot` over its headless `interaction_lines`), RSM (`contour_plot` + 3-D
   `surface_plot` over their headless core `surface_grid`, which takes `fixed={factor: value}` to
   slice >2 factors), model diagnostics (`residuals_vs_fitted`, `normal_qq`,
-  `predicted_vs_actual`, `leverage_plot`), and alias structure (`correlation_heatmap` over its
-  headless `alias_matrix`). Imports `matplotlib` lazily so the core library stays usable without
-  the optional `plotting` extra.
+  `predicted_vs_actual`, `leverage_plot`), alias structure (`correlation_heatmap` over its
+  headless `alias_matrix`), and mixtures (`ternary_contour` over its headless `ternary_grid` —
+  a 3-component Scheffé blending surface on the simplex). Imports `matplotlib` lazily so the core
+  library stays usable without the optional `plotting` extra.
 - `serialization.py` — `validate_design_dict` checks a serialized-`Design` mapping (the
   `Design.to_dict` payload consumed by `Design.from_dict`) against the versioned schema, raising
   `ValidationError`; see `docs/SERIALIZATION.md`.
@@ -125,6 +154,13 @@ figure in it is *real*: `scripts/build_vignette_assets.py` runs each example, wr
 to `docs/img/`, and prints the outputs for transcription. When you change behaviour that a
 vignette demonstrates, re-run `uv run python scripts/build_vignette_assets.py` and update the
 transcribed numbers/figures so the doc stays truthful.
+
+`docs/` is also a Sphinx project (`conf.py`, furo theme, MyST so the markdown guides build
+as-is, napoleon for the Google-style docstrings). `docs/api/` holds one `automodule` page per
+module; add a page there when adding a module. Build with
+`uv run --extra docs sphinx-build -b html docs docs/_build/html` — keep it warning-free:
+`.github/workflows/docs.yml` builds with `-W` on every push/PR and deploys the site to
+GitHub Pages on pushes to `main`.
 
 ## Code
 
