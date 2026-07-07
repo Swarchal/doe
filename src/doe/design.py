@@ -26,6 +26,18 @@ def _jsonable(value: object) -> object:
     return value
 
 
+def _draw_seed(seed: int | None) -> int:
+    """Resolve ``seed`` to a concrete int, drawing one if unset.
+
+    Recording the drawn seed (rather than leaving it ``None``) is what makes every
+    randomized artifact regenerable from its serialized form. 32-bit keeps it within
+    the safe-integer range of JSON/JavaScript consumers.
+    """
+    if seed is not None:
+        return seed
+    return int(np.random.SeedSequence().generate_state(1, dtype=np.uint32)[0])
+
+
 @dataclass
 class Design:
     """A set of experimental runs plus the factor metadata that produced them.
@@ -130,10 +142,7 @@ class Design:
         drawn and recorded rather than left unspecified, so every randomized design can be
         regenerated exactly.
         """
-        if seed is None:
-            # draw a concrete seed so the shuffle is reproducible and round-trips through JSON;
-            # 32-bit keeps it within the safe-integer range of JSON/JavaScript consumers.
-            seed = int(np.random.SeedSequence().generate_state(1, dtype=np.uint32)[0])
+        seed = _draw_seed(seed)
         rng = np.random.default_rng(seed)
         order = rng.permutation(self.n_runs)
         shuffled = self.runs.iloc[order].reset_index(drop=True)

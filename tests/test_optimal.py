@@ -180,6 +180,16 @@ def test_d_optimal_reproducible_under_seed():
     assert np.allclose(a.coded().to_numpy(), b.coded().to_numpy())
 
 
+def test_unseeded_search_records_a_concrete_reusable_seed():
+    # seed=None must not serialize as null: a concrete seed is drawn and recorded (as
+    # Design.randomize does) so a serialized optimal design can always regenerate its search.
+    a = d_optimal(_factors(2), n_runs=9, model="quadratic")
+    recorded = a.meta["seed"]
+    assert isinstance(recorded, int)
+    b = d_optimal(_factors(2), n_runs=9, model="quadratic", seed=recorded)
+    assert np.allclose(a.coded().to_numpy(), b.coded().to_numpy())
+
+
 # --------------------------------------------------------------------------- #
 # I-optimal
 # --------------------------------------------------------------------------- #

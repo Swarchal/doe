@@ -27,7 +27,7 @@ import pandas as pd
 from scipy.spatial.distance import pdist
 from scipy.stats import qmc
 
-from ..design import Design
+from ..design import Design, _draw_seed
 from ..factors import ContinuousFactor, Factor, FactorSet
 
 #: Post-sampling optimization applied to the Latin hypercube (``None`` = plain LHS).
@@ -46,13 +46,6 @@ def _validate_continuous(factors: Sequence[Factor]) -> list[ContinuousFactor]:
             f"factors: {non_continuous}"
         )
     return [f for f in factors if isinstance(f, ContinuousFactor)]
-
-
-def _draw_seed(seed: int | None) -> int:
-    """Resolve ``seed`` to a concrete int, drawing one if unset (mirrors ``Design.randomize``)."""
-    if seed is not None:
-        return seed
-    return int(np.random.SeedSequence().generate_state(1, dtype=np.uint32)[0])
 
 
 def _decode_unit_sample(sample: np.ndarray, factors: Sequence[ContinuousFactor]) -> pd.DataFrame:

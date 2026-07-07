@@ -21,7 +21,7 @@ from doe.factors import (
     FactorSet,
     factor_from_dict,
 )
-from doe.generators.factorial import full_factorial
+from doe.generators.factorial import fractional_factorial, full_factorial
 from doe.generators.rsm import central_composite
 from doe.serialization import ValidationError, validate_design_dict
 
@@ -146,8 +146,23 @@ def test_design_round_trips_appended_response_column():
     assert "yield_pct" in restored.runs.columns
 
 
+def test_generator_spec_survives_json_and_regenerates_design():
+    # the design-spec layer: the document carries the generating *request* (name +
+    # parameters) in meta, so the intended experiment -- not just the frozen run
+    # table -- can be reconstructed from JSON alone.
+    factors = [ContinuousFactor(name, 0.0, 10.0) for name in "abcd"]
+    design = fractional_factorial(factors, ["D=ABC"])
+
+    d = json.loads(json.dumps(design.to_dict()))
+    spec = d["meta"]["generator"]
+    rebuilt = fractional_factorial(
+        [factor_from_dict(fd) for fd in d["factors"]], **spec["parameters"]
+    )
+    pd.testing.assert_frame_equal(rebuilt.runs, design.runs)
+
+
 # --------------------------------------------------------------------------- #
-# Validation (roadmap item 1)
+# Validation
 # --------------------------------------------------------------------------- #
 
 
@@ -224,7 +239,7 @@ def test_validate_collects_multiple_errors():
 
 
 # --------------------------------------------------------------------------- #
-# ResponseGoal as data (roadmap item 4)
+# ResponseGoal as data
 # --------------------------------------------------------------------------- #
 
 

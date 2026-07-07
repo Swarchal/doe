@@ -60,9 +60,9 @@ dependency; it is plain Python, keeping the core on the scipy stack.
   by `randomize()` and any response columns appended after experiments;
 - `point_types`, so `n_center` / `center_indices` and the lack-of-fit pure-error
   estimate are unchanged;
-- `meta`, which carries generator parameters and — after `randomize()` — the
-  `random_seed`, so the run order is both preserved (`std_order`) and reproducible
-  (the seed);
+- `meta`, which carries the generating request (the `generator` block) and — after
+  `randomize()` — the `random_seed`, so the run order is both preserved (`std_order`)
+  and reproducible (the seed);
 - and therefore **fitted-model behaviour**, since coded values and the model matrix
   are *derived* from the factor set, not stored.
 
@@ -91,6 +91,10 @@ Actual output of `Design.to_dict()` for a randomized central-composite design
     "axial", "axial", "center", "factorial", "center"
   ],
   "meta": {
+    "generator": {
+      "name": "central_composite",
+      "parameters": { "alpha": "faced", "center": 2, "fraction": null }
+    },
     "alpha": 1.0,
     "axial_extrapolates": false,
     "randomized": true,
@@ -106,7 +110,15 @@ Shape conventions:
 - `runs` records are flat `{column: value}` maps (factor columns plus any
   `std_order` / response columns), not a nested `values` object.
 - `point_types` is a single array aligned to `runs`, not a per-run field.
-- generator parameters and randomization state live in `meta`.
+- `meta["generator"]` records the generating *request* as `{"name", "parameters"}` —
+  the call that regenerates the design (e.g. the defining relation strings of a
+  fractional factorial, or `alpha="rotatable"` for a CCD). Values *resolved* from the
+  request (the numeric `alpha` above) and randomization state sit alongside as plain
+  `meta` keys. Optimal designs record their search the same flat way (`criterion`,
+  `model`, `seed`, ...), space-filling designs their sampler (`sampler`, `seed`, ...).
+- every recorded seed is a concrete integer: `randomize()`, the optimal-design
+  search, and the space-filling samplers draw one when none is given, so a
+  serialized design never carries an unreproducible `null` seed.
 
 ## Why it's shaped this way
 
@@ -124,7 +136,7 @@ Two principles drive the choices above:
 
 | Layer | Purpose | Example contents | Status |
 | --- | --- | --- | --- |
-| Design spec | Reconstruct the intended experiment | Factor definitions, generator type, model terms, seed | **implemented** |
+| Design spec | Reconstruct the intended experiment | Factor definitions, the `meta["generator"]` block (name + requested parameters), seeds | **implemented** |
 | Generated design | Immutable plan to execute | Run table, natural values, point types, run order | **implemented** |
 | Execution protocol | Carry out the design | Source/destination wells, volumes, stock concentrations, deck layout | future |
 | Observed results | Attach readouts to runs | Response values, units, timestamps, QC flags, failed runs | future |
@@ -150,12 +162,16 @@ response. `ResponseGoal.from_dict(d, result)` takes that re-fitted result back i
 Planned work, roughly in order. `schema_version` exists so these can land without
 breaking older documents.
 
-Already landed (documented above): **document validation** (`validate_design_dict`) and
-**optimization goals as data** (`ResponseGoal.to_dict`/`from_dict`).
+Already landed (documented above): **document validation** (`validate_design_dict`),
+**optimization goals as data** (`ResponseGoal.to_dict`/`from_dict`), and the
+**generator spec** — every generator records its regenerating request in
+`meta["generator"]` (or, for optimal/space-filling designs, flat search/sampler keys)
+with a concretely drawn seed, so the intended experiment survives serialization.
 
 1. **Richer per-run fields.** Stable `run_id`s (so readouts, protocol logs, and
-   failures join safely instead of relying on row position / `std_order`), an
-   explicit `generator` block, and per-run `replicate` / `run_order`. Target shape:
+   failures join safely instead of relying on row position / `std_order`), per-run
+   `replicate` / `run_order`, and promotion of the `generator` block from `meta` to a
+   first-class document field. Target shape:
 
    ```json
    {
@@ -164,7 +180,7 @@ Already landed (documented above): **document validation** (`validate_design_dic
        "name": "ccd_example",
        "generator": {
          "name": "central_composite",
-         "parameters": { "alpha": "rotatable", "center_points": 5 }
+         "parameters": { "alpha": "rotatable", "center": 5 }
        },
        "randomized": true,
        "random_seed": 123,

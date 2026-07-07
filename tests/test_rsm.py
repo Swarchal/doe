@@ -161,3 +161,34 @@ def test_box_behnken_rejects_six_or_more_factors():
     # k>=6: all-pairs would give a larger, non-canonical (non-rotatable) design, so reject it
     with pytest.raises(ValueError, match="at most 5 factors"):
         box_behnken(_factors(6))
+
+
+# --------------------------------------------------------------------------- #
+# Generator spec in meta (the serialized design-spec layer)
+# --------------------------------------------------------------------------- #
+
+
+def test_ccd_records_requested_spec_alongside_resolved_alpha():
+    # meta keeps both the *request* ("rotatable") and what it resolved to (numeric alpha);
+    # only the former can regenerate the design from a serialized document.
+    design = central_composite(_factors(2), alpha="rotatable", center=5)
+    spec = design.meta["generator"]
+    assert spec == {
+        "name": "central_composite",
+        "parameters": {"alpha": "rotatable", "center": 5, "fraction": None},
+    }
+    rebuilt = central_composite(_factors(2), **spec["parameters"])
+    assert rebuilt.runs.equals(design.runs)
+
+
+def test_ccd_records_fractional_core_generators():
+    design = central_composite(_factors(5), fraction=["E=ABCD"])
+    assert design.meta["generator"]["parameters"]["fraction"] == ["E=ABCD"]
+
+
+def test_box_behnken_spec_regenerates_design():
+    design = box_behnken(_factors(3), center=5)
+    spec = design.meta["generator"]
+    assert spec == {"name": "box_behnken", "parameters": {"center": 5}}
+    rebuilt = box_behnken(_factors(3), **spec["parameters"])
+    assert rebuilt.runs.equals(design.runs)

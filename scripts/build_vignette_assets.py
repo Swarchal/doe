@@ -610,7 +610,8 @@ ax.scatter([opt_gfp.natural["dna_ng"]], [opt_gfp.natural["lipid_uL"]], s=130, ma
 ax.set_xlabel("dna_ng")
 ax.set_ylabel("lipid_uL")
 ax.set_title("Desirability balances %GFP+ against viability")
-ax.legend(loc="lower left", fontsize=8)
+ax.legend(loc="lower left", fontsize=8, facecolor="#1a1a1a", edgecolor="white",
+          framealpha=0.85, labelcolor="white")
 save(ax, "v13_desirability.png")
 
 
@@ -771,7 +772,7 @@ ax.scatter(
 ax.set_xlabel("dna_ng")
 ax.set_ylabel("lipid_uL")
 ax.set_title("Candidate grid with D- and I-optimal 8-run choices")
-ax.legend(loc="best")
+ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), borderaxespad=0.0)
 save(ax, "v18_optimal_designs.png")
 
 augmented = augment(full_factorial([dna, lipid]), n_runs=4, model="quadratic", seed=2)

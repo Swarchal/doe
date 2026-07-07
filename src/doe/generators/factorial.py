@@ -20,6 +20,18 @@ from ..design import Design
 from ..factors import CategoricalFactor, ContinuousFactor, Factor, FactorSet
 
 
+def _generator_spec(name: str, **parameters: object) -> dict[str, object]:
+    """The ``meta["generator"]`` block: the call that regenerates a design.
+
+    Records the generator's public name and its *requested* parameters (values resolved
+    from the request, e.g. a numeric alpha, belong as ordinary ``meta`` keys instead).
+    This is what lets a serialized design reconstruct the intended experiment rather
+    than only replay the frozen run table. Values must be JSON-ready: ``Design.to_dict``
+    does not coerce inside nested containers.
+    """
+    return {"name": name, "parameters": parameters}
+
+
 def _coded_levels(n_levels: int) -> np.ndarray:
     """Evenly spaced coded levels in ``[-1, +1]`` (e.g. 2 -> [-1, 1], 3 -> [-1, 0, 1])."""
     if n_levels < 2:
@@ -69,14 +81,19 @@ def full_factorial(factors: Sequence[Factor], levels: int | Sequence[int] = 2) -
         if len(per) != len(fs):
             raise ValueError("levels sequence length must match number of factors")
     per = [
-        len(f.levels) if not isinstance(f, ContinuousFactor) else n
+        len(f.levels) if not isinstance(f, ContinuousFactor) else int(n)
         for f, n in zip(fs, per, strict=True)
     ]
 
     grids = [_coded_levels(n) for n in per]
     coded = np.array(list(itertools.product(*grids)), dtype=float)
     runs = _decode(fs, coded)
-    return Design(runs, fs, name=f"full_factorial_{'x'.join(map(str, per))}")
+    return Design(
+        runs,
+        fs,
+        name=f"full_factorial_{'x'.join(map(str, per))}",
+        meta={"generator": _generator_spec("full_factorial", levels=per)},
+    )
 
 
 def fractional_factorial(factors: Sequence[Factor], generators: Sequence[str]) -> Design:
@@ -146,7 +163,14 @@ def fractional_factorial(factors: Sequence[Factor], generators: Sequence[str]) -
     extra_cols = [generated_cols[name] for name in generated_names]
     full = np.column_stack([coded, *extra_cols]) if extra_cols else coded
     runs = _decode(fs, full)
-    return Design(runs, fs, name=f"fractional_factorial_{len(fs)}-{len(generators)}")
+    return Design(
+        runs,
+        fs,
+        name=f"fractional_factorial_{len(fs)}-{len(generators)}",
+        # the generator strings are the defining relation -- the design's alias structure
+        # is unrecoverable from the run table alone, so they must survive serialization.
+        meta={"generator": _generator_spec("fractional_factorial", generators=list(generators))},
+    )
 
 
 def _letter_to_name(letter: str, base_names: list[str]) -> str:
@@ -248,4 +272,9 @@ def plackett_burman(factors: Sequence[Factor]) -> Design:
     matrix = _pb_matrix(n)
     coded = matrix[:, 1 : k + 1]  # drop the all-+1 leading column; keep k factor columns
     runs = _decode(fs, coded)
-    return Design(runs, fs, name=f"plackett_burman_{n}")
+    return Design(
+        runs,
+        fs,
+        name=f"plackett_burman_{n}",
+        meta={"generator": _generator_spec("plackett_burman")},
+    )

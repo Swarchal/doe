@@ -25,7 +25,7 @@ import pandas as pd
 
 from ..analysis.diagnostics import log_det_information
 from ..analysis.model import coded_design_points, expand_coded_points
-from ..design import Design
+from ..design import Design, _draw_seed
 from ..factors import CategoricalFactor, ContinuousFactor, Factor, FactorSet
 
 Criterion = Literal["D", "I"]
@@ -268,6 +268,9 @@ def coordinate_exchange(
 
     ``model`` selects the term set (``"linear"``/``"quadratic"``); ``region`` is an explicit
     candidate set (defaults to :func:`candidate_grid`); ``seed`` makes the search reproducible.
+    The seed actually used is recorded in ``meta["seed"]`` -- when ``seed`` is ``None`` a
+    concrete one is drawn first (as :meth:`doe.Design.randomize` does), so a serialized
+    optimal design can always regenerate its search.
     """
     if criterion not in {"D", "I"}:
         raise ValueError("criterion must be 'D' or 'I'")
@@ -292,6 +295,9 @@ def coordinate_exchange(
             f"n_runs={n_runs} cannot estimate the {n_terms}-term {model!r} model"
         )
 
+    # resolve an unset seed to a concrete drawn value (as Design.randomize does) so the
+    # search recorded in meta is always regenerable from a serialized design.
+    seed = _draw_seed(seed)
     rng = np.random.default_rng(seed)
     first_mutable = fixed.shape[0]
     best_design: np.ndarray | None = None

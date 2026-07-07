@@ -19,7 +19,7 @@ import pandas as pd
 
 from ..design import Design
 from ..factors import ContinuousFactor, Factor, FactorSet
-from .factorial import fractional_factorial
+from .factorial import _generator_spec, fractional_factorial
 
 #: How far the axial/star points sit from the center, in coded units.
 AlphaSpec = float | Literal["faced", "rotatable", "orthogonal"]
@@ -85,8 +85,10 @@ def central_composite(
         center: number of center-point replicates (pure-error source for lack-of-fit).
         fraction: optional generator strings (e.g. ``["E=ABCD"]``) for a fractional core.
 
-    The returned design records ``meta["alpha"]`` (the numeric axial distance) and
-    ``meta["axial_extrapolates"]`` (``True`` when axial points fall outside the bounds).
+    The returned design records ``meta["generator"]`` (the requested ``alpha``/``center``/
+    ``fraction``, so a serialized design can be regenerated), plus ``meta["alpha"]`` (the
+    resolved numeric axial distance) and ``meta["axial_extrapolates"]`` (``True`` when axial
+    points fall outside the bounds).
     """
     fs = FactorSet(factors)
     _require_continuous(fs)
@@ -121,6 +123,14 @@ def central_composite(
     )
     runs = _decode_coded(fs, coded)
     meta: dict[str, object] = {
+        # the requested spec (e.g. alpha="rotatable") regenerates the design; the resolved
+        # numeric alpha and extrapolation flag describe what that request produced.
+        "generator": _generator_spec(
+            "central_composite",
+            alpha=alpha if isinstance(alpha, str) else float(alpha),
+            center=center,
+            fraction=list(fraction) if fraction is not None else None,
+        ),
         "alpha": a,
         "axial_extrapolates": bool(a > 1.0 + 1e-9),
     }
@@ -182,5 +192,9 @@ def box_behnken(factors: Sequence[Factor], *, center: int = 3) -> Design:
     point_types = ["edge"] * len(edges) + ["center"] * center
     runs = _decode_coded(fs, coded)
     return Design(
-        runs, fs, name=f"box_behnken_k{k}", point_types=tuple(point_types)
+        runs,
+        fs,
+        name=f"box_behnken_k{k}",
+        meta={"generator": _generator_spec("box_behnken", center=center)},
+        point_types=tuple(point_types),
     )

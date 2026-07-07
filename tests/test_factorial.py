@@ -167,3 +167,32 @@ def test_plackett_burman_rejects_unconstructible_size():
     # 27 factors would need N = 28, which this construction does not provide;
     # the next constructible size (32, a power of two) is used instead.
     assert plackett_burman(_factors(27)).n_runs == 32
+
+
+# --------------------------------------------------------------------------- #
+# Generator spec in meta (the serialized design-spec layer)
+# --------------------------------------------------------------------------- #
+
+
+def test_full_factorial_records_generator_spec():
+    design = full_factorial(_factors(2), levels=[2, 3])
+    assert design.meta["generator"] == {
+        "name": "full_factorial",
+        "parameters": {"levels": [2, 3]},
+    }
+
+
+def test_fractional_factorial_spec_regenerates_design():
+    # the defining relation is unrecoverable from the run table alone; recording it in
+    # meta is what lets a serialized design reconstruct the intended experiment.
+    design = fractional_factorial(_factors(4), ["D=ABC"])
+    spec = design.meta["generator"]
+    assert spec["name"] == "fractional_factorial"
+    assert spec["parameters"] == {"generators": ["D=ABC"]}
+    rebuilt = fractional_factorial(_factors(4), **spec["parameters"])
+    assert rebuilt.runs.equals(design.runs)
+
+
+def test_plackett_burman_records_generator_spec():
+    design = plackett_burman(_factors(7))
+    assert design.meta["generator"] == {"name": "plackett_burman", "parameters": {}}
