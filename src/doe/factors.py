@@ -16,7 +16,18 @@ import numpy as np
 
 @dataclass(frozen=True)
 class ContinuousFactor:
-    """A continuous (numeric) factor varied between ``low`` and ``high``."""
+    """A continuous (numeric) factor varied between ``low`` and ``high``.
+
+    Examples:
+        >>> import numpy as np
+        >>> temperature = ContinuousFactor("temperature", low=40, high=80, units="C")
+        >>> temperature.center
+        60.0
+        >>> temperature.code(np.array([40, 60, 80])).tolist()
+        [-1.0, 0.0, 1.0]
+        >>> temperature.decode(np.array([-1, 0, 1])).tolist()
+        [40.0, 60.0, 80.0]
+    """
 
     name: str
     low: float
@@ -80,6 +91,13 @@ class CategoricalFactor:
     Unlike a continuous factor there is no natural midpoint or distance between levels, so
     categorical factors have no ``[-1, +1]`` coding of their own; they are turned into
     numeric contrast columns only at analysis time (see ``analysis.model._effect_code``).
+
+    Examples:
+        >>> catalyst = CategoricalFactor("catalyst", levels=("A", "B", "C"))
+        >>> catalyst.levels
+        ('A', 'B', 'C')
+        >>> catalyst.to_dict()["type"]
+        'categorical'
     """
 
     name: str
@@ -119,6 +137,13 @@ class MixtureFactor:
     passes them through unchanged, and Scheffé blending models (see
     :func:`doe.analysis.model.build_model_matrix`) are defined directly on the proportions.
     A ``FactorSet`` must be *all* mixture components or none (see :class:`FactorSet`).
+
+    Examples:
+        >>> a = MixtureFactor("A", low=0.1, high=0.8)
+        >>> b = MixtureFactor("B", low=0.2, high=0.9)
+        >>> factors = FactorSet([a, b])
+        >>> factors.is_mixture
+        True
     """
 
     name: str
@@ -171,7 +196,23 @@ def factor_from_dict(data: Mapping[str, Any]) -> Factor:
 
 
 class FactorSet:
-    """An ordered collection of factors, addressable by name."""
+    """An ordered collection of factors, addressable by name.
+
+    The order is significant: generators, :class:`~doe.design.Design.coded`, and model
+    matrices all use this order when producing columns.
+
+    Examples:
+        >>> factors = FactorSet([
+        ...     ContinuousFactor("temperature", 40, 80),
+        ...     CategoricalFactor("catalyst", ("A", "B")),
+        ... ])
+        >>> factors.names
+        ['temperature', 'catalyst']
+        >>> factors["temperature"].low
+        40
+        >>> [factor.name for factor in factors]
+        ['temperature', 'catalyst']
+    """
 
     def __init__(self, factors: Sequence[Factor]):
         names = [f.name for f in factors]

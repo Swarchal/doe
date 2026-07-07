@@ -44,6 +44,23 @@ class Design:
 
     ``runs`` holds the runs in *natural* units (one row per run, one column per factor).
     Responses are appended as additional columns once experiments are carried out.
+
+    Examples:
+        >>> import pandas as pd
+        >>> from doe import ContinuousFactor, Design, FactorSet
+        >>> factors = FactorSet([
+        ...     ContinuousFactor("temperature", 40, 80),
+        ...     ContinuousFactor("time", 5, 15),
+        ... ])
+        >>> design = Design(
+        ...     pd.DataFrame({"temperature": [40, 80], "time": [5, 15]}),
+        ...     factors,
+        ...     name="two-run",
+        ... )
+        >>> design.n_runs
+        2
+        >>> design.coded().to_dict("list")
+        {'temperature': [-1.0, 1.0], 'time': [-1.0, 1.0]}
     """
 
     runs: pd.DataFrame
@@ -92,6 +109,14 @@ class Design:
 
         Continuous factors are mapped to ``[-1, +1]``; categorical factors are passed
         through unchanged (encoding into model columns is handled at analysis time).
+
+        Examples:
+            >>> import pandas as pd
+            >>> from doe import ContinuousFactor, Design, FactorSet
+            >>> factors = FactorSet([ContinuousFactor("temperature", 40, 80)])
+            >>> design = Design(pd.DataFrame({"temperature": [40, 60, 80]}), factors)
+            >>> design.coded()["temperature"].tolist()
+            [-1.0, 0.0, 1.0]
         """
         out = {}
         for factor in self.factors:
@@ -114,6 +139,17 @@ class Design:
         ``values`` must have exactly :attr:`n_runs` entries; a mismatch raises rather than
         producing a plausible-but-wrong fit. The original design is left unchanged (Designs are
         value objects), and ``name`` must not collide with a factor column.
+
+        Examples:
+            >>> import pandas as pd
+            >>> from doe import ContinuousFactor, Design, FactorSet
+            >>> factors = FactorSet([ContinuousFactor("temperature", 40, 80)])
+            >>> design = Design(pd.DataFrame({"temperature": [40, 80]}), factors)
+            >>> measured = design.with_response("yield", [12.5, 18.0])
+            >>> list(measured.runs.columns)
+            ['temperature', 'yield']
+            >>> "yield" in design.runs.columns
+            False
         """
         if name in self.factors.names:
             raise ValueError(f"response name {name!r} collides with a factor column")
@@ -141,6 +177,16 @@ class Design:
         ``point_types`` are carried along (so center points stay labelled for pure-error /
         lack-of-fit) and ``meta["replicates"]`` records ``n``. Prefer this over stacking
         the ``runs`` frame by hand, which is easy to misalign with the response.
+
+        Examples:
+            >>> import pandas as pd
+            >>> from doe import ContinuousFactor, Design, FactorSet
+            >>> factors = FactorSet([ContinuousFactor("temperature", 40, 80)])
+            >>> design = Design(pd.DataFrame({"temperature": [40, 80]}), factors)
+            >>> design.replicate(2).runs["temperature"].tolist()
+            [40, 80, 40, 80]
+            >>> design.replicate(2, each=True).runs["temperature"].tolist()
+            [40, 40, 80, 80]
         """
         if n < 1:
             raise ValueError("n must be a positive integer")
@@ -168,6 +214,17 @@ class Design:
         reproducible (and serializable). When ``seed`` is ``None`` a concrete 32-bit seed is
         drawn and recorded rather than left unspecified, so every randomized design can be
         regenerated exactly.
+
+        Examples:
+            >>> import pandas as pd
+            >>> from doe import ContinuousFactor, Design, FactorSet
+            >>> factors = FactorSet([ContinuousFactor("temperature", 40, 80)])
+            >>> design = Design(pd.DataFrame({"temperature": [40, 60, 80]}), factors)
+            >>> randomized = design.randomize(seed=1)
+            >>> sorted(randomized.runs["std_order"].tolist())
+            [0, 1, 2]
+            >>> randomized.meta["random_seed"]
+            1
         """
         seed = _draw_seed(seed)
         rng = np.random.default_rng(seed)
@@ -201,6 +258,17 @@ class Design:
         columns appended after randomization/experiments), the ``point_types`` that drive
         center-point / lack-of-fit logic, and ``meta`` (which carries the randomization seed).
         Coded values are intentionally *not* stored -- they are derived from the factor set.
+
+        Examples:
+            >>> import pandas as pd
+            >>> from doe import ContinuousFactor, Design, FactorSet
+            >>> factors = FactorSet([ContinuousFactor("temperature", 40, 80)])
+            >>> design = Design(pd.DataFrame({"temperature": [40, 80]}), factors)
+            >>> payload = design.to_dict()
+            >>> payload["schema_version"]
+            '1.0'
+            >>> Design.from_dict(payload).coded()["temperature"].tolist()
+            [-1.0, 1.0]
         """
         runs = [
             {key: _jsonable(value) for key, value in record.items()}

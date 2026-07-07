@@ -32,7 +32,23 @@ _MODEL_SPECS: dict[str, tuple[int, bool]] = {
 
 @dataclass
 class FitResult:
-    """The outcome of fitting a linear model to a design + response."""
+    """The outcome of fitting a linear model to a design + response.
+
+    Examples:
+        >>> from doe import ContinuousFactor, FactorSet, fit_ols, full_factorial
+        >>> factors = FactorSet([
+        ...     ContinuousFactor("temperature", 40, 80),
+        ...     ContinuousFactor("time", 5, 15),
+        ... ])
+        >>> design = full_factorial(factors)
+        >>> coded = design.coded()
+        >>> response = 10 + 2 * coded["temperature"] - coded["time"]
+        >>> fit = fit_ols(design, response, interactions=False)
+        >>> tuple(round(v, 6) for v in fit.summary()["temperature"])
+        (2.0, 4.0)
+        >>> fit.predict({"temperature": [40, 80], "time": 10}).round(6).tolist()
+        [8.0, 12.0]
+    """
 
     term_names: list[str]
     coefficients: np.ndarray
@@ -228,6 +244,38 @@ def fit_ols(
       packages (the statsmodels gotcha).
     * ``effects`` is all-NaN: the classic factorial effect is the -1 -> +1 coded swing
       (``2 x coefficient``), which has no meaning for blending coefficients on proportions.
+
+    Examples:
+        Fit a factorial design from a response column attached to the design.
+
+        >>> from doe import ContinuousFactor, FactorSet, fit_ols, full_factorial
+        >>> factors = FactorSet([
+        ...     ContinuousFactor("temperature", 40, 80),
+        ...     ContinuousFactor("time", 5, 15),
+        ... ])
+        >>> design = full_factorial(factors)
+        >>> coded = design.coded()
+        >>> response = 50 + 3 * coded["temperature"] + 2 * coded["time"]
+        >>> fit = fit_ols(design.with_response("yield", response), "yield", interactions=False)
+        >>> fit.term_names
+        ['Intercept', 'temperature', 'time']
+        >>> fit.coefficients.round(6).tolist()
+        [50.0, 3.0, 2.0]
+        >>> fit.effects.round(6).tolist()
+        [50.0, 6.0, 4.0]
+
+        Use the named Scheffé models for all-mixture designs.
+
+        >>> import pandas as pd
+        >>> from doe import Design, MixtureFactor
+        >>> blend_factors = FactorSet([MixtureFactor("A"), MixtureFactor("B")])
+        >>> blend = Design(pd.DataFrame({"A": [1.0, 0.0, 0.5], "B": [0.0, 1.0, 0.5]}),
+        ...                blend_factors)
+        >>> blend_fit = fit_ols(blend, [12.0, 18.0, 15.0], model="scheffe-linear")
+        >>> blend_fit.term_names
+        ['A', 'B']
+        >>> blend_fit.coefficients.round(6).tolist()
+        [12.0, 18.0]
     """
     if model is not None:
         if model not in _MODEL_SPECS:

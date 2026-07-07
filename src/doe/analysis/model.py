@@ -18,7 +18,17 @@ _Encoding = list[tuple[str, np.ndarray]]
 
 @dataclass
 class ModelMatrix:
-    """A model matrix: the intercept plus requested term columns, in coded units."""
+    """A model matrix: the intercept plus requested term columns, in coded units.
+
+    Examples:
+        >>> import numpy as np
+        >>> matrix = ModelMatrix(
+        ...     np.array([[1.0, -1.0], [1.0, 1.0]]),
+        ...     ["Intercept", "temperature"],
+        ... )
+        >>> matrix.as_frame().to_dict("list")
+        {'Intercept': [1.0, 1.0], 'temperature': [-1.0, 1.0]}
+    """
 
     X: np.ndarray
     term_names: list[str]
@@ -91,6 +101,20 @@ def coded_design_points(design: Design) -> np.ndarray:
     evenly spaced candidate-region coordinates as :func:`expand_coded_points`, so a
     label-bearing :class:`Design` and a numeric candidate region can be stacked and expanded
     through one term layout.
+
+    Examples:
+        >>> import pandas as pd
+        >>> from doe import CategoricalFactor, ContinuousFactor, Design, FactorSet
+        >>> factors = FactorSet([
+        ...     ContinuousFactor("temperature", 40, 80),
+        ...     CategoricalFactor("catalyst", ("A", "B", "C")),
+        ... ])
+        >>> design = Design(
+        ...     pd.DataFrame({"temperature": [40, 80], "catalyst": ["A", "C"]}),
+        ...     factors,
+        ... )
+        >>> coded_design_points(design).tolist()
+        [[-1.0, -1.0], [1.0, 1.0]]
     """
     coded = design.coded()
     cols: list[np.ndarray] = []
@@ -152,6 +176,44 @@ def build_model_matrix(design: Design, order: int = 1, interactions: bool = True
     no intercept, ``order`` selects linear vs quadratic blending, and ``interactions`` is
     ignored (mixture cross products are part of the quadratic blending model, not an
     independent choice).
+
+    Examples:
+        Build a main-effects-plus-interaction model for a mixed continuous/categorical
+        design. The categorical factor is effect-coded before forming the interaction.
+
+        >>> import pandas as pd
+        >>> from doe import CategoricalFactor, ContinuousFactor, Design, FactorSet
+        >>> factors = FactorSet([
+        ...     ContinuousFactor("temperature", 40, 80),
+        ...     CategoricalFactor("catalyst", ("A", "B")),
+        ... ])
+        >>> design = Design(
+        ...     pd.DataFrame({
+        ...         "temperature": [40, 80, 40, 80],
+        ...         "catalyst": ["A", "A", "B", "B"],
+        ...     }),
+        ...     factors,
+        ... )
+        >>> build_model_matrix(design).term_names
+        ['Intercept', 'temperature', 'catalyst[B]', 'temperature:catalyst[B]']
+
+        A center point creates a continuous squared term when ``order=2``.
+
+        >>> center = Design(pd.DataFrame({"temperature": [40, 60, 80]}), FactorSet([
+        ...     ContinuousFactor("temperature", 40, 80),
+        ... ]))
+        >>> build_model_matrix(center, order=2, interactions=False).term_names
+        ['Intercept', 'temperature', 'temperature^2']
+
+        Mixture designs use the Scheffé no-intercept form directly on proportions.
+
+        >>> from doe import MixtureFactor
+        >>> blend = Design(pd.DataFrame({"A": [1.0, 0.5], "B": [0.0, 0.5]}), FactorSet([
+        ...     MixtureFactor("A"),
+        ...     MixtureFactor("B"),
+        ... ]))
+        >>> build_model_matrix(blend, order=2).term_names
+        ['A', 'B', 'A:B']
     """
     coded = design.coded()
     if design.factors.is_mixture:
@@ -220,6 +282,19 @@ def expand_coded_points(
     mixed continuous/categorical designs and candidate regions share one term layout.
     ``points`` is ordered to match ``factors``; columns line up with
     ``build_model_matrix(design, order, interactions)``.
+
+    Examples:
+        >>> import numpy as np
+        >>> from doe import CategoricalFactor, ContinuousFactor, FactorSet
+        >>> factors = FactorSet([
+        ...     ContinuousFactor("temperature", 40, 80),
+        ...     CategoricalFactor("catalyst", ("A", "B")),
+        ... ])
+        >>> points = np.array([[-1.0, -1.0], [1.0, 1.0]])
+        >>> expand_coded_points(points, factors).term_names
+        ['Intercept', 'temperature', 'catalyst[B]', 'temperature:catalyst[B]']
+        >>> expand_coded_points(points, factors).X.tolist()
+        [[1.0, -1.0, -1.0, 1.0], [1.0, 1.0, 1.0, 1.0]]
     """
     points = np.asarray(points, dtype=float)
     if points.ndim != 2:
