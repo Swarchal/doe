@@ -126,10 +126,15 @@ gfp = np.array([22, 20, 24,    # low DNA,  low lipid
 
 # replicate each condition 3x (consecutively) to line up with the triplicates above.
 # `each=True` keeps a condition's replicates together; the default repeats the whole
-# design instead. Prefer this over stacking the runs frame by hand -- it can't misalign.
+# design instead.
 rep = design.replicate(3, each=True)
 
-result = fit_ols(rep, gfp, model="linear")
+# attach the readout as a column: `with_response` checks it has one value per run (12 == 12),
+# so it can't silently misalign, and the values ride along with their runs from here on.
+# Then fit by column name instead of passing a bare array.
+rep = rep.with_response("gfp", gfp)
+
+result = fit_ols(rep, "gfp", model="linear")
 print(result.summary())
 # {term: (coefficient, effect)}
 # {
@@ -455,7 +460,6 @@ structure here your model isn't capturing" — usually a cue to add quadratic te
 ```python
 import numpy as np
 from doe import ContinuousFactor, central_composite, fit_ols
-from doe.analysis import lack_of_fit
 
 dna   = ContinuousFactor("dna_ng",   100, 500)
 lipid = ContinuousFactor("lipid_uL", 0.5, 2.5)
@@ -470,7 +474,7 @@ print(design.n_runs, design.n_center)   # 12 4
 y = np.array([30.3, 37.0, 46.8, 66.9, 38.0, 60.7,
               47.1, 60.7, 60.0, 59.1, 60.9, 60.8])
 result = fit_ols(design, y, model="quadratic")
-lof = lack_of_fit(result, design, y)
+lof = result.lack_of_fit()   # the fit remembers the design + response it came from
 print(f"F = {lof.f_stat:.3f}, p = {lof.p_value:.4f}")   # F = 1.583, p = 0.3576
 ```
 
@@ -778,10 +782,8 @@ the residual: a large F — and the small p-value that goes with it — means th
 far more variation than noise alone would.
 
 ```python
-from doe.analysis import anova_table
-
 # res_ccd is the quadratic fit from Vignette 7
-tbl = anova_table(res_ccd, design, y)
+tbl = res_ccd.anova()   # same table as anova_table(res_ccd, design, y), no re-passing
 print(tbl)
 #                    SS  df     MS      F          p
 # dna_ng          795.8   1  795.8  880.4  9.716e-08
@@ -854,11 +856,13 @@ The cleanest demonstration is to fit the _wrong_ model to the Vignette 7 dome da
 (linear) model that ignores curvature — and compare it to the right (quadratic) one:
 
 ```python
-from doe.analysis import adjusted_r2, predicted_r2, press
-
 res_lin  = fit_ols(design, y, model="linear")     # flat: no squared terms
 res_quad = fit_ols(design, y, model="quadratic")  # the Vignette 7 fit
 
+# each metric is a method on the fit -- no need to re-pass the design or response
+for name, res in [("linear", res_lin), ("quadratic", res_quad)]:
+    print(f"{name:10} {res.r_squared:.4f}  {res.adjusted_r2():.4f}  "
+          f"{res.predicted_r2():.4f}  {res.press():.1f}")
 #               R²      adj R²    pred R²    PRESS
 # linear      0.7017    0.5898    -0.3591   2155.3
 # quadratic   0.9966    0.9937     0.9835     26.2
@@ -1608,9 +1612,7 @@ linear terms collapse into a single **Linear blending** row (`k − 1` df), then
 cross product:
 
 ```python
-from doe import anova_table
-
-anova_table(result, meas, gloss).round(3)
+result.anova().round(3)   # the fluent form of anova_table(result, meas, gloss)
 #                       SS   df       MS         F      p
 # Linear blending  482.269  2.0  241.134  4114.405  0.011
 # water:ethanol     35.389  1.0   35.389   603.836  0.026
@@ -1680,9 +1682,9 @@ bounded region, `fit_ols(..., model="scheffe-quadratic")` for the blending model
 | Quantify main effects & interactions          | `full_factorial` + `fit_ols` + `pareto_plot` / `interaction_plot` | I |
 | See which factors matter (cheap, many inputs) | `fractional_factorial` / `plackett_burman` + `half_normal_plot` | II |
 | Locate an optimum on a curved surface         | `central_composite` / `box_behnken` + `contour_plot` | III |
-| Test whether effects are real, not just big   | `anova_table`, `FitResult.conf_int`                  | IV |
-| Check the model is trustworthy                | `residuals_vs_fitted`, `normal_qq`, `predicted_vs_actual`, `lack_of_fit` | IV |
-| Guard against over-fitting (choose a model)   | `adjusted_r2`, `predicted_r2` (Q²), `press`          | IV |
+| Test whether effects are real, not just big   | `FitResult.anova`, `FitResult.conf_int`              | IV |
+| Check the model is trustworthy                | `residuals_vs_fitted`, `normal_qq`, `predicted_vs_actual`, `FitResult.lack_of_fit` | IV |
+| Guard against over-fitting (choose a model)   | `FitResult.adjusted_r2`, `FitResult.predicted_r2` (Q²), `FitResult.press` | IV |
 | Pinpoint & classify the optimum exactly       | `stationary_point` (canonical analysis), `surface_plot` | V |
 | Find the best _feasible_ setting in bounds    | `optimum` (reports `at_bound`)                       | V |
 | Balance several readouts at once              | `desirability` + `ResponseGoal`                      | V |

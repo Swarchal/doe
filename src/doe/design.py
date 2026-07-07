@@ -102,6 +102,33 @@ class Design:
                 out[factor.name] = col.to_numpy()
         return pd.DataFrame(out, index=self.runs.index)
 
+    def with_response(self, name: str, values: object) -> Design:
+        """Return a copy with a measured response attached as a column of ``runs``.
+
+        Keeping the response *on* the design is what stops it silently drifting out of
+        alignment with the runs: the length is checked once here, and from then on the values
+        ride along with their runs through :meth:`replicate` and :meth:`randomize` (which
+        reindex every column together). Pass the resulting design straight to
+        :func:`~doe.analysis.fit.fit_ols` by column name -- ``fit_ols(design, name)``.
+
+        ``values`` must have exactly :attr:`n_runs` entries; a mismatch raises rather than
+        producing a plausible-but-wrong fit. The original design is left unchanged (Designs are
+        value objects), and ``name`` must not collide with a factor column.
+        """
+        if name in self.factors.names:
+            raise ValueError(f"response name {name!r} collides with a factor column")
+        col = np.asarray(values)
+        if col.ndim != 1:
+            raise ValueError("response values must be one-dimensional")
+        if col.shape[0] != self.n_runs:
+            raise ValueError(
+                f"response {name!r} has {col.shape[0]} values but there are "
+                f"{self.n_runs} runs"
+            )
+        runs = self.runs.copy()
+        runs[name] = col
+        return Design(runs, self.factors, self.name, dict(self.meta), self.point_types)
+
     def replicate(self, n: int, *, each: bool = False) -> Design:
         """Return a copy with every run replicated ``n`` times.
 

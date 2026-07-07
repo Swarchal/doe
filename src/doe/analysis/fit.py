@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import warnings
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
+import pandas as pd
 from scipy import stats
 
 from ..design import Design
@@ -14,6 +16,7 @@ from ..factors import FactorSet
 from .model import build_model_matrix
 
 if TYPE_CHECKING:
+    from .anova import LackOfFit
     from .optimize import Bounds, Optimum, StationaryPoint
 
 ModelSpec = Literal["linear", "quadratic", "scheffe-linear", "scheffe-quadratic"]
@@ -47,6 +50,87 @@ class FitResult:
     factors: FactorSet
     order: int
     interactions: bool
+    #: The design this result was fitted from (``None`` when constructed directly, not via
+    #: :func:`fit_ols`). The fluent post-fit methods need it.
+    design: Design | None = None
+    #: The resolved response array the fit used, aligned to the design's runs (``None`` when
+    #: constructed directly). Stashed so :meth:`anova`/:meth:`lack_of_fit` need no re-passing.
+    response: np.ndarray | None = None
+
+    def _require_source(self) -> tuple[Design, np.ndarray]:
+        """Return the stashed ``(design, response)`` or explain why they are missing."""
+        if self.design is None or self.response is None:
+            raise ValueError(
+                "this method needs a FitResult produced by fit_ols (which stashes the "
+                "originating design and response); this result was constructed directly"
+            )
+        return self.design, self.response
+
+    def anova(self) -> pd.DataFrame:
+        """Sequential (Type I) ANOVA table for this fit (see :func:`analysis.anova`)."""
+        from . import anova
+
+        design, response = self._require_source()
+        return anova.anova_table(self, design, response)
+
+    def lack_of_fit(self) -> LackOfFit:
+        """Lack-of-fit test against pure error (see :func:`analysis.anova.lack_of_fit`)."""
+        from . import anova
+
+        design, response = self._require_source()
+        return anova.lack_of_fit(self, design, response)
+
+    def press(self) -> float:
+        """PRESS statistic from leave-one-out residuals (see :func:`analysis.anova.press`)."""
+        from . import anova
+
+        return anova.press(self)
+
+    def predicted_r2(self) -> float:
+        """Predicted R-squared / Q-squared (see :func:`analysis.anova.predicted_r2`)."""
+        from . import anova
+
+        return anova.predicted_r2(self)
+
+    def adjusted_r2(self) -> float:
+        """Adjusted R-squared (see :func:`analysis.anova.adjusted_r2`)."""
+        from . import anova
+
+        return anova.adjusted_r2(self)
+
+    def predict(self, points: Mapping[str, object] | pd.DataFrame | Design) -> np.ndarray:
+        """Predict responses at new runs given in *natural* units.
+
+        ``points`` is a mapping (column name -> scalar or array), a :class:`pandas.DataFrame`,
+        or a :class:`~doe.design.Design`. Its factor columns are coded through the stored
+        :class:`~doe.factors.FactorSet` and expanded with the *same* term structure the fit used
+        (``order``/``interactions`` and, for a mixture fit, the Scheffé blending path), then dotted
+        with the fitted coefficients.
+
+        The expanded columns are aligned to the fit's ``term_names`` *by name* before the dot
+        product: :func:`~doe.analysis.model.expand_coded_points` only emits a squared term once a
+        column takes a value off ``+/-1``, so new points sitting entirely on the cube corners would
+        otherwise silently drop terms and misalign. A required term the new points cannot produce
+        raises rather than returning a wrong number.
+        """
+        from ..design import Design as _Design
+        from .model import coded_design_points, expand_coded_points
+
+        frame = _points_to_frame(points, self.factors.names)
+        design = _Design(frame, self.factors)
+        coded_points = coded_design_points(design)
+        mm = expand_coded_points(
+            coded_points, self.factors, order=self.order, interactions=self.interactions
+        )
+        available = dict(zip(mm.term_names, mm.X.T, strict=True))
+        missing = [term for term in self.term_names if term not in available]
+        if missing:
+            raise ValueError(
+                f"the supplied points do not produce required model term(s) {missing}; "
+                "predict cannot align them to the fitted coefficients"
+            )
+        x_aligned = np.column_stack([available[term] for term in self.term_names])
+        return np.asarray(x_aligned @ self.coefficients, dtype=float)
 
     def summary(self) -> dict[str, tuple[float, float]]:
         """Map each term to ``(coefficient, effect)``."""
@@ -81,15 +165,50 @@ class FitResult:
         return optimum(self, maximize=maximize, bounds=bounds)
 
 
+def _points_to_frame(
+    points: Mapping[str, object] | pd.DataFrame | Design, names: list[str]
+) -> pd.DataFrame:
+    """Coerce ``predict`` input to a natural-unit frame with the factor columns present."""
+    if isinstance(points, Design):
+        frame: pd.DataFrame | None = points.runs
+        mapping: dict[str, Any] = {}
+    elif isinstance(points, pd.DataFrame):
+        frame = points
+        mapping = {}
+    else:
+        frame = None
+        mapping = dict(points)
+
+    source_keys = frame.columns if frame is not None else mapping.keys()
+    missing = [name for name in names if name not in source_keys]
+    if missing:
+        raise ValueError(f"points missing factor column(s) {missing}")
+
+    if frame is not None:
+        return frame.loc[:, names].reset_index(drop=True)
+
+    # mapping path: broadcast scalars against any array-valued columns of a shared length
+    arrays: dict[str, np.ndarray] = {name: np.asarray(mapping[name]) for name in names}
+    lengths = {arr.shape[0] for arr in arrays.values() if arr.ndim > 0}
+    if len(lengths) > 1:
+        raise ValueError(f"array-valued columns must share a length; got lengths {sorted(lengths)}")
+    n = lengths.pop() if lengths else 1
+    return pd.DataFrame({name: np.broadcast_to(arr, n) for name, arr in arrays.items()})
+
+
 def fit_ols(
     design: Design,
-    response: np.ndarray,
+    response: np.ndarray | str,
     *,
     order: int = 1,
     interactions: bool = True,
     model: ModelSpec | None = None,
 ) -> FitResult:
     """Fit an OLS model in coded units and return coefficients and factor effects.
+
+    ``response`` is either the measured values (array-like, aligned to the runs) or the *name*
+    of a response column already on the design -- the pairing produced by
+    :meth:`Design.with_response`, which is the safer path since it cannot silently misalign.
 
     In coded (+/-1) units the *effect* of a term is twice its regression coefficient --
     the change in response moving a factor from -1 to +1.
@@ -119,6 +238,14 @@ def fit_ols(
                 "(every factor a MixtureFactor)"
             )
         order, interactions = _MODEL_SPECS[model]
+
+    if isinstance(response, str):
+        if response not in design.runs.columns:
+            raise ValueError(
+                f"no response column {response!r} on the design; "
+                f"available columns: {list(design.runs.columns)}"
+            )
+        response = design.runs[response].to_numpy()
 
     y = np.asarray(response, dtype=float)
     if y.shape[0] != design.n_runs:
@@ -193,4 +320,6 @@ def fit_ols(
         design.factors,
         order,
         interactions,
+        design,
+        y,
     )

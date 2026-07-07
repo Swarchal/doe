@@ -151,3 +151,66 @@ def test_randomize_seed_reproduces_run_order():
     b = design.randomize(seed=7)
     assert a.runs["std_order"].tolist() == b.runs["std_order"].tolist()
     assert a.runs[["a", "b"]].equals(b.runs[["a", "b"]])
+
+
+# --------------------------------------------------------------------------- #
+# with_response -- attaching a measured response as a column
+# --------------------------------------------------------------------------- #
+
+
+def test_with_response_appends_column_without_mutating_original():
+    design = _factorial_2x2()
+    y = np.array([1.0, 2.0, 3.0, 4.0])
+    withy = design.with_response("yield", y)
+    assert "yield" not in design.runs.columns  # original untouched
+    assert withy.runs["yield"].tolist() == [1.0, 2.0, 3.0, 4.0]
+    assert withy.factors is design.factors
+
+
+def test_with_response_rejects_length_mismatch():
+    design = _factorial_2x2()
+    with pytest.raises(ValueError, match="3 values but there are 4 runs"):
+        design.with_response("y", np.array([1.0, 2.0, 3.0]))
+
+
+def test_with_response_rejects_factor_name_collision():
+    design = _factorial_2x2()
+    with pytest.raises(ValueError, match="collides with a factor column"):
+        design.with_response("a", np.zeros(4))
+
+
+def test_with_response_rejects_non_1d():
+    design = _factorial_2x2()
+    with pytest.raises(ValueError, match="one-dimensional"):
+        design.with_response("y", np.zeros((4, 2)))
+
+
+def test_fit_ols_accepts_response_column_name():
+    design = _factorial_2x2().replicate(2)  # residual dof > 0, no saturation warning
+    coded = design.coded().to_numpy()
+    y = 50.0 + 10.0 * coded[:, 0]
+    by_name = fit_ols(design.with_response("y", y), "y", model="linear")
+    by_array = fit_ols(design, y, model="linear")
+    assert np.allclose(by_name.coefficients, by_array.coefficients)
+
+
+def test_fit_ols_unknown_response_column_raises():
+    design = _factorial_2x2()
+    with pytest.raises(ValueError, match="no response column 'missing'"):
+        fit_ols(design, "missing")
+
+
+def test_response_survives_replicate_and_randomize():
+    design = _factorial_2x2()
+    y = np.array([10.0, 20.0, 30.0, 40.0])
+    withy = design.with_response("y", y)
+
+    # each=True groups a condition's replicates, so the response repeats in place
+    rep = withy.replicate(2, each=True)
+    assert rep.runs["y"].tolist() == [10, 10, 20, 20, 30, 30, 40, 40]
+
+    # randomize reindexes every column together, so y stays glued to its run.
+    # a==0 & b==0 is the run whose response is 10.0; find it wherever it shuffled to.
+    rand = withy.randomize(seed=3)
+    match = rand.runs[(rand.runs["a"] == 0.0) & (rand.runs["b"] == 0.0)]
+    assert match["y"].tolist() == [10.0]

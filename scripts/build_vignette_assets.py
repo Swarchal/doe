@@ -51,13 +51,6 @@ from doe import (
     to_html,
     vif,
 )
-from doe.analysis import (
-    adjusted_r2,
-    anova_table,
-    lack_of_fit,
-    predicted_r2,
-    press,
-)
 from doe.plotting import (
     alias_matrix,
     contour_plot,
@@ -115,8 +108,8 @@ gfp = np.array(
     [22, 20, 24, 31, 29, 33, 40, 38, 42, 58, 60, 62],
     dtype=float,
 )
-rep = design.replicate(3, each=True)
-result = fit_ols(rep, gfp, model="linear")
+rep = design.replicate(3, each=True).with_response("gfp", gfp)
+result = fit_ols(rep, "gfp", model="linear")
 print("\nresult.summary():")
 for k, (c, e) in result.summary().items():
     print(f"  {k!r}: (coef={c:.4g}, effect={e:.4g})")
@@ -330,7 +323,7 @@ for k, (c, e) in res_ccd.summary().items():
     print(f"  {k!r}: (coef={c:.4g}, effect={e:.4g})")
 print(f"R^2 = {res_ccd.r_squared:.4f}")
 
-lof = lack_of_fit(res_ccd, ccd, y_ccd)
+lof = res_ccd.lack_of_fit()
 print(
     f"\nlack_of_fit: F={lof.f_stat:.3f}, p_value={lof.p_value:.4f} "
     f"(df_lof={lof.df_lof}, df_pe={lof.df_pe})"
@@ -392,8 +385,8 @@ save(ax, "v9_predicted_vs_actual.png")
 # --------------------------------------------------------------------------- #
 banner("Vignette 10: ANOVA and significance")
 
-tbl = anova_table(res_ccd, ccd, y_ccd)
-print("anova_table(res_ccd, ccd, y_ccd):")
+tbl = res_ccd.anova()
+print("res_ccd.anova():")
 print(tbl.to_string(float_format=lambda v: f"{v:.4g}"))
 
 print("\nper-term (effect, t, p) and 95% CI on the coefficient:")
@@ -434,21 +427,21 @@ banner("Vignette 11: adjusted & predicted R^2")
 res_lin = fit_ols(ccd, y_ccd, model="linear")  # same data, flat (no curvature) model
 print("linear (flat) model on the CCD data:")
 print(f"  R^2           = {res_lin.r_squared:.4f}")
-print(f"  adjusted R^2  = {adjusted_r2(res_lin):.4f}")
-print(f"  predicted R^2 = {predicted_r2(res_lin):.4f}")
-print(f"  PRESS         = {press(res_lin):.2f}")
+print(f"  adjusted R^2  = {res_lin.adjusted_r2():.4f}")
+print(f"  predicted R^2 = {res_lin.predicted_r2():.4f}")
+print(f"  PRESS         = {res_lin.press():.2f}")
 print("\nquadratic model on the same data:")
 print(f"  R^2           = {res_ccd.r_squared:.4f}")
-print(f"  adjusted R^2  = {adjusted_r2(res_ccd):.4f}")
-print(f"  predicted R^2 = {predicted_r2(res_ccd):.4f}")
-print(f"  PRESS         = {press(res_ccd):.2f}")
+print(f"  adjusted R^2  = {res_ccd.adjusted_r2():.4f}")
+print(f"  predicted R^2 = {res_ccd.predicted_r2():.4f}")
+print(f"  PRESS         = {res_ccd.press():.2f}")
 
 # Figure: the three R^2 flavours side by side for the wrong (linear) vs right
 # (quadratic) model. The story is the predicted-R^2 group: the linear bar dives
 # below zero while plain R^2 still looks "passable" -- overfitting made visual.
 metrics = ["R²", "adjusted R²", "predicted R² (Q²)"]
-lin_vals = [res_lin.r_squared, adjusted_r2(res_lin), predicted_r2(res_lin)]
-quad_vals = [res_ccd.r_squared, adjusted_r2(res_ccd), predicted_r2(res_ccd)]
+lin_vals = [res_lin.r_squared, res_lin.adjusted_r2(), res_lin.predicted_r2()]
+quad_vals = [res_ccd.r_squared, res_ccd.adjusted_r2(), res_ccd.predicted_r2()]
 xpos = np.arange(len(metrics))
 width = 0.38
 fig, ax = plt.subplots(figsize=(7.4, 4.8))
@@ -514,7 +507,7 @@ res_bb = fit_ols(bb, y_bb, model="quadratic")
 print("\nquadratic fit summary():")
 for k, (c, e) in res_bb.summary().items():
     print(f"  {k!r}: (coef={c:.4g}, effect={e:.4g})")
-print(f"R^2 = {res_bb.r_squared:.4f}, predicted R^2 = {predicted_r2(res_bb):.4f}")
+print(f"R^2 = {res_bb.r_squared:.4f}, predicted R^2 = {res_bb.predicted_r2():.4f}")
 
 ax = contour_plot(res_bb, "dna_ng", "lipid_uL", fixed={"serum_pct": 10})
 save(ax, "v8_box_behnken_contour.png")
@@ -961,8 +954,8 @@ print("model matrix has no intercept column:", "Intercept" not in result.term_na
 # Mixture ANOVA: the k linear terms collapse into one "Linear blending" row (k-1 df),
 # then a 1-df row per cross product -- the textbook convention. Confirms which
 # synergy/antagonism terms are statistically real, not just large.
-mix_tbl = anova_table(result, meas, gloss)
-print("\nanova_table(result, meas, gloss):")
+mix_tbl = result.anova()
+print("\nresult.anova():")
 print(mix_tbl.round(3))
 
 # Read the best blend straight off the fitted surface: argmax over the ternary grid.
