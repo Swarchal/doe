@@ -24,6 +24,12 @@ dev = [
     "mypy>=1.10",
     "matplotlib>=3.7",
 ]
+docs = [
+    "sphinx>=7.3",
+    "furo>=2024.1.29",
+    "myst-parser>=3.0",
+    "matplotlib>=3.7",  # so autodoc can import doe.plotting members
+]
 
 [build-system]
 requires = ["hatchling"]

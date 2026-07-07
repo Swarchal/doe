@@ -45,6 +45,9 @@ coverage.xml
 .pytest_cache/
 cover/
 
+# Sphinx
+docs/_build/
+
 # mypy
 .mypy_cache/
 .dmypy.json
