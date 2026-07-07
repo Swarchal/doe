@@ -1,6 +1,6 @@
-"""Anchors for the Phase 4a space-filling generators and coverage diagnostics.
+"""Anchors for the space-filling generators and coverage diagnostics.
 
-See ``docs/PHASE4.md`` section 4 for the anchor rationale.
+See the design docs for the anchor rationale.
 """
 
 import numpy as np

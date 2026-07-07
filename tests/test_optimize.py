@@ -1,4 +1,4 @@
-"""Phase 2b: response-surface optimization.
+"""Response-surface optimization.
 
 Written test-first to document the intended API and the numbers behind each result.
 The anchors are quadratics built in coded units on a face-centered CCD (which supports

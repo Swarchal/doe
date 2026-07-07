@@ -1,4 +1,4 @@
-"""Analysis routines. Phase 1: model matrix building and OLS fitting."""
+"""Analysis routines: model matrix building and OLS fitting."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Phase 2a: response-surface contour + regression-diagnostic plots.
+"""Response-surface contour + regression-diagnostic plots.
 
 Written test-first to document the intended API and the numbers behind each plot.
 The plotting helpers lazy-import matplotlib; ``tests/conftest.py`` forces the Agg

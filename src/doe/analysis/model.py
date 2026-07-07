@@ -135,7 +135,7 @@ def coded_design_points(design: Design) -> np.ndarray:
 
 
 def _scheffe_matrix(points: np.ndarray, names: list[str], order: int) -> ModelMatrix:
-    """Scheffé blending model matrix for mixture proportions (Phase 4b).
+    """Scheffé blending model matrix for mixture proportions.
 
     Because the proportions sum to 1, an intercept would be exactly collinear with the sum
     of the linear terms, and a squared term ``x_i^2 = x_i (1 - sum_{j!=i} x_j)`` is a linear
@@ -267,7 +267,7 @@ def expand_coded_points(
     order: int = 1,
     interactions: bool = True,
 ) -> ModelMatrix:
-    """Expand an ``(m, k)`` array of coded factor points into a model matrix (Phase 3).
+    """Expand an ``(m, k)`` array of coded factor points into a model matrix.
 
     The array-based companion to :func:`build_model_matrix`: same intercept + main-effect +
     interaction (+ optional quadratic) expansion and identical ``term_names``, but operating on

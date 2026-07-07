@@ -1,11 +1,9 @@
-"""Response-surface design generators (Phase 2a).
+"""Response-surface design generators.
 
 Second-order designs that let us fit curvature:
 
     * :func:`central_composite` -- factorial core + axial/star points + center points
     * :func:`box_behnken`       -- spherical 3-level design, no corner (extreme) runs
-
-See ``docs/PHASE2.md`` for the design rationale and ``tests/test_rsm.py`` for anchors.
 """
 
 from __future__ import annotations

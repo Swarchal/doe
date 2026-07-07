@@ -1,4 +1,4 @@
-"""Phase 2a: quadratic fitting, inference, and ANOVA / lack-of-fit.
+"""Quadratic fitting, inference, and ANOVA / lack-of-fit.
 
 Written test-first to document the intended API and expected numbers. A face-centered
 CCD supports the full second-order model, so we anchor against a known quadratic.

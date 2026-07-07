@@ -1,4 +1,4 @@
-"""Phase 3b: optimal designs via coordinate exchange (D-/I-optimal, augment)."""
+"""Optimal designs via coordinate exchange (D-/I-optimal, augment)."""
 
 import numpy as np
 import pytest

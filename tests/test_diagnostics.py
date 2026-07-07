@@ -1,4 +1,4 @@
-"""Phase 3a: design diagnostics (information matrix, VIF, leverage, correlation, efficiency)."""
+"""Design diagnostics (information matrix, VIF, leverage, correlation, efficiency)."""
 
 import numpy as np
 import pytest

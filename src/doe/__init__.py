@@ -1,7 +1,7 @@
 """DoE -- a Python library for design-of-experiment analysis.
 
-Phase 1 public API: factor definitions, the Design container, factorial generators,
-and OLS analysis. See ``docs/PLAN.md`` for the full roadmap.
+Public API: factor definitions, the Design container, factorial generators, and
+OLS analysis. See ``docs/PLAN.md`` for the full roadmap.
 """
 
 from __future__ import annotations

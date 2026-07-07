@@ -1,4 +1,4 @@
-"""Mixture design generators (Phase 4b).
+"""Mixture design generators.
 
 Designs for formulation problems where the factors are *proportions of a whole* and every
 run must sum to 1 -- the design region is a simplex, not a box:
@@ -6,13 +6,13 @@ run must sum to 1 -- the design region is a simplex, not a box:
     * :func:`simplex_lattice`     -- the ``{k, m}`` lattice over unconstrained components
     * :func:`simplex_centroid`    -- the ``2^k - 1`` subset centroids
     * :func:`extreme_vertices`    -- vertices (+ centroid) of a bound-constrained simplex
-    * :func:`mixture_candidates`  -- a discrete candidate set feeding Phase 3's
+    * :func:`mixture_candidates`  -- a discrete candidate set feeding
       :func:`~doe.generators.optimal.coordinate_exchange` for D-optimal mixture designs
 
 All generators require an all-:class:`~doe.factors.MixtureFactor` factor set and return a
 :class:`~doe.design.Design` whose rows sum to 1. Proportions pass through
 ``Design.coded()`` unchanged; analysis uses Scheffé blending models (see
-:func:`doe.analysis.model.build_model_matrix`). See ``docs/PHASE4.md`` for the build plan.
+:func:`doe.analysis.model.build_model_matrix`).
 """
 
 from __future__ import annotations

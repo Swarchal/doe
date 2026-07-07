@@ -1,4 +1,4 @@
-"""ANOVA, lack-of-fit, and predictive R-squared for fitted models (Phase 2a).
+"""ANOVA, lack-of-fit, and predictive R-squared for fitted models.
 
 Implemented in-house with sequential (Type I) sums of squares, computed from a QR
 orthogonalisation of the model matrix (numerically stabler than repeated normal-equation

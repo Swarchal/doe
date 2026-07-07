@@ -1,4 +1,4 @@
-"""Phase 2b: response-surface optimization.
+"""Response-surface optimization.
 
 A fitted second-order model is written in coded units as a quadratic form
 

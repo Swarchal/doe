@@ -1,14 +1,12 @@
-"""Design diagnostics (Phase 3a) -- evaluate *any* design against a model.
+"""Design diagnostics -- evaluate *any* design against a model.
 
-Phases 1-2 produced *named* designs (factorial, Plackett-Burman, CCD, Box-Behnken).
 These functions judge a design -- however it was made -- against a model: the information
 matrix and its scalars, variance inflation, leverage, the alias/correlation matrix, and
 D/A/G/I-efficiency relative to an orthogonal reference.
 
 Everything here is headless (``slogdet``/``inv``/SVD/QR on the existing coded model
 matrix). The cores feed both the plotting wrappers and the coordinate-exchange engine in
-:mod:`doe.generators.optimal` (whose D-objective *is* :func:`log_det_information`). See
-``docs/PHASE3.md`` for the build plan.
+:mod:`doe.generators.optimal` (whose D-objective *is* :func:`log_det_information`).
 """
 
 from __future__ import annotations

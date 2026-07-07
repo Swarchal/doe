@@ -1,4 +1,4 @@
-"""Design generators. Phase 1: factorial designs."""
+"""Design generators."""
 
 from __future__ import annotations
 

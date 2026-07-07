@@ -1,4 +1,4 @@
-"""Factorial design generators (Phase 1).
+"""Factorial design generators.
 
 Implemented:
     * :func:`full_factorial`       -- general full factorial in coded levels

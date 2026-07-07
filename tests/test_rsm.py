@@ -1,4 +1,4 @@
-"""Phase 2a: response-surface design generators (CCD + Box-Behnken).
+"""Response-surface design generators (CCD + Box-Behnken).
 
 Written test-first to document the intended API and the expected run structures.
 Correctness anchors follow Montgomery's RSM chapters (run counts, axial distances).

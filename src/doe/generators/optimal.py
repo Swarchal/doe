@@ -1,4 +1,4 @@
-"""Optimal (computer-generated) designs via coordinate exchange (Phase 3b).
+"""Optimal (computer-generated) designs via coordinate exchange.
 
 Where the named recipes (factorial, CCD, Box-Behnken) produce a fixed run set for a fixed
 model, the coordinate-exchange engine here *builds* a run set to maximise a chosen criterion
@@ -10,7 +10,7 @@ The engine's objective is a diagnostic: ``criterion="D"`` maximises
 :func:`~doe.analysis.diagnostics.log_det_information`; ``criterion="I"`` minimises the average
 prediction variance over the region. Generators return a plain :class:`~doe.design.Design`
 (so ``coded()``/fitting/ANOVA/plots work unchanged) with the search diagnostics stashed in
-``design.meta``. See ``docs/PHASE3.md`` for the algorithm and correctness anchors.
+``design.meta``.
 """
 
 from __future__ import annotations

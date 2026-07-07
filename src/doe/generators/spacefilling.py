@@ -1,4 +1,4 @@
-"""Space-filling design generators (Phase 4a).
+"""Space-filling design generators.
 
 Designs that target *coverage* of the region rather than efficient estimation of a fixed
 polynomial model -- for computer experiments, surrogate modelling, and exploratory
@@ -13,8 +13,6 @@ coded ``[-1, +1]`` and decoded to natural units, so the returned :class:`~doe.de
 flows through the rest of the library unchanged. Continuous factors only. Coverage is judged
 by :func:`doe.analysis.diagnostics.discrepancy` and
 :func:`doe.analysis.diagnostics.maximin_distance`.
-
-See ``docs/PHASE4.md`` for the build plan and ``tests/test_spacefilling.py`` for anchors.
 """
 
 from __future__ import annotations

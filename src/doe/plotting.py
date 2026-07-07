@@ -1,4 +1,4 @@
-"""Plotting helpers (Phase 1: main-effects and Pareto-of-effects).
+"""Plotting helpers (main-effects and Pareto-of-effects).
 
 Importing this module requires the optional ``matplotlib`` dependency
 (``pip install 'doe[plotting]'``).
@@ -223,7 +223,7 @@ def surface_plot(
     resolution: int = 25,
     cmap: str = "viridis",
 ) -> Axes:
-    """3-D surface of the fitted response over two factors (Phase 2b companion to contour_plot).
+    """3-D surface of the fitted response over two factors (companion to contour_plot).
 
     Reuses :func:`surface_grid` for the natural-unit mesh. Requires matplotlib's ``mplot3d``
     (bundled with matplotlib); passing your own ``ax`` requires a 3-D projection axes.

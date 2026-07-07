@@ -1,6 +1,6 @@
-"""Anchors for Phase 4b mixture designs and Scheffé blending analysis.
+"""Anchors for mixture designs and Scheffé blending analysis.
 
-See ``docs/PHASE4.md`` section 4 for the anchor rationale. The published references are
+The published references are
 Cornell's *Experiments with Mixtures* (yarn-elongation `{3, 2}` lattice fit) and the
 McLean-Anderson (1966) railroad-flare extreme-vertices example.
 """
