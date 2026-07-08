@@ -15,9 +15,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 
-from doe import ContinuousFactor, central_composite, fit_ols, vif
+from doe import ContinuousFactor, central_composite, fit_ols
 from doe.plotting import (
     contour_plot,
     pareto_plot,
@@ -126,8 +125,7 @@ print(f"R2={fit.r_squared:.3f}")
 print(f"adjusted R2={fit.adjusted_r2():.3f}")
 print(f"predicted R2={fit.predicted_r2():.3f}")
 
-summary = pd.DataFrame(fit.summary(), index=["coefficient", "effect"]).T
-print(summary.round(2))
+print(fit.summary().round(2))
 
 # Figure: a Pareto plot ranks the fitted terms by magnitude, so the dominant
 # main effects and curvature stand out from the near-zero interactions.
@@ -144,7 +142,7 @@ banner("Section 5: model checks")
 print(fit.anova().round(3))
 lof = fit.lack_of_fit()
 print(f"lack-of-fit p={lof.p_value:.3f}")
-print(vif(fit.model_matrix, term_names=fit.term_names).round(2))
+print(fit.vif().round(2))
 
 # Figure: the two headline goodness checks side by side. Predicted-vs-actual should
 # hug the 45-degree line; residuals-vs-fitted should be a structureless band.
@@ -164,9 +162,9 @@ optimum = fit.optimum(maximize=True)
 print(stationary)
 print(optimum)
 
-confirmation = pd.DataFrame([optimum.natural]).round(2)
+confirmation = optimum.to_frame().round(2)
 print(confirmation)
-print(fit.predict(optimum.natural).round(2))
+print(round(fit.predict(optimum.natural), 2))
 
 # Figure: the fitted surface over temperature x time at the optimal catalyst loading,
 # with the recommended operating point (and its confirmation setting) marked. This is

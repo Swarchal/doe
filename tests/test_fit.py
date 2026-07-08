@@ -2,12 +2,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from doe.analysis import anova
+from doe.analysis import anova, diagnostics
 from doe.analysis.fit import FitResult, fit_ols
 from doe.analysis.model import build_model_matrix
 from doe.factors import CategoricalFactor, ContinuousFactor, FactorSet, MixtureFactor
 from doe.generators.factorial import full_factorial
 from doe.generators.mixture import simplex_lattice
+from doe.generators.rsm import central_composite
 
 
 def test_fit_recovers_known_effects():
@@ -22,11 +23,11 @@ def test_fit_recovers_known_effects():
     result = fit_ols(design, y, order=1, interactions=True)
     summary = result.summary()
 
-    assert np.isclose(summary["Intercept"][0], 10.0)
+    assert np.isclose(summary.loc["Intercept", "coefficient"], 10.0)
     # effect = 2 * coefficient in coded units
-    assert np.isclose(summary["a"][1], 6.0)
-    assert np.isclose(summary["b"][1], 4.0)
-    assert np.isclose(summary["a:b"][1], 3.0)
+    assert np.isclose(summary.loc["a", "effect"], 6.0)
+    assert np.isclose(summary.loc["b", "effect"], 4.0)
+    assert np.isclose(summary.loc["a:b", "effect"], 3.0)
     assert np.isclose(result.r_squared, 1.0)
 
 
@@ -45,9 +46,9 @@ def test_fit_recovers_effects_with_categorical_factor():
     summary = result.summary()
 
     for name, coef in beta.items():
-        assert np.isclose(summary[name][0], coef)
+        assert np.isclose(summary.loc[name, "coefficient"], coef)
     # effect = 2 * coefficient holds for the 2-level categorical contrast too
-    assert np.isclose(summary["catalyst[B]"][1], 4.0)
+    assert np.isclose(summary.loc["catalyst[B]", "effect"], 4.0)
     assert np.isclose(result.r_squared, 1.0)
 
 
@@ -158,18 +159,56 @@ def test_predict_single_point_as_scalar_dict():
     design, y = _replicated_design_and_response()
     result = fit_ols(design, y)
     pred = result.predict({"a": 5.0, "b": 5.0})  # coded center -> intercept
-    assert pred.shape == (1,)
-    assert pred[0] == pytest.approx(result.coefficients[0])
+    assert isinstance(pred, float)
+    assert pred == pytest.approx(result.coefficients[0])
 
 
-def test_predict_raises_when_a_required_term_cannot_be_produced():
-    # a quadratic fit needs an "a^2" column; scoring only cube-corner points can't emit it
+def test_predict_scalar_dict_matches_array_path():
+    design, y = _replicated_design_and_response()
+    result = fit_ols(design, y)
+    scalar = result.predict({"a": 10.0, "b": 5.0})
+    batched = result.predict({"a": [10.0], "b": [5.0]})
+    assert isinstance(scalar, float)
+    assert isinstance(batched, np.ndarray)
+    assert scalar == pytest.approx(batched[0])
+
+
+def test_predict_dataframe_and_design_stay_arrays():
+    design, y = _replicated_design_and_response()
+    result = fit_ols(design, y)
+    assert isinstance(result.predict(design), np.ndarray)
+    assert isinstance(result.predict(design.runs), np.ndarray)
+
+
+def test_predict_single_corner_point_quadratic():
+    # a lone cube-corner point (coded +/-1 on every factor) can't trigger the off-+/-1
+    # heuristic expand_coded_points normally uses to decide whether to emit a squared
+    # column; predict must still produce the right answer for a quadratic fit.
     factors = [ContinuousFactor("a", 0, 10), ContinuousFactor("b", 0, 10)]
-    design = full_factorial(factors, levels=3)
-    y = np.arange(design.n_runs, dtype=float)
+    design = central_composite(factors)
+    coded = design.coded().to_numpy()
+    a, b = coded[:, 0], coded[:, 1]
+    y = 5 + 2 * a - b + 1.5 * a * b - 0.7 * a**2 + 0.4 * b**2
     result = fit_ols(design, y, model="quadratic")
-    with pytest.raises(ValueError, match="required model term"):
-        result.predict({"a": [0.0, 10.0], "b": [0.0, 10.0]})
+
+    corner = result.predict({"a": 10.0, "b": 10.0})
+    assert isinstance(corner, float)
+
+    # manual evaluation at coded (1, 1) using the fit's own recovered coefficients
+    beta = result.summary()["coefficient"]
+    expected = (
+        beta["Intercept"]
+        + beta["a"] * 1.0
+        + beta["b"] * 1.0
+        + beta["a:b"] * 1.0
+        + beta["a^2"] * 1.0
+        + beta["b^2"] * 1.0
+    )
+    assert corner == pytest.approx(expected)
+
+    # must agree with the old workaround of batching the corner with an interior point
+    batched = result.predict({"a": [10.0, 5.0], "b": [10.0, 5.0]})
+    assert batched[0] == pytest.approx(corner)
 
 
 def test_predict_honors_scheffe_mixture_path():
@@ -210,3 +249,84 @@ def test_fluent_methods_require_a_fit_ols_result():
         result.anova()
     with pytest.raises(ValueError, match="produced by fit_ols"):
         result.lack_of_fit()
+
+
+# --------------------------------------------------------------------------- #
+# summary() / conf_int() as labeled frames
+# --------------------------------------------------------------------------- #
+
+
+def test_summary_returns_frame_with_expected_shape_and_columns():
+    design, y = _replicated_design_and_response()
+    result = fit_ols(design, y)
+    summary = result.summary()
+
+    assert isinstance(summary, pd.DataFrame)
+    assert list(summary.index) == result.term_names
+    assert list(summary.columns) == ["coefficient", "effect", "std_error", "t", "p"]
+    assert np.allclose(summary["coefficient"].to_numpy(), result.coefficients)
+    assert np.allclose(summary["effect"].to_numpy(), result.effects)
+    assert np.allclose(summary["std_error"].to_numpy(), result.std_errors)
+    assert np.allclose(summary["t"].to_numpy(), result.t_values)
+    assert np.allclose(summary["p"].to_numpy(), result.p_values)
+
+
+def test_conf_int_returns_frame_matching_manual_computation():
+    factors = [ContinuousFactor("a", 0, 10), ContinuousFactor("b", 0, 10)]
+    design = central_composite(factors, center=5)
+    rng = np.random.default_rng(1)
+    coded = design.coded().to_numpy()
+    a, b = coded[:, 0], coded[:, 1]
+    y = 50 + 3 * a - 2 * b + rng.normal(scale=0.5, size=design.n_runs)
+    result = fit_ols(design, y, model="quadratic")
+
+    ci = result.conf_int(level=0.95)
+    assert isinstance(ci, pd.DataFrame)
+    assert list(ci.index) == result.term_names
+    assert list(ci.columns) == ["lower", "upper"]
+    assert np.all(ci["lower"].to_numpy() <= result.coefficients)
+    assert np.all(result.coefficients <= ci["upper"].to_numpy())
+
+    from scipy import stats as _stats
+
+    t_crit = float(_stats.t.ppf(0.975, result.dof_resid))
+    half = t_crit * result.std_errors
+    assert np.allclose(ci["lower"].to_numpy(), result.coefficients - half)
+    assert np.allclose(ci["upper"].to_numpy(), result.coefficients + half)
+
+
+# --------------------------------------------------------------------------- #
+# fluent vif()/leverage()
+# --------------------------------------------------------------------------- #
+
+
+def test_fit_vif_matches_free_function():
+    design, y = _replicated_design_and_response()
+    result = fit_ols(design, y)
+    pd.testing.assert_series_equal(
+        result.vif(), diagnostics.vif(result.model_matrix, term_names=result.term_names)
+    )
+
+
+def test_fit_leverage_matches_free_function():
+    design, y = _replicated_design_and_response()
+    result = fit_ols(design, y)
+    assert np.allclose(result.leverage(), diagnostics.leverage(result.model_matrix))
+
+
+# --------------------------------------------------------------------------- #
+# response_name
+# --------------------------------------------------------------------------- #
+
+
+def test_response_name_stashed_for_string_response():
+    design, y = _replicated_design_and_response()
+    named = design.with_response("yield", y)
+    result = fit_ols(named, "yield")
+    assert result.response_name == "yield"
+
+
+def test_response_name_none_for_array_response():
+    design, y = _replicated_design_and_response()
+    result = fit_ols(design, y)
+    assert result.response_name is None

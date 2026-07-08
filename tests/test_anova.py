@@ -49,14 +49,14 @@ def test_fit_recovers_known_quadratic_coefficients():
     design = _ccd()
     y = _quadratic_response(design)
     result = fit_ols(design, y, model="quadratic")
-    coef = result.summary()  # name -> (coefficient, effect)
+    coef = result.summary()["coefficient"]  # term -> coefficient
 
-    assert np.isclose(coef["Intercept"][0], 50.0)
-    assert np.isclose(coef["a"][0], 3.0)
-    assert np.isclose(coef["b"][0], -2.0)
-    assert np.isclose(coef["a:b"][0], -1.0)
-    assert np.isclose(coef["a^2"][0], 4.0)
-    assert np.isclose(coef["b^2"][0], 0.0, atol=1e-8)
+    assert np.isclose(coef["Intercept"], 50.0)
+    assert np.isclose(coef["a"], 3.0)
+    assert np.isclose(coef["b"], -2.0)
+    assert np.isclose(coef["a:b"], -1.0)
+    assert np.isclose(coef["a^2"], 4.0)
+    assert np.isclose(coef["b^2"], 0.0, atol=1e-8)
     assert np.isclose(result.r_squared, 1.0)
 
 
@@ -92,10 +92,10 @@ def test_fitresult_conf_int_brackets_coefficients():
     result = fit_ols(design, y, model="quadratic")
 
     ci = result.conf_int(level=0.95)
-    assert ci.shape == (len(result.term_names), 2)
-    lower, upper = ci[:, 0], ci[:, 1]
-    assert np.all(lower <= result.coefficients)
-    assert np.all(result.coefficients <= upper)
+    assert list(ci.index) == result.term_names
+    assert list(ci.columns) == ["lower", "upper"]
+    assert np.all(ci["lower"].to_numpy() <= result.coefficients)
+    assert np.all(result.coefficients <= ci["upper"].to_numpy())
 
 
 def test_fitresult_pvalues_in_unit_interval():

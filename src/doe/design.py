@@ -138,6 +138,9 @@ class Design:
         producing a plausible-but-wrong fit. The original design is left unchanged (Designs are
         value objects), and ``name`` must not collide with a factor column.
 
+        Attaching several responses means chaining calls (``design.with_response(...)
+        .with_response(...)``); :meth:`with_responses` attaches them all in one call.
+
         Examples:
             >>> import pandas as pd
             >>> from doe import ContinuousFactor, Design, FactorSet
@@ -161,6 +164,39 @@ class Design:
         runs = self.runs.copy()
         runs[name] = col
         return Design(runs, self.factors, self.name, dict(self.meta), self.point_types)
+
+    def with_responses(self, **responses: object) -> Design:
+        """Return a copy with several measured responses attached as columns of ``runs``.
+
+        A convenience over chaining :meth:`with_response` once per column -- each keyword
+        is attached in turn via :meth:`with_response`, so the same checks apply to every
+        column (length == :attr:`n_runs`, one-dimensional, no collision with a factor name).
+        Because responses attached earlier in the same call are legitimately present on the
+        intermediate design by the time the next one is checked, one response name can never
+        collide with another -- only with a factor column.
+
+        Requires at least one keyword; called with none, it raises rather than silently
+        returning an unchanged copy. Column names that aren't valid Python identifiers (so
+        can't be passed as a keyword directly) still work via dict-unpacking, e.g.
+        ``design.with_responses(**{"yield %": values})``.
+
+        Examples:
+            >>> import pandas as pd
+            >>> from doe import ContinuousFactor, Design, FactorSet
+            >>> factors = FactorSet([ContinuousFactor("temperature", 40, 80)])
+            >>> design = Design(pd.DataFrame({"temperature": [40, 80]}), factors)
+            >>> measured = design.with_responses(yield_=[12.5, 18.0], impurity=[1.2, 0.8])
+            >>> list(measured.runs.columns)
+            ['temperature', 'yield_', 'impurity']
+            >>> "yield_" in design.runs.columns
+            False
+        """
+        if not responses:
+            raise ValueError("no responses given")
+        design = self
+        for name, values in responses.items():
+            design = design.with_response(name, values)
+        return design
 
     def replicate(self, n: int, *, each: bool = False) -> Design:
         """Return a copy with every run replicated ``n`` times.

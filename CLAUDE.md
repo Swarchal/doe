@@ -159,6 +159,11 @@ transcribed numbers/figures so the doc stays truthful.
 its outputs and `wf_*.png` figures come from `scripts/build_workflow_assets.py` the same way —
 re-run it and update the transcriptions when the walkthrough's behaviour changes.
 
+`docs/WORKFLOW2.md` is a companion walkthrough on *balancing two competing readouts* (yield vs
+impurity → two OLS fits → Derringer–Suich `desirability`); its outputs and `wf2_*.png` figures
+come from `scripts/build_workflow2_assets.py` the same way — re-run it and update the
+transcriptions when its behaviour changes.
+
 `docs/` is also a Sphinx project (`conf.py`, furo theme, MyST so the markdown guides build
 as-is, napoleon for the Google-style docstrings). `docs/api/` holds one `automodule` page per
 module; add a page there when adding a module. Build with

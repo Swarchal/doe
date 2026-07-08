@@ -196,6 +196,7 @@ def contour_plot(
     filled: bool = True,
 ) -> Axes:
     """Filled contour of the fitted surface over two factors, in natural units."""
+    import matplotlib.patheffects as pe
     import matplotlib.pyplot as plt
 
     nat_x, nat_y, z = surface_grid(result, x, y, fixed=fixed, resolution=resolution)
@@ -205,8 +206,14 @@ def contour_plot(
     if filled:
         mappable = ax.contourf(nat_x, nat_y, z, levels=12)
         ax.figure.colorbar(mappable, ax=ax, label="fitted response")
+    # A white halo keeps the black contour lines and their labels legible over both
+    # the dark (low) and bright (high) ends of the filled surface.
+    halo: list[pe.AbstractPathEffect] = [pe.withStroke(linewidth=1.6, foreground="white")]
     lines = ax.contour(nat_x, nat_y, z, levels=8, colors="k", linewidths=0.5)
-    ax.clabel(lines, inline=True, fontsize=8)
+    lines.set(path_effects=halo)
+    labels = ax.clabel(lines, inline=True, fontsize=8)
+    for label in labels:
+        label.set_path_effects(halo)
     ax.set_xlabel(x)
     ax.set_ylabel(y)
     ax.set_title("Fitted response surface")

@@ -31,6 +31,7 @@ pip install -e '.[plotting]'   # plotting extra pulls in matplotlib
 
 VIGNETTES
 WORKFLOW
+WORKFLOW2
 SERIALIZATION
 ```
 

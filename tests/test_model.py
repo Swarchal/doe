@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from doe.analysis.model import build_model_matrix, coded_design_points, expand_coded_points
-from doe.factors import CategoricalFactor, ContinuousFactor
+from doe.factors import CategoricalFactor, ContinuousFactor, FactorSet
 from doe.generators.factorial import full_factorial
 from doe.generators.optimal import candidate_grid
 
@@ -123,6 +123,31 @@ def test_expand_coded_points_matches_quadratic_design_matrix():
 
     assert got.term_names == expected.term_names
     assert np.allclose(got.X, expected.X)
+
+
+def test_expand_coded_points_require_squares_forces_pure_pm1_squared_column():
+    # a pure +/-1 point can't trigger the off-+/-1 heuristic; require_squares overrides it
+    # for the named factors, which is how FitResult.predict scores single corner points.
+    factors = FactorSet([ContinuousFactor("a", 0.0, 10.0), ContinuousFactor("b", 0.0, 10.0)])
+    points = np.array([[-1.0, -1.0], [1.0, 1.0]])
+
+    default = expand_coded_points(points, factors, order=2, interactions=True)
+    assert "a^2" not in default.term_names
+    assert "b^2" not in default.term_names
+
+    forced = expand_coded_points(
+        points, factors, order=2, interactions=True, require_squares=["a", "b"]
+    )
+    assert forced.term_names[-2:] == ["a^2", "b^2"]
+    assert np.allclose(forced.as_frame()["a^2"].to_numpy(), 1.0)
+    assert np.allclose(forced.as_frame()["b^2"].to_numpy(), 1.0)
+
+    # a factor that already takes off-+/-1 values only gets its square emitted once
+    mixed_points = np.array([[0.0, -1.0], [1.0, 1.0]])
+    once = expand_coded_points(
+        mixed_points, factors, order=2, interactions=True, require_squares=["a"]
+    )
+    assert once.term_names.count("a^2") == 1
 
 
 def test_expand_coded_points_matches_mixed_design_matrix():

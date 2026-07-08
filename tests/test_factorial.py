@@ -155,12 +155,12 @@ def test_plackett_burman_recovers_main_effects():
     result = fit_ols(design, y, order=1, interactions=False)
     summary = result.summary()
 
-    assert np.isclose(summary["Intercept"][0], 5.0)
+    assert np.isclose(summary.loc["Intercept", "coefficient"], 5.0)
     # effect = 2 * coefficient in coded units
-    assert np.isclose(summary["a"][1], 4.0)
-    assert np.isclose(summary["c"][1], -6.0)
-    assert np.isclose(summary["g"][1], 2.0)
-    assert np.isclose(summary["b"][1], 0.0, atol=1e-9)
+    assert np.isclose(summary.loc["a", "effect"], 4.0)
+    assert np.isclose(summary.loc["c", "effect"], -6.0)
+    assert np.isclose(summary.loc["g", "effect"], 2.0)
+    assert np.isclose(summary.loc["b", "effect"], 0.0, atol=1e-9)
 
 
 def test_plackett_burman_rejects_unconstructible_size():

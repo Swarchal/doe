@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -265,6 +266,7 @@ def expand_coded_points(
     *,
     order: int = 1,
     interactions: bool = True,
+    require_squares: Sequence[str] | None = None,
 ) -> ModelMatrix:
     """Expand an ``(m, k)`` array of coded factor points into a model matrix.
 
@@ -281,6 +283,15 @@ def expand_coded_points(
     mixed continuous/categorical designs and candidate regions share one term layout.
     ``points`` is ordered to match ``factors``; columns line up with
     ``build_model_matrix(design, order, interactions)``.
+
+    By default a continuous factor's squared column is only emitted when its values sit off
+    ``+/-1`` -- the right heuristic at fit time, where a pure ``+/-1`` column squares to the
+    intercept and would be collinear with it. ``require_squares`` overrides that heuristic for
+    named continuous factors, forcing their ``name^2`` column to be emitted whenever
+    ``order >= 2`` regardless of the values seen -- used by
+    :meth:`~doe.analysis.fit.FitResult.predict`, which already knows (from the fit's own
+    ``term_names``) which squared terms must exist, even when the new points are corners sitting
+    entirely on ``+/-1``. Each square is still only emitted once (forced or heuristic, never both).
 
     Examples:
         >>> import numpy as np
@@ -331,11 +342,12 @@ def expand_coded_points(
                 term_names.append(f"{name_a}:{name_b}")
 
     if order >= 2:
+        forced = set(require_squares or ())
         for factor, encoding in encodings:
             if not isinstance(factor, ContinuousFactor):
                 continue
             (name, col) = encoding[0]
-            if np.any(np.abs(np.abs(col) - 1.0) > 1e-9):
+            if name in forced or np.any(np.abs(np.abs(col) - 1.0) > 1e-9):
                 cols.append(col**2)
                 term_names.append(f"{name}^2")
 

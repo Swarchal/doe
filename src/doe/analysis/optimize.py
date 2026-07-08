@@ -25,13 +25,14 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 import numpy as np
+import pandas as pd
 from scipy import optimize as sciopt
 
 from ..factors import ContinuousFactor, FactorSet
 from .fit import FitResult
 
 Goal = Literal["max", "min", "target"]
-Bounds = tuple[float, float] | Sequence[tuple[float, float]]
+Bounds = tuple[float, float] | Sequence[tuple[float, float]] | Mapping[str, tuple[float, float]]
 
 
 # --------------------------------------------------------------------------- #
@@ -103,8 +104,63 @@ def _format_point(natural: dict[str, float]) -> str:
     return ", ".join(f"{name}={value:.4g}" for name, value in natural.items())
 
 
-def _box(bounds: Bounds, k: int) -> list[tuple[float, float]]:
-    """Normalise ``bounds`` into a per-factor list of ``(low, high)`` pairs."""
+def _format_series(series: pd.Series) -> str:
+    """Render a labelled ``pd.Series`` as ``a=1.23, b=4.56`` for reprs (same style as points)."""
+    return ", ".join(f"{name}={value:.4g}" for name, value in series.items())
+
+
+def _to_frame(natural: dict[str, float], tail: list[tuple[str, float]]) -> pd.DataFrame:
+    """Build the one-row frame shared by ``to_frame()``: natural settings, then ``tail``.
+
+    Column names are taken as given, duplicates and all -- constructing from an explicit
+    ``(names, values)`` pair (rather than a ``dict``) means a repeated response label
+    (two goals sharing a fallback name, say) still produces two columns instead of silently
+    collapsing to one.
+    """
+    names = list(natural.keys()) + [name for name, _ in tail]
+    values = list(natural.values()) + [value for _, value in tail]
+    return pd.DataFrame([values], columns=names)
+
+
+def _box(bounds: Bounds, factors: FactorSet) -> list[tuple[float, float]]:
+    """Normalise ``bounds`` into a per-factor list of *coded* ``(low, high)`` pairs.
+
+    Three forms are accepted:
+
+    * a single coded ``(low, high)`` pair applied to every factor,
+    * a coded per-factor sequence of ``(low, high)`` pairs, positional in ``factors`` order,
+    * a ``{factor_name: (low, high)}`` mapping in **natural** units -- the natural-units
+      convention the rest of the library uses. Factors absent from the mapping default to
+      the full coded ``[-1, 1]`` range (their tested span). Bounds are honoured exactly as
+      given, even outside a factor's tested ``[low, high]``, which extrapolates the fitted
+      surface beyond the data it was fit on.
+    """
+    # Dispatched first: a Mapping would otherwise fall into the `len(bounds) == 2` scalar-pair
+    # check below and crash on `bounds[0]` (KeyError), since dicts aren't indexed by position.
+    if isinstance(bounds, Mapping):
+        names = factors.names
+        unknown = sorted(set(bounds) - set(names))
+        if unknown:
+            raise ValueError(f"unknown factor name(s) {unknown}; valid names are {names}")
+        box: list[tuple[float, float]] = []
+        for name in names:
+            if name not in bounds:
+                box.append((-1.0, 1.0))
+                continue
+            lo, hi = bounds[name]
+            lo, hi = float(lo), float(hi)
+            if lo >= hi:
+                raise ValueError(
+                    f"bounds for factor {name!r} must satisfy low < high, got ({lo}, {hi})"
+                )
+            factor = factors[name]
+            # optimum()/desirability() reject non-continuous fits in _quadratic_form before
+            # _box ever runs, so every factor here has a `code()` to convert natural -> coded.
+            assert isinstance(factor, ContinuousFactor)
+            coded = factor.code(np.array([lo, hi]))
+            box.append((float(coded[0]), float(coded[1])))
+        return box
+    k = len(factors)
     if len(bounds) == 2 and np.isscalar(bounds[0]) and np.isscalar(bounds[1]):
         lo, hi = float(bounds[0]), float(bounds[1])  # type: ignore[arg-type]
         return [(lo, hi)] * k
@@ -133,9 +189,28 @@ class StationaryPoint:
     eigenvalues: np.ndarray
     eigenvectors: np.ndarray
     kind: Literal["maximum", "minimum", "saddle"]
+    #: The response column name (see ``FitResult.response_name``), or ``None`` for a
+    #: bare-array fit. Labels the predicted-response column in reprs/:meth:`to_frame`.
+    response_name: str | None = None
 
     def __repr__(self) -> str:
-        return f"StationaryPoint({self.kind}: {_format_point(self.natural)} -> {self.response:.4g})"
+        label = f"{self.response_name}=" if self.response_name is not None else ""
+        return (
+            f"StationaryPoint({self.kind}: {_format_point(self.natural)} "
+            f"-> {label}{self.response:.4g})"
+        )
+
+    def to_frame(self) -> pd.DataFrame:
+        """One-row frame: natural factor settings, then the predicted response.
+
+        The response column is named ``response_name`` (the fit's response column, when
+        known) or ``"predicted"``.
+
+        Examples:
+            >>> sp.to_frame().columns.tolist()  # doctest: +SKIP
+            ['temperature', 'time', 'yield_pct']
+        """
+        return _to_frame(self.natural, [(self.response_name or "predicted", self.response)])
 
 
 def stationary_point(result: FitResult) -> StationaryPoint:
@@ -178,6 +253,7 @@ def stationary_point(result: FitResult) -> StationaryPoint:
         eigenvalues=eigenvalues,
         eigenvectors=eigenvectors,
         kind=kind,
+        response_name=result.response_name,
     )
 
 
@@ -195,11 +271,30 @@ class Optimum:
     response: float
     maximize: bool
     at_bound: bool
+    #: The response column name (see ``FitResult.response_name``), or ``None`` for a
+    #: bare-array fit. Labels the predicted-response column in reprs/:meth:`to_frame`.
+    response_name: str | None = None
 
     def __repr__(self) -> str:
         direction = "max" if self.maximize else "min"
         bound = " (at bound)" if self.at_bound else ""
-        return f"Optimum({direction}: {_format_point(self.natural)} -> {self.response:.4g}{bound})"
+        label = f"{self.response_name}=" if self.response_name is not None else ""
+        return (
+            f"Optimum({direction}: {_format_point(self.natural)} "
+            f"-> {label}{self.response:.4g}{bound})"
+        )
+
+    def to_frame(self) -> pd.DataFrame:
+        """One-row frame: natural factor settings, then the predicted response.
+
+        The response column is named ``response_name`` (the fit's response column, when
+        known) or ``"predicted"``.
+
+        Examples:
+            >>> opt.to_frame().columns.tolist()  # doctest: +SKIP
+            ['temperature', 'time', 'yield_pct']
+        """
+        return _to_frame(self.natural, [(self.response_name or "predicted", self.response)])
 
 
 def _multistart_minimize(
@@ -242,12 +337,21 @@ def optimum(
 ) -> Optimum:
     """Constrained optimum of the fitted surface over the coded box.
 
-    ``bounds`` is either a single ``(low, high)`` applied to every factor (default: the
-    coded design region ``[-1, 1]``) or a per-factor sequence of ``(low, high)`` pairs.
-    Use this when :func:`stationary_point` falls outside the feasible region.
+    ``bounds`` accepts three forms: a single ``(low, high)`` applied to every factor
+    (default: the coded design region ``[-1, 1]``), a per-factor sequence of coded
+    ``(low, high)`` pairs, or a ``{factor_name: (low, high)}`` mapping in **natural**
+    units -- the natural-units form is usually the more convenient one, since it avoids
+    hand-converting a constraint like "temperature at most 70 C" into coded units.
+    Factors omitted from the mapping default to their full tested range. Use this when
+    :func:`stationary_point` falls outside the feasible region.
+
+    Examples:
+        >>> optimum(result, maximize=True, bounds={"temperature": (45, 70)})  # doctest: +SKIP
+
+    Any other fitted factor is unconstrained and searched over its full tested range.
     """
     b0, b, big_b = _quadratic_form(result)
-    box = _box(bounds, len(result.factors))
+    box = _box(bounds, result.factors)
     sign = -1.0 if maximize else 1.0
 
     def objective(x: np.ndarray) -> float:
@@ -269,6 +373,7 @@ def optimum(
         response=_predict(b0, b, big_b, x_opt),
         maximize=maximize,
         at_bound=at_bound,
+        response_name=result.response_name,
     )
 
 
@@ -369,20 +474,42 @@ class ResponseGoal:
 
 @dataclass
 class DesirabilityResult:
-    """The point maximising overall Derringer-Suich desirability over the coded box."""
+    """The point maximising overall Derringer-Suich desirability over the coded box.
+
+    ``responses`` and ``individual`` are indexed by response label: each goal's
+    ``result.response_name`` (the column name a string-response :func:`~doe.analysis.fit.fit_ols`
+    call was fitted from), falling back to ``"response_{i}"`` (1-based) for a goal fitted from
+    a bare array. Labels are not deduplicated -- two array-fitted goals both fall back to
+    distinct ``response_1``/``response_2`` slots, but two goals that happen to share a
+    ``response_name`` (fitting the same column twice under different desirability ramps, say)
+    produce a genuinely duplicated index, which pandas permits.
+    """
 
     coded: np.ndarray
     natural: dict[str, float]
-    responses: np.ndarray
-    individual: np.ndarray
+    responses: pd.Series
+    individual: pd.Series
     overall: float
 
     def __repr__(self) -> str:
-        responses = ", ".join(f"{v:.4g}" for v in self.responses)
         return (
             f"DesirabilityResult(D={self.overall:.4g}: {_format_point(self.natural)} "
-            f"| responses=[{responses}])"
+            f"| {_format_series(self.responses)})"
         )
+
+    def to_frame(self) -> pd.DataFrame:
+        """One-row frame: natural factor settings, one column per named response, ``overall_D``.
+
+        Assumes factor names never collide with response labels (they are different
+        namespaces in practice -- inputs vs. fitted outputs).
+
+        Examples:
+            >>> des.to_frame().columns.tolist()  # doctest: +SKIP
+            ['temperature', 'time', 'yield_pct', 'impurity_pct', 'overall_D']
+        """
+        tail = list(zip(self.responses.index, self.responses.to_numpy(), strict=True))
+        tail.append(("overall_D", self.overall))
+        return _to_frame(self.natural, tail)
 
 
 def desirability(
@@ -393,6 +520,13 @@ def desirability(
     Each response is predicted from its own :class:`FitResult` (all must share the same
     factors). The overall desirability is ``D = (prod d_i)^(1/m)``, maximised with a global
     optimiser because the per-response desirabilities are non-smooth (flat where saturated).
+
+    ``bounds`` accepts the same three forms as :func:`optimum`: a single coded
+    ``(low, high)`` pair, a coded per-factor sequence, or a ``{factor_name: (low, high)}``
+    mapping in **natural** units with unnamed factors defaulting to their full tested range.
+
+    Examples:
+        >>> desirability(goals, bounds={"temperature": (45, 70)})  # doctest: +SKIP
     """
     if not goals:
         raise ValueError("need at least one response goal")
@@ -402,13 +536,12 @@ def desirability(
     # would decode to different natural settings per response. Frozen factor dataclasses compare
     # by value, so tuple equality checks names, order, and coding together.
     reference = tuple(goals[0].result.factors)
-    names = goals[0].result.factors.names
     for goal in goals[1:]:
         if tuple(goal.result.factors) != reference:
             raise ValueError("all responses must be fitted over the same factors")
 
     forms = [_quadratic_form(goal.result) for goal in goals]
-    box = _box(bounds, len(names))
+    box = _box(bounds, goals[0].result.factors)
     m = len(goals)
 
     def neg_overall(x: np.ndarray) -> float:
@@ -425,8 +558,18 @@ def desirability(
     res = sciopt.differential_evolution(neg_overall, box, rng=0, tol=1e-10, polish=True)
     x_opt = np.clip(res.x, [lo for lo, _ in box], [hi for _, hi in box])
 
-    responses = np.array([_predict(*form, x_opt) for form in forms])
-    individual = np.array([goal.desirability(v) for goal, v in zip(goals, responses, strict=True)])
+    # Each goal's own fit knows the response it predicts (fit_ols(design, "yield_pct", ...)
+    # stashes that column name); a goal fitted from a bare array has no such name, so it falls
+    # back to a positional placeholder rather than leaving the output anonymous.
+    labels = [
+        goal.result.response_name if goal.result.response_name is not None else f"response_{i + 1}"
+        for i, goal in enumerate(goals)
+    ]
+    values = np.array([_predict(*form, x_opt) for form in forms])
+    responses = pd.Series(values, index=labels)
+    individual = pd.Series(
+        [goal.desirability(v) for goal, v in zip(goals, values, strict=True)], index=labels
+    )
     overall = float(-neg_overall(x_opt))
     return DesirabilityResult(
         coded=x_opt,

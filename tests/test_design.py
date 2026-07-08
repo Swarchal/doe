@@ -107,7 +107,7 @@ def test_replicate_each_aligns_with_condition_grouped_response():
     coded = rep.coded().to_numpy()
     y = 50.0 + 10.0 * coded[:, 0]
     result = fit_ols(rep, y, model="linear")
-    assert np.isclose(dict(result.summary())["a"][1], 20.0)
+    assert np.isclose(result.summary().loc["a", "effect"], 20.0)
 
 
 def test_randomize_can_be_repeated_without_duplicating_std_order():
@@ -214,3 +214,57 @@ def test_response_survives_replicate_and_randomize():
     rand = withy.randomize(seed=3)
     match = rand.runs[(rand.runs["a"] == 0.0) & (rand.runs["b"] == 0.0)]
     assert match["y"].tolist() == [10.0]
+
+
+# --------------------------------------------------------------------------- #
+# with_responses -- attaching several measured responses in one call
+# --------------------------------------------------------------------------- #
+
+
+def test_with_responses_attaches_all_columns_aligned():
+    design = _factorial_2x2()
+    yld = np.array([1.0, 2.0, 3.0, 4.0])
+    impurity = np.array([0.1, 0.2, 0.3, 0.4])
+    both = design.with_responses(yield_=yld, impurity=impurity)
+    assert both.runs["yield_"].tolist() == yld.tolist()
+    assert both.runs["impurity"].tolist() == impurity.tolist()
+
+
+def test_with_responses_does_not_mutate_original():
+    design = _factorial_2x2()
+    design.with_responses(yield_=np.zeros(4), impurity=np.ones(4))
+    assert "yield_" not in design.runs.columns
+    assert "impurity" not in design.runs.columns
+
+
+def test_with_responses_rejects_length_mismatch():
+    design = _factorial_2x2()
+    with pytest.raises(ValueError, match="3 values but there are 4 runs"):
+        design.with_responses(yield_=np.zeros(4), impurity=np.zeros(3))
+
+
+def test_with_responses_rejects_factor_name_collision():
+    design = _factorial_2x2()
+    with pytest.raises(ValueError, match="collides with a factor column"):
+        design.with_responses(a=np.zeros(4))
+
+
+def test_with_responses_rejects_empty_call():
+    design = _factorial_2x2()
+    with pytest.raises(ValueError, match="no responses given"):
+        design.with_responses()
+
+
+def test_with_responses_accepts_non_identifier_name_via_unpacking():
+    design = _factorial_2x2()
+    withy = design.with_responses(**{"yield %": np.array([1.0, 2.0, 3.0, 4.0])})
+    assert withy.runs["yield %"].tolist() == [1.0, 2.0, 3.0, 4.0]
+
+
+def test_with_responses_preserves_point_types_and_meta():
+    factors = [ContinuousFactor("a", 0, 10), ContinuousFactor("b", 0, 10)]
+    design = central_composite(factors, center=4)
+    withy = design.with_responses(yield_=np.zeros(design.n_runs), impurity=np.ones(design.n_runs))
+    assert withy.point_types == design.point_types
+    assert withy.meta == design.meta
+    assert withy.factors is design.factors

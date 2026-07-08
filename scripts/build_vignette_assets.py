@@ -111,8 +111,7 @@ gfp = np.array(
 rep = design.replicate(3, each=True).with_response("gfp", gfp)
 result = fit_ols(rep, "gfp", model="linear")
 print("\nresult.summary():")
-for k, (c, e) in result.summary().items():
-    print(f"  {k!r}: (coef={c:.4g}, effect={e:.4g})")
+print(result.summary().round(2))
 print(f"\nR^2 = {result.r_squared:.4f}")
 
 ax = main_effects_plot(result)
@@ -261,10 +260,11 @@ print("\ny_pb:", list(y_pb))
 # partially aliased), so asking for them over-parameterises and dilutes the real effects.
 res_pb = fit_ols(pb, y_pb, order=1, interactions=False)
 print("\neffects (|effect|, sorted):")
-ranked = sorted(res_pb.summary().items(), key=lambda kv: -abs(kv[1][1]))
-for name, ce in ranked:
+summary_pb = res_pb.summary()
+ranked = summary_pb.reindex(summary_pb["effect"].abs().sort_values(ascending=False).index)
+for name, row in ranked.iterrows():
     if name != "Intercept":
-        print(f"  {name:>16s}: {ce[1]:+.2f}")
+        print(f"  {name:>16s}: {row['effect']:+.2f}")
 
 # The figure: the iconic balanced design matrix (left), and the alias-structure
 # heatmap (right) -- the partial-aliasing fingerprint that sets PB apart from a
@@ -319,8 +319,7 @@ print(y_ccd)
 
 res_ccd = fit_ols(ccd, y_ccd, model="quadratic")
 print("\nquadratic fit summary():")
-for k, (c, e) in res_ccd.summary().items():
-    print(f"  {k!r}: (coef={c:.4g}, effect={e:.4g})")
+print(res_ccd.summary().round(2))
 print(f"R^2 = {res_ccd.r_squared:.4f}")
 
 lof = res_ccd.lack_of_fit()
@@ -391,8 +390,9 @@ print(tbl.to_string(float_format=lambda v: f"{v:.4g}"))
 
 print("\nper-term (effect, t, p) and 95% CI on the coefficient:")
 ci = res_ccd.conf_int(0.95)
-for name, eff, t, p, (lo, hi) in zip(
-    res_ccd.term_names, res_ccd.effects, res_ccd.t_values, res_ccd.p_values, ci, strict=True
+for name, eff, t, p, lo, hi in zip(
+    res_ccd.term_names, res_ccd.effects, res_ccd.t_values, res_ccd.p_values,
+    ci["lower"], ci["upper"], strict=True,
 ):
     print(f"  {name:>16s}: effect={eff:+7.3f}  t={t:+7.2f}  p={p:.4f}  CI=[{lo:+.3f}, {hi:+.3f}]")
 
@@ -402,9 +402,9 @@ for name, eff, t, p, (lo, hi) in zip(
 names8 = [n for n in res_ccd.term_names if n != "Intercept"]
 idx8 = [res_ccd.term_names.index(n) for n in names8]
 coef8 = res_ccd.coefficients[idx8]
-ci8 = ci[idx8]
+ci8 = ci.iloc[idx8]
 ypos = np.arange(len(names8))[::-1]
-xerr = np.vstack([coef8 - ci8[:, 0], ci8[:, 1] - coef8])
+xerr = np.vstack([coef8 - ci8["lower"].to_numpy(), ci8["upper"].to_numpy() - coef8])
 fig, ax = plt.subplots(figsize=(7.4, 4.4))
 ax.axvline(0.0, color="crimson", lw=1.3, ls="--", zorder=1)
 ax.errorbar(coef8, ypos, xerr=xerr, fmt="none", ecolor="0.4", elinewidth=1.8,
@@ -505,8 +505,7 @@ print(y_bb)
 
 res_bb = fit_ols(bb, y_bb, model="quadratic")
 print("\nquadratic fit summary():")
-for k, (c, e) in res_bb.summary().items():
-    print(f"  {k!r}: (coef={c:.4g}, effect={e:.4g})")
+print(res_bb.summary().round(2))
 print(f"R^2 = {res_bb.r_squared:.4f}, predicted R^2 = {res_bb.predicted_r2():.4f}")
 
 ax = contour_plot(res_bb, "dna_ng", "lipid_uL", fixed={"serum_pct": 10})
@@ -560,8 +559,7 @@ rng = np.random.default_rng(3)
 y_viab = np.round(viab_true + rng.normal(0, 1.0, size=viab_true.shape), 1)
 res_viab = fit_ols(ccd, y_viab, model="quadratic")
 print("viability fit summary():")
-for k, (c, e) in res_viab.summary().items():
-    print(f"  {k!r}: (coef={c:.4g}, effect={e:.4g})")
+print(res_viab.summary().round(2))
 
 goals = [
     ResponseGoal(res_ccd, goal="max", low=40.0, high=70.0),   # maximise % GFP+
@@ -571,8 +569,8 @@ des = desirability(goals)
 print("\ndesirability([GFP max, viability max]):")
 print(f"  coded     = {np.array2string(des.coded, precision=4)}")
 print(f"  natural   = {show_nat(des.natural)}")
-print(f"  responses = (GFP {des.responses[0]:.1f}%, viability {des.responses[1]:.1f}%)")
-print(f"  individual d = {np.array2string(des.individual, precision=3)}")
+print("  responses =", des.responses.round(1))
+print("  individual d =", des.individual.round(3))
 print(f"  overall D = {des.overall:.3f}")
 
 # for contrast: optimising GFP alone pushes to high DNA, where viability is worse.

@@ -135,14 +135,13 @@ rep = design.replicate(3, each=True)
 rep = rep.with_response("gfp", gfp)
 
 result = fit_ols(rep, "gfp", model="linear")
-print(result.summary())
-# {term: (coefficient, effect)}
-# {
-#     'Intercept'      : (38.25, 38.25),
-#     'dna_ng'         : (11.75, 23.5),
-#     'lipid_uL'       : (7.25, 14.5),
-#     'dna_ng:lipid_uL': (2.75, 5.5)
-#}
+print(result.summary().round(2))
+#                  coefficient  effect  std_error      t    p
+# term
+# Intercept              38.25   38.25       0.58  66.25  0.0
+# dna_ng                 11.75   23.50       0.58  20.35  0.0
+# lipid_uL                7.25   14.50       0.58  12.56  0.0
+# dna_ng:lipid_uL         2.75    5.50       0.58   4.76  0.0
 ```
 
 How to read it:
@@ -184,8 +183,8 @@ a factorial design estimates it directly:
 
 ```python
 result = fit_ols(rep, gfp, model="linear")   # 'linear' here includes 2-factor interactions
-coef, eff = result.summary()["dna_ng:lipid_uL"]
-print(eff)   # +5.5 -- the dna x lipid interaction effect (coded units)
+row = result.summary().loc["dna_ng:lipid_uL", ["coefficient", "effect"]]
+print(row["effect"])   # +5.5 -- the dna x lipid interaction effect (coded units)
 ```
 
 A non-trivial `dna_ng:lipid_uL` term is the biology you would have missed with OFAT:
@@ -291,21 +290,21 @@ y = np.array([31.0, 55.2, 68.8, 44.5, 54.7, 30.4, 45.0, 69.8])
 result = fit_ols(design, y, model="linear")
 
 # rank terms by |effect|
-for name, (coef, eff) in sorted(
-    result.summary().items(), key=lambda kv: -abs(kv[1][1])
-):
+summary = result.summary()
+ranked = summary.reindex(summary["effect"].abs().sort_values(ascending=False).index)
+for name, row in ranked.iterrows():
     if name != "Intercept":
-        print(f"{name:>28s}: {eff:+.2f}")
-#                  compound_uM: +24.40
-#                    serum_pct: +14.20
-#      seeding_cells:serum_pct: +00.33
-#         dmso_pct:compound_uM: +00.33
-#                seeding_cells: +00.10
-#                     dmso_pct: +00.10
-#    seeding_cells:compound_uM: +00.08
-#           serum_pct:dmso_pct: +00.08
-#        serum_pct:compound_uM: +00.07
-#       seeding_cells:dmso_pct: +00.07
+        print(f"{name:>28s}: {row['effect']:+.2f}")
+#                 compound_uM: +24.40
+#                   serum_pct: +14.20
+#        dmso_pct:compound_uM: +0.32
+#     seeding_cells:serum_pct: +0.32
+#               seeding_cells: +0.10
+#                    dmso_pct: +0.10
+#   seeding_cells:compound_uM: +0.08
+#          serum_pct:dmso_pct: +0.08
+#       serum_pct:compound_uM: +0.08
+#      seeding_cells:dmso_pct: +0.08
 ```
 
 Two effects (`compound_uM`, `serum_pct`) tower over a floor of near-zero terms — those
@@ -403,9 +402,11 @@ y = np.array([69.7, 58.8, 62.3, 79.5, 52.5, 48.8, 80.5, 49.6, 40.5, 52.4, 57.4, 
 
 # main effects only: a saturated screen cannot resolve the aliased interactions
 result = fit_ols(pb, y, order=1, interactions=False)
-for name, (coef, eff) in sorted(result.summary().items(), key=lambda kv: -abs(kv[1][1])):
+summary = result.summary()
+ranked = summary.reindex(summary["effect"].abs().sort_values(ascending=False).index)
+for name, row in ranked.iterrows():
     if name != "Intercept":
-        print(f"{name:>16s}: {eff:+.2f}")
+        print(f"{name:>16s}: {row['effect']:+.2f}")
 #      compound_uM: +18.03
 #           dna_ng: +12.23
 #        serum_pct: -9.63
@@ -533,16 +534,15 @@ design = central_composite([dna, lipid], alpha="faced", center=4)
 y = np.array([30.3, 37.0, 46.8, 66.9, 38.0, 60.7,
               47.1, 60.7, 60.0, 59.1, 60.9, 60.8])   # measured % GFP+ per run
 result = fit_ols(design, y, model="quadratic")
-print(result.summary())
-# {term: (coefficient, effect)}
-# {
-#     'Intercept':        (59.83,  59.83),
-#     'dna_ng':           (11.52,  23.03),
-#     'lipid_uL':         ( 6.73,  13.47),
-#     'dna_ng:lipid_uL':  ( 3.35,   6.70),
-#     'dna_ng^2':         (-9.75, -19.50),
-#     'lipid_uL^2':       (-5.20, -10.40)
-# }
+print(result.summary().round(2))
+#                  coefficient  effect  std_error       t    p
+# term
+# Intercept              59.83   59.83       0.43  137.88  0.0
+# dna_ng                 11.52   23.03       0.39   29.67  0.0
+# lipid_uL                6.73   13.47       0.39   17.35  0.0
+# dna_ng:lipid_uL         3.35    6.70       0.48    7.05  0.0
+# dna_ng^2               -9.75  -19.50       0.58  -16.75  0.0
+# lipid_uL^2             -5.20  -10.40       0.58   -8.93  0.0
 print(f"R^2 = {result.r_squared:.4f}")   # R^2 = 0.9966
 ```
 
@@ -650,19 +650,19 @@ CCD:
 y = np.array([30.0, 39.4, 47.2, 65.5, 30.7, 38.5, 53.6, 60.9,
               38.7, 44.2, 53.6, 59.9, 60.7, 59.9, 59.6])   # measured % GFP+ per run
 result = fit_ols(design, y, model="quadratic")
-print(result.summary())
-# {
-#   'Intercept':           (60.07,  60.07),
-#   'dna_ng':              (11.07,  22.15),
-#   'lipid_uL':            ( 7.29,  14.57),
-#   'serum_pct':           ( 3.36,   6.73),
-#   'dna_ng:lipid_uL':     ( 2.23,   4.45),
-#   'dna_ng:serum_pct':    (-0.13,  -0.25),
-#   'lipid_uL:serum_pct':  ( 0.20,   0.40),
-#   'dna_ng^2':            (-8.86, -17.72),
-#   'lipid_uL^2':          (-5.68, -11.37),
-#   'serum_pct^2':         (-5.28, -10.57),
-# }
+print(result.summary().round(2))
+#                     coefficient  effect  std_error       t     p
+# term
+# Intercept                 60.07   60.07       0.49  123.31  0.00
+# dna_ng                    11.07   22.15       0.30   37.13  0.00
+# lipid_uL                   7.29   14.57       0.30   24.43  0.00
+# serum_pct                  3.36    6.72       0.30   11.27  0.00
+# dna_ng:lipid_uL            2.22    4.45       0.42    5.27  0.00
+# dna_ng:serum_pct          -0.12   -0.25       0.42   -0.30  0.78
+# lipid_uL:serum_pct         0.20    0.40       0.42    0.47  0.66
+# dna_ng^2                  -8.86  -17.72       0.44  -20.17  0.00
+# lipid_uL^2                -5.68  -11.37       0.44  -12.94  0.00
+# serum_pct^2               -5.28  -10.57       0.44  -12.03  0.00
 print(f"R^2 = {result.r_squared:.4f}")   # R^2 = 0.9982
 ```
 
@@ -801,17 +801,21 @@ interaction, _and_ both quadratic terms are real, not artefacts. Note how small 
 numerical echo of the R² ≈ 0.997 from Vignette 7.
 
 The companion view is a **confidence interval** on each coefficient. `res_ccd.conf_int(0.95)`
-returns a two-sided interval per term; an interval that excludes zero is the same verdict as
-"p < 0.05," but it also tells you _how precisely_ the effect is pinned down.
+returns a DataFrame with `lower`/`upper` columns, one row per term; an interval that excludes
+zero is the same verdict as "p < 0.05," but it also tells you _how precisely_ the effect is
+pinned down.
 
 ```python
-ci = res_ccd.conf_int(0.95)   # (n_terms, 2): [low, high] per coefficient
-# coefficient (not effect) and its 95% CI:
-#   dna_ng         : 11.52   CI [10.57, 12.47]
-#   lipid_uL       :  6.73   CI [ 5.78,  7.68]
-#   dna_ng:lipid_uL:  3.35   CI [ 2.19,  4.51]
-#   dna_ng^2       : -9.75   CI [-11.18, -8.33]
-#   lipid_uL^2     : -5.20   CI [-6.63, -3.78]
+ci = res_ccd.conf_int(0.95)   # DataFrame: "lower"/"upper" columns, one row per term
+print(ci.round(2))
+#                  lower  upper
+# term
+# Intercept        58.77  60.90
+# dna_ng           10.57  12.47
+# lipid_uL          5.78   7.68
+# dna_ng:lipid_uL   2.19   4.51
+# dna_ng^2        -11.17  -8.33
+# lipid_uL^2       -6.62  -3.78
 ```
 
 **The figure: a coefficient plot with intervals.** The table above is easier to read as a
@@ -1021,15 +1025,21 @@ goals = [
 des = desirability(goals)
 
 print(des.natural)     # {'dna_ng': 311.3, 'lipid_uL': 1.920}
-print(des.responses)   # [62.4  78.2]   -- predicted (%GFP+, % viable) at that point
-print(des.individual)  # [0.748  0.705] -- per-response desirabilities
+print(des.responses)   # response_1  62.4  (predicted %GFP+)
+                        # response_2  78.2  (predicted % viable)
+print(des.individual)  # response_1  0.748  (GFP+ desirability)
+                        # response_2  0.705  (viability desirability)
 print(des.overall)     # 0.726          -- geometric-mean D
 ```
 
 Each `ResponseGoal` says "for this response, desirability ramps from 0 at `low` to 1 at
 `high`." With both goals set to `max`, the optimiser looks for settings that push _both_
-readouts up their ramps together. The answer here is **~311 ng DNA, ~1.92 µL lipid** — a
-middle-of-the-range DNA amount giving a predicted **62% GFP+ at 78% viability**, with both
+readouts up their ramps together. `des.responses`/`des.individual` are indexed by each goal's
+response label; `res_ccd`/`res_viab` were fitted from bare arrays rather than named response
+columns (see the [two-readout walkthrough](WORKFLOW2.md) for the named form), so they fall
+back to the positional labels `response_1`/`response_2` in goal order — `response_1` is the
+%GFP+ fit, `response_2` the viability fit. The answer here is **~311 ng DNA, ~1.92 µL lipid**
+— a middle-of-the-range DNA amount giving a predicted **62% GFP+ at 78% viability**, with both
 individual desirabilities healthy (~0.7) and an overall `D` of 0.73.
 
 **Why not just maximise GFP?** Because the readouts conflict. Optimising %GFP+ _alone_ (the

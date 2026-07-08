@@ -70,11 +70,13 @@ rep    = design.replicate(3, each=True)            # 3 wells per corner
 gfp = np.array([22, 20, 24,  31, 29, 33,  40, 38, 42,  58, 60, 62], dtype=float)
 
 result = fit_ols(rep, gfp, model="linear")   # mains + 2-factor interaction
-print(result.summary())     # {term: (coefficient, effect)}
-# {'Intercept': (38.25, 38.25),
-#  'dna_ng': (11.75, 23.5),
-#  'lipid_uL': (7.25, 14.5),
-#  'dna_ng:lipid_uL': (2.75, 5.5)}
+print(result.summary().round(2))
+#                  coefficient  effect  std_error      t    p
+# term
+# Intercept              38.25   38.25       0.58  66.25  0.0
+# dna_ng                 11.75   23.50       0.58  20.35  0.0
+# lipid_uL                7.25   14.50       0.58  12.56  0.0
+# dna_ng:lipid_uL         2.75    5.50       0.58   4.76  0.0
 ```
 
 Locate an optimum with a central composite design and a quadratic model:

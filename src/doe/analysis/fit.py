@@ -44,10 +44,12 @@ class FitResult:
         >>> coded = design.coded()
         >>> response = 10 + 2 * coded["temperature"] - coded["time"]
         >>> fit = fit_ols(design, response, interactions=False)
-        >>> tuple(round(v, 6) for v in fit.summary()["temperature"])
-        (2.0, 4.0)
+        >>> fit.summary().loc["temperature", ["coefficient", "effect"]].round(6).tolist()
+        [2.0, 4.0]
         >>> fit.predict({"temperature": [40, 80], "time": 10}).round(6).tolist()
         [8.0, 12.0]
+        >>> round(fit.predict({"temperature": 40, "time": 10}), 6)
+        8.0
     """
 
     term_names: list[str]
@@ -72,6 +74,11 @@ class FitResult:
     #: The resolved response array the fit used, aligned to the design's runs (``None`` when
     #: constructed directly). Stashed so :meth:`anova`/:meth:`lack_of_fit` need no re-passing.
     response: np.ndarray | None = None
+    #: The response column *name*, when ``fit_ols`` was called with ``response`` as a string
+    #: (``None`` for an array-valued response, or a directly constructed result). Reserved for
+    #: labelling multi-response output (e.g. a future ``desirability`` report); not yet read
+    #: anywhere.
+    response_name: str | None = None
 
     def _require_source(self) -> tuple[Design, np.ndarray]:
         """Return the stashed ``(design, response)`` or explain why they are missing."""
@@ -114,7 +121,9 @@ class FitResult:
 
         return anova.adjusted_r2(self)
 
-    def predict(self, points: Mapping[str, object] | pd.DataFrame | Design) -> np.ndarray:
+    def predict(
+        self, points: Mapping[str, object] | pd.DataFrame | Design
+    ) -> np.ndarray | float:
         """Predict responses at new runs given in *natural* units.
 
         ``points`` is a mapping (column name -> scalar or array), a :class:`pandas.DataFrame`,
@@ -124,19 +133,37 @@ class FitResult:
         with the fitted coefficients.
 
         The expanded columns are aligned to the fit's ``term_names`` *by name* before the dot
-        product: :func:`~doe.analysis.model.expand_coded_points` only emits a squared term once a
-        column takes a value off ``+/-1``, so new points sitting entirely on the cube corners would
-        otherwise silently drop terms and misalign. A required term the new points cannot produce
-        raises rather than returning a wrong number.
+        product. :func:`~doe.analysis.model.expand_coded_points` normally only emits a squared
+        column once a factor's values sit off ``+/-1`` (the right heuristic at fit time), which
+        would otherwise drop squared terms for new points sitting entirely on the cube corners
+        (e.g. a single natural low/high run). Here the required squared terms are derived
+        straight from the fit's own ``term_names`` and forced via ``require_squares``, so a
+        quadratic fit predicts correctly even at a single corner point. A required term the new
+        points still cannot produce (e.g. an unknown categorical level) raises rather than
+        returning a wrong number.
+
+        Returns a plain ``float`` when ``points`` is a mapping whose values are *all* scalars
+        (a single natural-unit run) -- the common single-point case, so callers don't have to
+        unwrap a length-1 array. Any other input (a DataFrame, a Design, or a mapping with even
+        one array-valued column) keeps returning an ``ndarray``, one entry per run.
         """
         from ..design import Design as _Design
         from .model import coded_design_points, expand_coded_points
 
+        scalar_input = isinstance(points, Mapping) and all(
+            np.asarray(value).ndim == 0 for value in points.values()
+        )
+
         frame = _points_to_frame(points, self.factors.names)
         design = _Design(frame, self.factors)
         coded_points = coded_design_points(design)
+        require_squares = [t[:-2] for t in self.term_names if t.endswith("^2")]
         mm = expand_coded_points(
-            coded_points, self.factors, order=self.order, interactions=self.interactions
+            coded_points,
+            self.factors,
+            order=self.order,
+            interactions=self.interactions,
+            require_squares=require_squares,
         )
         available = dict(zip(mm.term_names, mm.X.T, strict=True))
         missing = [term for term in self.term_names if term not in available]
@@ -146,17 +173,46 @@ class FitResult:
                 "predict cannot align them to the fitted coefficients"
             )
         x_aligned = np.column_stack([available[term] for term in self.term_names])
-        return np.asarray(x_aligned @ self.coefficients, dtype=float)
+        predicted = np.asarray(x_aligned @ self.coefficients, dtype=float)
+        return float(predicted[0]) if scalar_input else predicted
 
-    def summary(self) -> dict[str, tuple[float, float]]:
-        """Map each term to ``(coefficient, effect)``."""
-        return {
-            name: (float(c), float(e))
-            for name, c, e in zip(self.term_names, self.coefficients, self.effects, strict=True)
-        }
+    def summary(self) -> pd.DataFrame:
+        """Coefficient/effect/inference table, one row per term.
 
-    def conf_int(self, level: float = 0.95) -> np.ndarray:
-        """Two-sided confidence interval per coefficient as an ``(n_terms, 2)`` array."""
+        Columns: ``coefficient``, ``effect``, ``std_error``, ``t``, ``p``. The last three
+        come straight from the fit's inference arrays and are NaN for a saturated model
+        (see :func:`fit_ols`).
+
+        Examples:
+            >>> from doe import ContinuousFactor, FactorSet, fit_ols, full_factorial
+            >>> factors = FactorSet([
+            ...     ContinuousFactor("temperature", 40, 80),
+            ...     ContinuousFactor("time", 5, 15),
+            ... ])
+            >>> design = full_factorial(factors)
+            >>> coded = design.coded()
+            >>> response = 10 + 2 * coded["temperature"] - coded["time"]
+            >>> fit = fit_ols(design, response, interactions=False)
+            >>> fit.summary().loc["temperature", ["coefficient", "effect"]].round(6).tolist()
+            [2.0, 4.0]
+        """
+        return pd.DataFrame(
+            {
+                "coefficient": self.coefficients,
+                "effect": self.effects,
+                "std_error": self.std_errors,
+                "t": self.t_values,
+                "p": self.p_values,
+            },
+            index=pd.Index(self.term_names, name="term"),
+        )
+
+    def conf_int(self, level: float = 0.95) -> pd.DataFrame:
+        """Two-sided confidence interval per coefficient, one row per term.
+
+        Columns ``lower``/``upper``. NaN throughout when the model is saturated
+        (``dof_resid == 0``, so there is no error variance to build an interval from).
+        """
         if not 0.0 < level < 1.0:
             raise ValueError("level must be between 0 and 1")
         if self.dof_resid <= 0:
@@ -164,7 +220,22 @@ class FitResult:
         else:
             t_crit = float(stats.t.ppf(0.5 + level / 2.0, self.dof_resid))
             half = t_crit * self.std_errors
-        return np.column_stack([self.coefficients - half, self.coefficients + half])
+        return pd.DataFrame(
+            {"lower": self.coefficients - half, "upper": self.coefficients + half},
+            index=pd.Index(self.term_names, name="term"),
+        )
+
+    def vif(self) -> pd.Series:
+        """Variance-inflation factor per term (see :func:`diagnostics.vif`)."""
+        from . import diagnostics
+
+        return diagnostics.vif(self.model_matrix, term_names=self.term_names)
+
+    def leverage(self) -> np.ndarray:
+        """Hat-matrix diagonal per run (see :func:`diagnostics.leverage`)."""
+        from . import diagnostics
+
+        return diagnostics.leverage(self.model_matrix)
 
     def stationary_point(self) -> StationaryPoint:
         """Unconstrained stationary point of the fitted surface (see :func:`optimize`)."""
@@ -284,12 +355,14 @@ def fit_ols(
             )
         order, interactions = _MODEL_SPECS[model]
 
+    response_name: str | None = None
     if isinstance(response, str):
         if response not in design.runs.columns:
             raise ValueError(
                 f"no response column {response!r} on the design; "
                 f"available columns: {list(design.runs.columns)}"
             )
+        response_name = response
         response = design.runs[response].to_numpy()
 
     y = np.asarray(response, dtype=float)
@@ -367,4 +440,5 @@ def fit_ols(
         interactions,
         design,
         y,
+        response_name,
     )
