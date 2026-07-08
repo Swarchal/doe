@@ -155,6 +155,10 @@ to `docs/img/`, and prints the outputs for transcription. When you change behavi
 vignette demonstrates, re-run `uv run python scripts/build_vignette_assets.py` and update the
 transcribed numbers/figures so the doc stays truthful.
 
+`docs/WORKFLOW.md` is the shorter end-to-end walkthrough (factors → design → fit → optimum);
+its outputs and `wf_*.png` figures come from `scripts/build_workflow_assets.py` the same way —
+re-run it and update the transcriptions when the walkthrough's behaviour changes.
+
 `docs/` is also a Sphinx project (`conf.py`, furo theme, MyST so the markdown guides build
 as-is, napoleon for the Google-style docstrings). `docs/api/` holds one `automodule` page per
 module; add a page there when adding a module. Build with

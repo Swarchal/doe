@@ -1,23 +1,32 @@
 # End-to-end workflow: from factors to an operating point
 
-This walkthrough shows a typical DoE loop:
+Most optimization studies follow the same loop. This walkthrough makes one complete pass
+through it, one section per step:
 
-1. define the factors and practical ranges,
-2. choose a design that can estimate the model you need,
-3. randomize and run the experiment,
-4. attach the response,
-5. fit and check the model,
-6. use the fitted surface to choose the next setting.
+1. pin down the factors and the ranges you are willing to run,
+2. pick a design that can see curvature — not just slopes — and randomize the run order,
+3. run the experiment and record the response against each run,
+4. fit a model to the results,
+5. decide whether the model can be trusted,
+6. read the best setting off the fitted surface,
+7. confirm it with a fresh run.
 
-The example is a small reaction-optimization study with three continuous factors:
-temperature, reaction time, and catalyst loading. The response is percent yield.
-The same pattern applies to assays, formulations, process screens, and other
-continuous-input experiments.
+The example is a small reaction-optimization study with three factors you can dial in —
+temperature, reaction time, and catalyst loading — and one response to maximize: percent
+yield. The same pattern applies to assay development, formulation, process screening, and
+any other experiment with continuous inputs.
+
+> Every console output and figure below is real: it is produced by running the snippets
+> via `scripts/build_workflow_assets.py`, which writes the figures to `docs/img/`. The
+> response is a synthetic-but-realistic quadratic surface so the walkthrough is fully
+> reproducible; replace it with your own measurements and the same calls apply.
 
 ## 1. Define the experimental space
 
-Start with factor ranges that are safe and practically meaningful. DoE fits in coded
-units internally, but the design is stored and displayed in natural units.
+Every study starts with the knobs you can turn and how far you are willing to turn them.
+Choose ranges that are safe and physically sensible, but wide enough that the response
+actually moves across them: too narrow and the effect hides in the measurement noise; too
+wide and some runs may fail outright or leave the region you care about.
 
 ```python
 from doe import ContinuousFactor
@@ -29,14 +38,19 @@ factors = [
 ]
 ```
 
-The coded midpoint is zero for every continuous factor, so the center of this region is
-60 C, 40 min, and 1.5 g/L.
+You enter and read everything in natural units — degrees, minutes, g/L. Behind the scenes
+the library rescales each factor to a common −1 to +1 range, so no factor dominates the
+analysis just because its numbers happen to be larger. The midpoint of each range codes to
+zero, so the center of the space is 60 C, 40 min, and 1.5 g/L.
 
 ## 2. Generate and randomize the design
 
-If the goal is optimization, use a response-surface design rather than a two-level
-screening design. A central composite design has enough levels to estimate curvature
-and interactions.
+The design you choose follows from the question you are asking. If you only need to know
+*which* factors matter, a lean two-level screening design is cheapest. But to find a *best
+setting* you have to see curvature — a peak, a plateau, a point of diminishing returns —
+and a two-level design can only ever fit straight lines. A central composite design adds
+the extra runs that let the model bend, so it can locate an optimum instead of just
+pointing uphill.
 
 ```python
 from doe import central_composite
@@ -60,15 +74,27 @@ print(design.runs.head(8).round(2))
 7         13         60.0  40.0       2.5
 ```
 
-The `std_order` column records the original design order before randomization. Keep the
-randomized order for execution: it protects the analysis from time trends such as a
-warming instrument, ageing reagents, or operator fatigue.
+The `std_order` column remembers where each run sat in the textbook layout, so you can
+always trace a result back; the row order shown is the order to actually run at the bench.
+Randomizing matters because anything that drifts over a session — an instrument warming up,
+reagents ageing, the operator tiring — would otherwise line up with whichever factor
+changes slowest in an unshuffled run order and masquerade as that factor's effect. Shuffling the order breaks that link,
+turning a lurking bias into ordinary noise.
+
+The design lays down three kinds of run, all visible in the cube below: eight corner points
+that span the extremes of every factor, six axial points on the faces that let the model
+see curvature, and a center point repeated five times. Repeating the center gives you a
+direct read on your own measurement noise — later, that is what tells you whether a poor
+fit is the model missing something real or just run-to-run scatter.
+
+![3-D scatter of the 19-run faced central composite design in the coded temperature/time/catalyst cube: eight blue factorial corners, six orange axial points on the face centers, and five red center replicates stacked at the origin.](img/wf_design.png)
 
 ## 3. Add the measured response
 
-After running the experiment, attach the measured response to the design. Keeping the
-response on the design prevents accidental misalignment between run order and response
-values.
+Once the runs are done, attach the measured yields back onto the design. Keeping the
+numbers with the runs — rather than off in a separate spreadsheet — is the simplest guard
+against the most damaging mistake in the whole process: a response value paired with the wrong
+run.
 
 ```python
 import numpy as np
@@ -92,13 +118,16 @@ yield_pct = (
 measured = design.with_response("yield_pct", yield_pct)
 ```
 
-Real analyses should use the measured values in randomized run order. The synthetic
-response above is only there to make the walkthrough reproducible.
+In a real study this is just your column of measured yields, entered in the order the runs
+were performed. The formula above only stands in for the lab so the walkthrough reproduces
+the same numbers every time.
 
 ## 4. Fit a quadratic model
 
-A central composite design is intended for a second-order response-surface model:
-main effects, two-factor interactions, and squared terms.
+Fitting a model turns the scattered run results into a single equation for how yield
+responds to the three factors. A central composite design is built for a *quadratic* model,
+which captures three things at once: each factor's own effect, how pairs of factors combine,
+and the curvature that bends the response toward a peak.
 
 ```python
 import pandas as pd
@@ -131,17 +160,34 @@ time^2                      -5.61  -11.21
 catalyst^2                  -3.76   -7.53
 ```
 
-In coded units, an effect is the fitted low-to-high swing. Here, raising temperature
-from 45 C to 75 C is associated with about a 14.8 percentage-point yield increase near
-the center of the design, before accounting for curvature and interactions.
+The `effect` column is the one to read first: it is the change in yield as a factor moves
+from the low end of its range to the high end. Temperature's effect of about +14.8 says
+that going from 45 C to 75 C lifts yield by roughly 15 percentage points — the biggest
+single lever in this study. The three R² values printed above all sit near 1 — the quick
+signal that the model fits; the next section makes sure that is real and not wishful.
+
+The Pareto plot sorts the effects by size, so the levers that matter stand out from the
+ones that do not. Temperature and its curvature term are largest, time is close behind,
+catalyst is a moderate third, and the interactions between factors are small — meaning the
+factors mostly act on their own rather than ganging up. The practical read: to move yield,
+reach for temperature and time first.
+
+![Horizontal Pareto bar chart of absolute effects: temperature and temperature-squared largest at about 14.5, then time-squared and time near 10-11, catalyst and catalyst-squared in the middle, and the temperature:time, time:catalyst, and temperature:catalyst interactions smallest.](img/wf_pareto.png)
 
 ## 5. Check whether the model is usable
 
-Look for three things before acting on the model:
+A good fit on paper is not the same as a model you can bet a run on. Three quick checks
+answer the practical questions behind that trust:
 
-- high adjusted and predicted R2 values,
-- no strong lack-of-fit signal,
-- no serious collinearity in the fitted terms.
+- **Will it predict, or does it only describe?** The adjusted and predicted R² printed
+  with the fit above should both stay high. A model can hug the very data it was fit to
+  and still miss the next run; predicted R² is the one that guards against that.
+- **Does it match the shape of the data?** The lack-of-fit check weighs the model's misses
+  against the scatter in your repeated center points. A large p-value means the misses are
+  no bigger than your own measurement noise — nothing systematic is being left out.
+- **Are the factors tangled together?** When two factors move in step, the model cannot
+  tell their effects apart. The VIF numbers flag that; values near 1 mean each factor's
+  effect comes through cleanly.
 
 ```python
 from doe import vif
@@ -182,15 +228,27 @@ catalyst^2              1.73
 Name: VIF, dtype: float64
 ```
 
-The large lack-of-fit p-value means the residual variation is consistent with pure
-experimental error from replicated settings. The VIF values are small, so the model
-terms are not fighting severe collinearity.
+All three checks pass here. The ANOVA table breaks the fit down further, term by term:
+its `p` column shows every term except the temperature:catalyst interaction standing
+clearly out of the noise, matching the Pareto plot's ranking. The lack-of-fit p-value of
+0.75 says the model's misses are ordinary scatter, not a missing term. And no VIF rises
+above 1.73 — a payoff of the design itself, which varied the factors independently, so
+their effects never blur into one another.
+
+Two plots make the same point at a glance. On the left, predicted versus actual: when the
+model tracks reality, the points fall along the diagonal. On the right, the residuals —
+what the model missed on each run — should scatter randomly around zero; a funnel or a
+curve would be a warning sign. Both look clean, so the model is safe to act on.
+
+![Two diagnostic panels. Left, predicted vs actual yield: points lie tight against the 45-degree line across the 46-79% range with R² = 0.998. Right, residuals vs fitted: a structureless band of points scattered within about ±1.2 around the zero line.](img/wf_diagnostics.png)
 
 ## 6. Choose the operating point
 
-With a quadratic model, the fitted surface can be optimized directly. `stationary_point`
-reports the unconstrained stationary point and classifies it; `optimum` searches within
-the coded design box.
+With a model you trust, you can finally ask it the question the experiment was run to
+answer: *which settings give the most yield?* Two functions answer it. `stationary_point`
+finds the exact top of the fitted surface and reports whether it really is a peak. `optimum`
+finds the best setting that stays inside the ranges you actually tested — the answer to
+trust, because the model is only anchored by data within that box.
 
 ```python
 stationary = fit.stationary_point()
@@ -205,12 +263,24 @@ StationaryPoint(maximum: temperature=69.05, time=51.06, catalyst=1.779 -> 81.53)
 Optimum(max: temperature=69.05, time=51.06, catalyst=1.779 -> 81.53)
 ```
 
-In this case the stationary point is a feasible maximum, so the unconstrained and
-box-constrained optima agree.
+Here the peak lands comfortably inside the tested ranges, so both functions agree: about
+69 C, 51 minutes, and 1.8 g/L catalyst, for a predicted 81.5% yield. When the peak instead
+falls outside the box, `optimum` stops at the edge of the tested region — it will not
+recommend a setting the data cannot vouch for.
+
+The contour map shows where that setting sits. Sliced at the best catalyst loading, yield
+climbs from the low-temperature, short-time corner to a clear interior peak, marked with
+a star. Because
+the optimum is a hilltop rather than a hard corner, it sits on a gentle plateau — small
+day-to-day drift in the setup costs only a little yield, which is exactly the robustness you
+want in an operating point.
+
+![Filled contour of fitted yield over temperature and time at catalyst = 1.78 g/L. Yield rises from the low-temperature, low-time corner toward a bright interior peak above 81%, where a gold star marks the operating point at 69 C, 51 min.](img/wf_operating_point.png)
 
 ## 7. Plan the confirmation run
 
-The model suggests a confirmation setting in natural units:
+The optimum is still only a prediction. Before you rely on it — or report it — run the
+experiment at that setting and check the yield against what the model promised:
 
 ```python
 confirmation = pd.DataFrame([optimum.natural]).round(2)
@@ -224,8 +294,9 @@ print(fit.predict(optimum.natural).round(2))
 [81.53]
 ```
 
-Run one or more confirmation experiments near this point. If the observed response
-matches the prediction within the experimental error seen in the design, the workflow
-has produced an operating point. If it does not, augment the design around the region
-where the model failed and refit before making a process decision.
+Run the confirmation point once or twice. If the measured yield lands near the predicted
+81.5%, within the run-to-run scatter you already saw across the design, the study has
+delivered an operating point you can stand behind. If it comes in well short, the model has
+been pushed past where it holds: add a handful of runs around this region, refit, and
+re-confirm before committing to the setting.
 
