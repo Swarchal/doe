@@ -268,3 +268,86 @@ def test_with_responses_preserves_point_types_and_meta():
     assert withy.point_types == design.point_types
     assert withy.meta == design.meta
     assert withy.factors is design.factors
+
+
+# --------------------------------------------------------------------------- #
+# project -- factor subsetting
+# --------------------------------------------------------------------------- #
+
+
+def _factorial_3f():
+    factors = [
+        ContinuousFactor("a", 0.0, 10.0),
+        ContinuousFactor("b", 0.0, 10.0),
+        ContinuousFactor("c", 0.0, 10.0),
+    ]
+    return full_factorial(factors, levels=2)
+
+
+def test_project_narrows_factors_and_drops_their_columns():
+    projected = _factorial_3f().project(["a", "b"])
+    assert projected.factors.names == ["a", "b"]
+    assert list(projected.runs.columns) == ["a", "b"]
+    assert projected.n_runs == 8
+
+
+def test_project_honors_requested_order():
+    projected = _factorial_3f().project(["c", "a"])
+    assert projected.factors.names == ["c", "a"]
+    assert list(projected.runs.columns) == ["c", "a"]
+
+
+def test_project_carries_responses_along_aligned():
+    design = _factorial_3f()
+    measured = design.with_response("yield", np.arange(design.n_runs, dtype=float))
+    projected = measured.project(["a"])
+    # surviving factor first, response kept and still aligned to its runs
+    assert list(projected.runs.columns) == ["a", "yield"]
+    np.testing.assert_array_equal(
+        projected.runs["yield"].to_numpy(), np.arange(design.n_runs, dtype=float)
+    )
+
+
+def test_project_collapses_duplicates_into_replicates():
+    # dropping c folds the 2^3 corners into the 2^2 corners, each appearing twice
+    projected = _factorial_3f().project(["a", "b"])
+    assert projected.coded().value_counts().tolist() == [2, 2, 2, 2]
+
+
+def test_project_preserves_point_types_and_meta():
+    factors = [ContinuousFactor("a", 0, 10), ContinuousFactor("b", 0, 10)]
+    design = central_composite(factors, center=4)
+    projected = design.project(["a"])
+    assert projected.point_types == design.point_types
+    assert projected.meta == design.meta
+
+
+def test_project_does_not_mutate_original():
+    design = _factorial_3f()
+    design.project(["a"])
+    assert design.factors.names == ["a", "b", "c"]
+    assert list(design.runs.columns) == ["a", "b", "c"]
+
+
+def test_project_result_fits_a_model_on_the_survivors():
+    design = _factorial_3f()
+    measured = design.with_response("y", np.zeros(design.n_runs))
+    projected = measured.project(["a", "b"])
+    fit = fit_ols(projected, "y")
+    assert set(fit.term_names) >= {"a", "b"}
+    assert "c" not in fit.term_names
+
+
+def test_project_rejects_empty():
+    with pytest.raises(ValueError, match="at least one factor"):
+        _factorial_3f().project([])
+
+
+def test_project_rejects_unknown_factor():
+    with pytest.raises(ValueError, match="not factors of this design"):
+        _factorial_3f().project(["a", "z"])
+
+
+def test_project_rejects_duplicate_names():
+    with pytest.raises(ValueError, match="duplicate factor names"):
+        _factorial_3f().project(["a", "a"])

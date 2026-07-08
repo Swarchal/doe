@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -197,6 +197,58 @@ class Design:
         for name, values in responses.items():
             design = design.with_response(name, values)
         return design
+
+    def project(self, factors: Sequence[str]) -> Design:
+        """Return a copy restricted to a subset of the factors, keeping every run.
+
+        Drops the columns of the factors *not* named and narrows the :class:`FactorSet` to
+        those that remain -- the runs themselves are untouched, so any response,
+        ``std_order``, or other non-factor columns ride along aligned to their rows, and
+        ``point_types`` carry through unchanged. This is the *project onto the survivors*
+        step after a screen: once a :func:`~doe.plotting.half_normal_plot` has singled out
+        the vital few factors, project the screening runs onto them and hand the result to
+        :func:`~doe.generators.optimal.augment` to add curvature runs -- reusing the runs you
+        already paid for rather than starting a fresh surface design.
+
+        Because the dropped factors collapse, runs that differed only in a dropped column
+        become repeats (a 2^(6-2) screen projected onto three factors becomes the 2^3 corners,
+        each measured twice) -- exactly the replication a follow-up model benefits from.
+
+        ``factors`` is given in the order you want the surviving factor columns to appear (it
+        need not match the original order); each name must be a current factor and none may
+        repeat. Note that projecting a mixture design is rejected downstream -- dropping a
+        component breaks the sum-to-1 constraint (:class:`FactorSet` re-validates the subset).
+
+        Examples:
+            >>> import pandas as pd
+            >>> from doe import ContinuousFactor, Design, FactorSet
+            >>> factors = FactorSet([
+            ...     ContinuousFactor("temperature", 40, 80),
+            ...     ContinuousFactor("time", 5, 15),
+            ... ])
+            >>> runs = pd.DataFrame({"temperature": [40, 80], "time": [5, 15]})
+            >>> measured = Design(runs, factors).with_response("yield", [12.5, 18.0])
+            >>> projected = measured.project(["temperature"])
+            >>> projected.factors.names
+            ['temperature']
+            >>> list(projected.runs.columns)
+            ['temperature', 'yield']
+        """
+        names = list(factors)
+        if not names:
+            raise ValueError("project needs at least one factor name")
+        if len(set(names)) != len(names):
+            raise ValueError(f"duplicate factor names in projection: {names}")
+        unknown = [n for n in names if n not in self.factors.names]
+        if unknown:
+            raise ValueError(f"not factors of this design: {unknown}")
+        keep = set(names)
+        others = [c for c in self.runs.columns if c not in self.factors.names or c in keep]
+        # surviving factor columns first (in requested order), then any non-factor columns
+        ordered = names + [c for c in others if c not in keep]
+        runs = self.runs.loc[:, ordered].copy()
+        sub = FactorSet([self.factors[n] for n in names])
+        return Design(runs, sub, self.name, dict(self.meta), self.point_types)
 
     def replicate(self, n: int, *, each: bool = False) -> Design:
         """Return a copy with every run replicated ``n`` times.

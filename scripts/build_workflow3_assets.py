@@ -26,8 +26,6 @@ import pandas as pd
 
 from doe import (
     ContinuousFactor,
-    Design,
-    FactorSet,
     augment,
     central_composite,
     efficiency,
@@ -170,8 +168,8 @@ save(axL, "wf3_screen_effects.png")
 banner("Sections 4-5: project onto the survivors and augment")
 
 keep = ["temperature", "time", "catalyst"]
-survivors = FactorSet([f for f in factors if f.name in keep])
-projected = Design(measured.runs.loc[:, keep], survivors, name="screen_projected")
+projected = measured.project(keep)
+survivors = projected.factors
 
 print(projected.coded().value_counts().sort_index())
 

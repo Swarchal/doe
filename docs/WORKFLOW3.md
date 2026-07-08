@@ -237,14 +237,15 @@ measurements of the three survivors — you already own them. Project the screen
 surviving factors and look at where its runs landed in *their* space:
 
 ```python
-from doe import Design, FactorSet
-
 keep = ["temperature", "time", "catalyst"]
-survivors = FactorSet([f for f in factors if f.name in keep])
-projected = Design(measured.runs.loc[:, keep], survivors, name="screen_projected")
+projected = measured.project(keep)
 
 print(projected.coded().value_counts().sort_index())
 ```
+
+`Design.project` narrows the design to the named factors, dropping the columns of the three
+parked ones while every run — and its measured yield — stays put. The dropped factors simply
+collapse, so runs that differed only in `pH`, `stir_rate`, or `solvent` now coincide:
 
 ```text
 temperature  time  catalyst

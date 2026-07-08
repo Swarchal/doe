@@ -60,9 +60,12 @@ consumes one.
   blend (`Σ low ≤ 1 ≤ Σ high`).
 - `design.py` — `Design`: a `pandas.DataFrame` of runs (natural units) plus its `FactorSet`.
   `.coded()` is the bridge to analysis; `.replicate()` and `.randomize()` handle replication
-  and run order. The optional `point_types` tuple tags each run (e.g. `"center"`); it drives
-  `n_center`/`center_indices`, which the lack-of-fit pure-error estimate depends on, and is
-  carried through `replicate`/`randomize` so center labels survive.
+  and run order; `.project(names)` narrows the design to a subset of its factors (dropping the
+  other factors' columns while runs/responses/`point_types` ride along) — the "project onto the
+  survivors" step after screening, feeding the projected design to `augment`. The optional
+  `point_types` tuple tags each run (e.g. `"center"`); it drives `n_center`/`center_indices`,
+  which the lack-of-fit pure-error estimate depends on, and is carried through
+  `replicate`/`randomize`/`project` so center labels survive.
 - `generators/factorial.py` — `full_factorial` and `fractional_factorial` (2-level, from
   generator strings like `"D=ABC"`), plus `plackett_burman` (saturated, orthogonal
   main-effect screening designs; run counts from Sylvester doubling of the order-1/12/20
