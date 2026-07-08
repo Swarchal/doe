@@ -164,6 +164,13 @@ impurity → two OLS fits → Derringer–Suich `desirability`); its outputs and
 come from `scripts/build_workflow2_assets.py` the same way — re-run it and update the
 transcriptions when its behaviour changes.
 
+`docs/WORKFLOW3.md` is the *prequel* walkthrough on screening (six candidate factors →
+16-run `fractional_factorial` screen → `half_normal_plot` picks the vital three → project the
+screen onto the survivors and `augment` it into a quadratic-capable design → same operating
+point as WORKFLOW.md for 24 runs total); its outputs and `wf3_*.png` figures come from
+`scripts/build_workflow3_assets.py` the same way — re-run it and update the transcriptions
+when its behaviour changes.
+
 `docs/` is also a Sphinx project (`conf.py`, furo theme, MyST so the markdown guides build
 as-is, napoleon for the Google-style docstrings). `docs/api/` holds one `automodule` page per
 module; add a page there when adding a module. Build with
