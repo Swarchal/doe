@@ -165,6 +165,7 @@ print(optimum)
 confirmation = optimum.to_frame().round(2)
 print(confirmation)
 print(round(fit.predict(optimum.natural), 2))
+print(fit.predict(optimum.natural, interval="prediction").round(2))
 
 # Figure: the fitted surface over temperature x time at the optimal catalyst loading,
 # with the recommended operating point (and its confirmation setting) marked. This is

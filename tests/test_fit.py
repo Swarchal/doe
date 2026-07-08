@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+from scipy import stats
 
 from doe.analysis import anova, diagnostics
 from doe.analysis.fit import FitResult, fit_ols
@@ -223,6 +224,86 @@ def test_predict_honors_scheffe_mixture_path():
     y = 3 * x1 + 5 * x2 + 2 * x3 + 4 * x1 * x2 - x1 * x3 + 2 * x2 * x3
     result = fit_ols(design, y, model="scheffe-quadratic")
     assert np.allclose(result.predict(design.runs), result.fitted)
+
+
+def test_predict_interval_returns_frame_with_fit_bracketed():
+    design, y = _replicated_design_and_response()
+    result = fit_ols(design, y)
+    band = result.predict({"a": 10.0, "b": 5.0}, interval="prediction")
+    assert isinstance(band, pd.DataFrame)
+    assert list(band.columns) == ["fit", "se", "lower", "upper"]
+    assert len(band) == 1
+    # point estimate matches the plain (interval-free) prediction, and the band brackets it
+    point = result.predict({"a": 10.0, "b": 5.0})
+    assert band.loc[0, "fit"] == pytest.approx(point)
+    assert band.loc[0, "lower"] < point < band.loc[0, "upper"]
+
+
+def test_prediction_interval_wider_than_confidence_by_residual_variance():
+    design, y = _replicated_design_and_response()
+    result = fit_ols(design, y)
+    point = {"a": 8.0, "b": 3.0}
+    conf = result.predict(point, interval="confidence")
+    pred = result.predict(point, interval="prediction")
+    # same centre; prediction band is strictly wider (adds the residual variance term)
+    assert pred.loc[0, "fit"] == pytest.approx(conf.loc[0, "fit"])
+    assert pred.loc[0, "se"] > conf.loc[0, "se"]
+    assert pred.loc[0, "lower"] < conf.loc[0, "lower"]
+    assert pred.loc[0, "upper"] > conf.loc[0, "upper"]
+    # prediction variance == confidence (mean) variance + residual MSE
+    assert pred.loc[0, "se"] ** 2 == pytest.approx(conf.loc[0, "se"] ** 2 + result.mse)
+
+
+def test_prediction_interval_matches_closed_form():
+    design, y = _replicated_design_and_response()
+    result = fit_ols(design, y)
+    level = 0.95
+    band = result.predict({"a": 10.0, "b": 10.0}, interval="prediction", level=level)
+    # x row for the corner (1, 1): intercept, a, b, a:b in coded units
+    x = np.array([1.0, 1.0, 1.0, 1.0])
+    mean_var = float(x @ result.cov_beta @ x)
+    se = np.sqrt(mean_var + result.mse)
+    t_crit = stats.t.ppf(0.5 + level / 2.0, result.dof_resid)
+    fit_val = float(x @ result.coefficients)
+    assert band.loc[0, "se"] == pytest.approx(se)
+    assert band.loc[0, "lower"] == pytest.approx(fit_val - t_crit * se)
+    assert band.loc[0, "upper"] == pytest.approx(fit_val + t_crit * se)
+
+
+def test_predict_interval_batches_one_row_per_point():
+    design, y = _replicated_design_and_response()
+    result = fit_ols(design, y)
+    band = result.predict({"a": [0.0, 5.0, 10.0], "b": [0.0, 5.0, 10.0]}, interval="confidence")
+    assert isinstance(band, pd.DataFrame)
+    assert len(band) == 3
+    assert np.all(band["lower"] < band["upper"])
+
+
+def test_prediction_interval_nan_when_saturated():
+    # a 2^2 factorial with the full interaction model has zero residual dof
+    factors = [ContinuousFactor("a", 0, 10), ContinuousFactor("b", 0, 10)]
+    design = full_factorial(factors, levels=2)
+    coded = design.coded().to_numpy()
+    a, b = coded[:, 0], coded[:, 1]
+    y = 10 + 3 * a + 2 * b + 1.5 * a * b
+    with pytest.warns(UserWarning):
+        result = fit_ols(design, y, model="linear")
+    assert result.dof_resid == 0
+    band = result.predict({"a": 10.0, "b": 5.0}, interval="prediction")
+    # fit is still a real number; the band is undefined (no error variance)
+    assert np.isfinite(band.loc[0, "fit"])
+    assert np.isnan(band.loc[0, "se"])
+    assert np.isnan(band.loc[0, "lower"])
+    assert np.isnan(band.loc[0, "upper"])
+
+
+def test_predict_interval_rejects_bad_arguments():
+    design, y = _replicated_design_and_response()
+    result = fit_ols(design, y)
+    with pytest.raises(ValueError, match="interval must be"):
+        result.predict({"a": 5.0, "b": 5.0}, interval="bogus")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="level must be between 0 and 1"):
+        result.predict({"a": 5.0, "b": 5.0}, interval="prediction", level=1.5)
 
 
 def test_fluent_methods_require_a_fit_ols_result():

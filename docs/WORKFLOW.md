@@ -286,17 +286,29 @@ experiment at that setting and check the yield against what the model promised:
 confirmation = optimum.to_frame().round(2)
 print(confirmation)
 print(round(fit.predict(optimum.natural), 2))
+print(fit.predict(optimum.natural, interval="prediction").round(2))
 ```
 
 ```text
    temperature   time  catalyst  yield_pct
 0        69.05  51.06      1.78      81.53
 81.53
+     fit    se  lower  upper
+0  81.53  0.79  79.75  83.32
 ```
 
-Run the confirmation point once or twice. If the measured yield lands near the predicted
-81.5%, within the run-to-run scatter you already saw across the design, the study has
-delivered an operating point you can stand behind. If it comes in well short, the model has
-been pushed past where it holds: add a handful of runs around this region, refit, and
-re-confirm before committing to the setting.
+The single number, 81.53, is the model's best guess; but a confirmation run will not land
+exactly there, so the honest target is a *range*. `predict(..., interval="prediction")` gives
+it: a 95% **prediction interval** of about 79.8% to 83.3%, the band a single fresh run at this
+setting should fall inside. It is wider than the model's uncertainty about the surface alone
+(`interval="confidence"`) precisely because it folds in the run-to-run measurement scatter —
+the same scatter your five center replicates measured — so it is exactly the yardstick to
+judge a confirmation run against. (The `se` column is the standard error the band is built
+from.)
+
+Run the confirmation point once or twice. If the measured yield lands inside that 79.8–83.3%
+interval, the study has delivered an operating point you can stand behind. If it comes in
+below the interval — not merely below 81.5%, but outside the band — the model has been pushed
+past where it holds: add a handful of runs around this region, refit, and re-confirm before
+committing to the setting.
 

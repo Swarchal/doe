@@ -5,7 +5,7 @@ from __future__ import annotations
 import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 import numpy as np
 import pandas as pd
@@ -121,9 +121,31 @@ class FitResult:
 
         return anova.adjusted_r2(self)
 
+    @overload
     def predict(
-        self, points: Mapping[str, object] | pd.DataFrame | Design
-    ) -> np.ndarray | float:
+        self,
+        points: Mapping[str, object] | pd.DataFrame | Design,
+        *,
+        interval: None = ...,
+        level: float = ...,
+    ) -> np.ndarray | float: ...
+
+    @overload
+    def predict(
+        self,
+        points: Mapping[str, object] | pd.DataFrame | Design,
+        *,
+        interval: Literal["confidence", "prediction"],
+        level: float = ...,
+    ) -> pd.DataFrame: ...
+
+    def predict(
+        self,
+        points: Mapping[str, object] | pd.DataFrame | Design,
+        *,
+        interval: Literal["confidence", "prediction"] | None = None,
+        level: float = 0.95,
+    ) -> np.ndarray | float | pd.DataFrame:
         """Predict responses at new runs given in *natural* units.
 
         ``points`` is a mapping (column name -> scalar or array), a :class:`pandas.DataFrame`,
@@ -142,10 +164,20 @@ class FitResult:
         points still cannot produce (e.g. an unknown categorical level) raises rather than
         returning a wrong number.
 
-        Returns a plain ``float`` when ``points`` is a mapping whose values are *all* scalars
-        (a single natural-unit run) -- the common single-point case, so callers don't have to
-        unwrap a length-1 array. Any other input (a DataFrame, a Design, or a mapping with even
-        one array-valued column) keeps returning an ``ndarray``, one entry per run.
+        With ``interval=None`` (default) this returns the point predictions only: a plain
+        ``float`` when ``points`` is a mapping whose values are *all* scalars (a single
+        natural-unit run) -- the common single-point case, so callers don't have to unwrap a
+        length-1 array -- and an ``ndarray`` (one entry per run) for any other input.
+
+        Passing ``interval`` instead returns a :class:`pandas.DataFrame` (one row per point,
+        regardless of input shape) with columns ``fit``/``se``/``lower``/``upper`` at the given
+        confidence ``level``. ``"confidence"`` bounds the *mean* response at each setting
+        (variance ``xᵀ cov(β) x``); ``"prediction"`` bounds a *single future observation* there,
+        widening the band by the residual variance (``mse + xᵀ cov(β) x``) -- the interval a
+        confirmation run should land inside. Both use a two-sided Student-``t`` multiplier on
+        the fit's residual degrees of freedom; ``se``/``lower``/``upper`` are NaN for a
+        saturated model (``dof_resid == 0``, no error variance to build a band from), matching
+        :meth:`conf_int`.
         """
         from ..design import Design as _Design
         from .model import coded_design_points, expand_coded_points
@@ -174,7 +206,37 @@ class FitResult:
             )
         x_aligned = np.column_stack([available[term] for term in self.term_names])
         predicted = np.asarray(x_aligned @ self.coefficients, dtype=float)
-        return float(predicted[0]) if scalar_input else predicted
+        if interval is None:
+            return float(predicted[0]) if scalar_input else predicted
+        # ``str(...)`` so this guard stays reachable for untyped callers passing a bad string.
+        if str(interval) not in ("confidence", "prediction"):
+            raise ValueError("interval must be 'confidence', 'prediction', or None")
+        return self._prediction_interval(x_aligned, predicted, interval, level)
+
+    def _prediction_interval(
+        self,
+        x_aligned: np.ndarray,
+        predicted: np.ndarray,
+        interval: Literal["confidence", "prediction"],
+        level: float,
+    ) -> pd.DataFrame:
+        """Build the ``fit``/``se``/``lower``/``upper`` band for :meth:`predict`."""
+        if not 0.0 < level < 1.0:
+            raise ValueError("level must be between 0 and 1")
+        # Var of the mean response at each point: diag(X cov(beta) Xᵀ).
+        mean_var = np.einsum("ij,jk,ik->i", x_aligned, self.cov_beta, x_aligned)
+        if interval == "prediction":
+            mean_var = mean_var + self.mse
+        if self.dof_resid <= 0:
+            se = np.full_like(predicted, np.nan)
+            half = np.full_like(predicted, np.nan)
+        else:
+            se = np.sqrt(mean_var)
+            t_crit = float(stats.t.ppf(0.5 + level / 2.0, self.dof_resid))
+            half = t_crit * se
+        return pd.DataFrame(
+            {"fit": predicted, "se": se, "lower": predicted - half, "upper": predicted + half}
+        )
 
     def summary(self) -> pd.DataFrame:
         """Coefficient/effect/inference table, one row per term.

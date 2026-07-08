@@ -352,6 +352,8 @@ Before committing to it, go back to the bench:
 print(des.to_frame().round(1))
 print(f"predicted yield    = {fit_yield.predict(des.natural):.1f}%")
 print(f"predicted impurity = {fit_imp.predict(des.natural):.1f}%")
+print(fit_yield.predict(des.natural, interval="prediction").round(1))
+print(fit_imp.predict(des.natural, interval="prediction").round(1))
 ```
 
 ```text
@@ -359,14 +361,25 @@ print(f"predicted impurity = {fit_imp.predict(des.natural):.1f}%")
 0        81.3  62.7       83.0           8.6        0.5
 predicted yield    = 83.0%
 predicted impurity = 8.6%
+    fit   se  lower  upper
+0  83.0  0.5   81.8   84.2
+   fit   se  lower  upper
+0  8.6  0.3    7.9    9.4
 ```
 
-Run the balance point once or twice and check *both* readouts against these predictions. If the
-measured yield and impurity land near 83% and 8.6% — within the run-to-run scatter the center
-replicates showed you — the study has delivered an operating point that honors both goals, and
-you can stand behind it. If one readout comes in well short, that model has been pushed past
-where it holds: add a few runs around this region, refit that readout, and re-strike the
-balance before committing.
+With two readouts there are two confirmation targets, and each deserves a *range* rather than
+a single number — a fresh run will not reproduce 83.0% and 8.6% exactly. `predict(...,
+interval="prediction")` gives each one: a 95% **prediction interval** of about 81.8–84.2% for
+yield and 7.9–9.4% for impurity — the bands a single confirmation run should fall inside. Each
+folds in that readout's own run-to-run scatter (the impurity band is tighter because impurity
+was the quieter measurement), so the two are exactly the yardsticks to judge the confirmation
+run against — one per readout.
+
+Run the balance point once or twice and check *both* readouts against their intervals. If the
+measured yield and impurity land inside 81.8–84.2% and 7.9–9.4%, the study has delivered an
+operating point that honors both goals, and you can stand behind it. If either readout lands
+outside its band, that model has been pushed past where it holds: add a few runs around this
+region, refit that readout, and re-strike the balance before committing.
 
 **Takeaway.** With more than one readout, do not optimize them one at a time and hope. Give
 each readout its own model, state each goal as a 0-to-1 desirability ramp, let the geometric
