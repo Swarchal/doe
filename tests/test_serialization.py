@@ -15,12 +15,7 @@ import pytest
 from doe.analysis.fit import fit_ols
 from doe.analysis.optimize import ResponseGoal
 from doe.design import Design
-from doe.factors import (
-    CategoricalFactor,
-    ContinuousFactor,
-    FactorSet,
-    factor_from_dict,
-)
+from doe.factors import CategoricalFactor, ContinuousFactor, FactorSet, factor_from_dict
 from doe.generators.factorial import fractional_factorial, full_factorial
 from doe.generators.rsm import central_composite
 from doe.serialization import ValidationError, validate_design_dict
@@ -32,14 +27,14 @@ from doe.serialization import ValidationError, validate_design_dict
 
 def test_continuous_factor_round_trips():
     f = ContinuousFactor("temp", 20.0, 80.0, units="C")
-    restored = factor_from_dict(f.to_dict())
+    restored = ContinuousFactor.from_dict(f.to_dict())
     assert restored == f
     assert f.to_dict()["type"] == "continuous"
 
 
 def test_categorical_factor_round_trips():
     f = CategoricalFactor("buffer", ("A", "B", "C"), units=None)
-    restored = factor_from_dict(f.to_dict())
+    restored = CategoricalFactor.from_dict(f.to_dict())
     assert restored == f
     assert isinstance(restored, CategoricalFactor)
     assert restored.levels == ("A", "B", "C")
