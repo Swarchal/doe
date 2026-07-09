@@ -9,21 +9,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from .factors import ContinuousFactor, FactorSet
+from .factors import ContinuousFactor, FactorSet, _jsonable
 
 #: Bumped when the serialized design shape changes incompatibly.
 SCHEMA_VERSION = "1.0"
-
-
-def _jsonable(value: object) -> object:
-    """Coerce numpy scalars to native Python types so the result is JSON-serializable."""
-    if isinstance(value, np.integer):
-        return int(value)
-    if isinstance(value, np.floating):
-        return float(value)
-    if isinstance(value, np.bool_):
-        return bool(value)
-    return value
 
 
 def _draw_seed(seed: int | None) -> int:

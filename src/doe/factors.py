@@ -14,6 +14,23 @@ from typing import Any
 import numpy as np
 
 
+def _jsonable(value: object) -> object:
+    """Coerce numpy scalars to native Python types so the result is JSON-serializable.
+
+    ``np.float64`` subclasses ``float``, so :mod:`json` already accepts it, but ``np.integer``
+    and ``np.bool_`` subclass nothing that :mod:`json` recognises and raise ``TypeError``.
+    Numpy scalars reach a factor whenever bounds or levels are derived from an array
+    (``ContinuousFactor("t", arr.min(), arr.max())``, ``levels=tuple(np.unique(col))``).
+    """
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        return float(value)
+    if isinstance(value, np.bool_):
+        return bool(value)
+    return value
+
+
 @dataclass(frozen=True)
 class ContinuousFactor:
     """A continuous (numeric) factor varied between ``low`` and ``high``.
@@ -69,8 +86,8 @@ class ContinuousFactor:
         return {
             "type": "continuous",
             "name": self.name,
-            "low": self.low,
-            "high": self.high,
+            "low": _jsonable(self.low),
+            "high": _jsonable(self.high),
             "units": self.units,
         }
 
@@ -114,7 +131,7 @@ class CategoricalFactor:
         return {
             "type": "categorical",
             "name": self.name,
-            "levels": list(self.levels),
+            "levels": [_jsonable(level) for level in self.levels],
             "units": self.units,
         }
 
@@ -163,8 +180,8 @@ class MixtureFactor:
         return {
             "type": "mixture",
             "name": self.name,
-            "low": self.low,
-            "high": self.high,
+            "low": _jsonable(self.low),
+            "high": _jsonable(self.high),
             "units": self.units,
         }
 

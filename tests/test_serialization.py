@@ -15,7 +15,13 @@ import pytest
 from doe.analysis.fit import fit_ols
 from doe.analysis.optimize import ResponseGoal
 from doe.design import Design
-from doe.factors import CategoricalFactor, ContinuousFactor, FactorSet, factor_from_dict
+from doe.factors import (
+    CategoricalFactor,
+    ContinuousFactor,
+    FactorSet,
+    MixtureFactor,
+    factor_from_dict,
+)
 from doe.generators.factorial import fractional_factorial, full_factorial
 from doe.generators.rsm import central_composite
 from doe.serialization import ValidationError, validate_design_dict
@@ -43,6 +49,54 @@ def test_categorical_factor_round_trips():
 def test_factor_dict_is_json_serializable():
     f = ContinuousFactor("p", 0.0, 1.0)
     assert json.loads(json.dumps(f.to_dict())) == f.to_dict()
+
+
+@pytest.mark.parametrize(
+    "factor",
+    [
+        # bounds/levels derived from an array arrive as numpy scalars; np.integer and
+        # np.bool_ subclass nothing json recognises, so to_dict must coerce them
+        ContinuousFactor("temp", np.int64(40), np.int64(80), units="C"),
+        ContinuousFactor("temp", np.float64(40.0), np.float64(80.0)),
+        MixtureFactor("A", np.float64(0.1), np.float64(0.8)),
+        CategoricalFactor("buffer", tuple(np.unique(np.array([2, 1])))),
+        CategoricalFactor("flag", (np.bool_(True), np.bool_(False))),
+    ],
+    ids=[
+        "continuous-int64",
+        "continuous-float64",
+        "mixture-float64",
+        "levels-int64",
+        "levels-bool",
+    ],
+)
+def test_factor_dict_from_numpy_scalars_is_json_serializable(factor):
+    payload = factor.to_dict()
+    restored = factor_from_dict(json.loads(json.dumps(payload)))
+    assert restored == factor
+
+
+def test_categorical_levels_are_native_python_types():
+    f = CategoricalFactor("buffer", tuple(np.unique(np.array([1, 2]))))
+    levels = f.to_dict()["levels"]
+    assert [type(level) for level in levels] == [int, int]
+
+
+def test_design_with_numpy_derived_factors_is_json_serializable():
+    # the end-to-end path a protocol generator consumes: factors built from array
+    # bounds/levels, serialized whole and parsed by a strict JSON reader
+    column = np.array([40, 80])
+    factors = FactorSet(
+        [
+            ContinuousFactor("temp", column.min(), column.max()),
+            CategoricalFactor("buffer", tuple(np.unique(np.array(["B", "A"])))),
+        ]
+    )
+    runs = pd.DataFrame({"temp": [40, 80], "buffer": ["A", "B"]})
+    design = Design(runs, factors, name="numpy-bounds")
+    doc = json.loads(json.dumps(design.to_dict()))
+    validate_design_dict(doc)
+    assert Design.from_dict(doc).runs.equals(design.runs)
 
 
 def test_factor_set_preserves_order():
