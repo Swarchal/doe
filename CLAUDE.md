@@ -174,6 +174,13 @@ point as WORKFLOW.md for 24 runs total); its outputs and `wf3_*.png` figures com
 `scripts/build_workflow3_assets.py` the same way — re-run it and update the transcriptions
 when its behaviour changes.
 
+`docs/WORKFLOW4.md` is the walkthrough on *serializing/deserializing an experiment* to hand
+it between tools (e.g. generating liquid-dispensing protocols): `Design.to_dict` → `json` →
+`validate_design_dict` → `Design.from_dict`, proving the round-trip reproduces the fit
+exactly. Text-only (no figures); its outputs come from `scripts/build_workflow4_assets.py`
+the same way — re-run it and update the transcriptions when its behaviour changes. See
+`docs/SERIALIZATION.md` for the field-by-field reference it links to.
+
 `docs/` is also a Sphinx project (`conf.py`, furo theme, MyST so the markdown guides build
 as-is, napoleon for the Google-style docstrings). `docs/api/` holds one `automodule` page per
 module; add a page there when adding a module. Build with
