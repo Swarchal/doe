@@ -181,6 +181,27 @@ exactly. Text-only (no figures); its outputs come from `scripts/build_workflow4_
 the same way — re-run it and update the transcriptions when its behaviour changes. See
 `docs/SERIALIZATION.md` for the field-by-field reference it links to.
 
+`docs/WORKFLOW5.md` is the walkthrough on *formulation / mixture optimization* — the one
+walkthrough off the box and onto the simplex: three lipid components as bounded proportions
+(`MixtureFactor`) → `extreme_vertices` design on the constrained simplex → Scheffé
+linear-vs-quadratic blending fits (the cross terms carry the synergy) → `ternary_contour` →
+best feasible blend via `mixture_candidates` + `FitResult.predict`. Extends the WORKFLOW/Vignette
+21 transfection theme one layer down ("which blend", not "how much reagent"); its outputs and
+`wf5_*.png` figures come from `scripts/build_workflow5_assets.py` the same way — re-run it and
+update the transcriptions when its behaviour changes.
+
+`docs/WORKFLOW6.md` is the walkthrough on *computer-generated optimal designs* — the escape
+hatch for when no named recipe fits: a categorical factor (which the RSM generators reject), a
+safety constraint carving an irregular region out of the box, and a tight odd run budget. Mix
+`CategoricalFactor` + `ContinuousFactor` → filter a `candidate_grid` to the feasible region →
+`d_optimal` builds the 15-run design via coordinate exchange → prove it beats a naive design
+with `efficiency`/`vif`/`condition_number`/`correlation_matrix` → fit a mixed quadratic and find
+the best *feasible* setting via `FitResult.predict` over a dense grid (the constrained optimum
+lands on the safety line; `optimum`/`ternary_contour` don't apply to a categorical fit). Features
+the Phase-3 coordinate-exchange engine that `augment` (WORKFLOW3) also uses; its outputs and
+`wf6_*.png` figures come from `scripts/build_workflow6_assets.py` the same way — re-run it and
+update the transcriptions when its behaviour changes.
+
 `docs/` is also a Sphinx project (`conf.py`, furo theme, MyST so the markdown guides build
 as-is, napoleon for the Google-style docstrings). `docs/api/` holds one `automodule` page per
 module; add a page there when adding a module. Build with
