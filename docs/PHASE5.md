@@ -150,8 +150,13 @@ model is **saturated or supersaturated** — you cannot fit it all at once. This
 question, not a code change: the vignette (§6) demonstrates the standard DSD analysis flow using
 existing machinery — fit main effects with `fit_ols(model="linear")`, read the `half_normal_plot`
 to find the active few, then fit a reduced quadratic in only the active factors (where residual
-dof is now positive) and run `anova_table` / `lack_of_fit`. No new analysis function is required;
-the value of DSD is entirely in the design, which the existing fit path already consumes.
+dof is now positive) and run `anova_table`. No new analysis function is required; the value of
+DSD is entirely in the design, which the existing fit path already consumes.
+
+Note `lack_of_fit` is *not* part of the default flow: a default DSD has a single center run, so
+the pure-error estimate has zero degrees of freedom and `lack_of_fit` raises. To use it, pass
+`extra_center_runs >= 1` (giving ≥ 2 center runs) — the analog of adding center replicates to a
+CCD. The vignette (§6) therefore stops at `anova_table`.
 
 ### 1.3 As-built notes & follow-ups (post-implementation code review)
 
@@ -168,41 +173,42 @@ plus the review's robustness/quality follow-ups, are tracked here so the plan st
   (Paley/symmetric constructions for `k ≤ 30`)". The implementation instead uses a general **Paley
   border construction** (`C = [[0, 1ᵀ], [1, Q]]`, `Q` the Jacobsthal/quadratic-character matrix)
   over `GF(p)` and `GF(p²)`. It covers even orders whose predecessor `q = order − 1` is a prime or
-  an odd-prime-square (4, 6, 8, 10, 12, 14, 18, 20, 24, 26, 30, …) and **raises for orders 16, 22,
-  28** (predecessors `15 = 3·5`, `21 = 3·7`, `27 = 3³`). So the "covers every realistic screening
-  problem" claim is not yet true — see follow-up 1.
+  an odd-prime-square (4, 6, 8, 10, 12, 14, 18, 20, 24, 26, 30, …). Orders 16, 22, 28
+  (predecessors `15 = 3·5`, `21 = 3·7`, `27 = 3³`) have no such construction, but `definitive_screening`
+  now **auto-advances `fake_factors` to the next constructible order** (follow-up 1, done), so an
+  ordinary `k = 16` builds at order 18 rather than erroring. `_conference_matrix` itself still
+  raises for the missing orders when called directly.
 - **The categorical extension is not implemented.** §1.1 describes the Jones–Nachtsheim (2013)
   two-level categorical DSD; the shipped code **rejects all categorical factors** (pointing to
   `d_optimal`). Continuous-only landed first, as planned; the categorical path is deferred.
 
-**Follow-ups (ranked; none block Phase 5a, address before declaring it complete):**
+**Follow-ups (ranked; all implemented — the only open item is the deeper 16/22/28 symmetric
+construction noted under follow-up 1):**
 
-1. **Close the coverage gap / search forward for a constructible order.** Ordinary factor counts
-   fail with a hard error: even `k = 16` (order 16) and odd `k = 15/21/27` (which auto-pad to
-   order 16/22/28) all raise, even though a valid design exists at a slightly larger order
-   (e.g. `k = 16` builds at order 18 with `fake_factors = 2`). `plackett_burman._pb_size` already
-   sets the precedent — auto-advance `n_fake` to the next *constructible* order rather than only
-   fixing parity. Widening the construction itself (e.g. a symmetric-conference construction for
-   the 16/22/28 family) is the deeper alternative.
-2. **Make the unconstructible-order error actionable.** It is currently phrased in internal
-   "conference-matrix order" terms, offers a "smaller" order that is infeasible for the caller
-   (`fake_factors ≥ 0` ⇒ `order ≥ k`), and never names a usable `fake_factors` value. Report in
-   terms of `k` and suggest the concrete `fake_factors` that works.
-3. **Reconcile the default with the documented `lack_of_fit` flow.** §1.2 lists `lack_of_fit` in
-   the DSD analysis flow, but a default DSD has a single center run, so `lack_of_fit` raises for
-   lack of pure error (it needs ≥ 2). Either default `extra_center_runs` to give pure-error dof
-   (as CCD/Box–Behnken do), or soften §1.2/the vignette to note that `lack_of_fit` requires
-   passing `extra_center_runs`.
-4. **Fix the mixture-rejection message.** Rejection reuses `factorial._require_box_factors`, whose
-   text says "factorial designs do not support mixture components …" — wrong subject when raised
-   from a screening generator. Give `definitive_screening` its own message.
-5. **Minor cleanups.** `_conference_matrix` re-derives the constructibility predicate that
-   `_constructible_order` already encodes (call it instead); the `m = 1` Jacobsthal matrix is
-   `scipy.linalg.circulant` of the character vector (reuse it, as `factorial.py` reuses
-   `toeplitz`/`hankel`); the unreachable `m > 2` branch should carry the repo's
-   `# pragma: no cover` annotation; and `test_dsd_k6_matches_jones_nachtsheim_table` should assert
-   something the *published* matrix uniquely implies (or be renamed) since it currently only
-   re-checks generic structural properties, sharing its extraction block with
+1. **Close the coverage gap / search forward for a constructible order.** *(Done.)* With
+   `fake_factors=None`, `definitive_screening` now auto-advances `n_fake` by 2 until
+   `_constructible_order(k + n_fake)` holds, so previously-erroring counts like `k = 16` (order 18,
+   `fake_factors = 2`) and `k = 15/21/27` build. Widening the construction itself (a
+   symmetric-conference construction for the 16/22/28 family) remains the deeper, still-open
+   alternative for when the *exact* `2k + 1` run count is wanted.
+2. **Make the unconstructible-order error actionable.** *(Done.)* An explicit `fake_factors` that
+   leaves an unconstructible order now raises in terms of `k`, states the shortfall, and suggests
+   concrete `fake_factors` values (with their run counts) via `_suggest_fake_factors`.
+3. **Reconcile the default with the documented `lack_of_fit` flow.** *(Done — docs.)* §1.2 now
+   states `lack_of_fit` is not in the default flow (one center run ⇒ zero pure-error dof) and that
+   `extra_center_runs >= 1` is required to use it; the default run count is unchanged (keeps the
+   `2k + 1` property intact) and the vignette stops at `anova_table`.
+4. **Fix the mixture-rejection message.** *(Done.)* `definitive_screening` no longer routes
+   mixture rejection through `factorial._require_box_factors`; it checks `MixtureFactor` directly
+   and raises its own message ("a DSD screens a box region, not the simplex").
+5. **Minor cleanups.** *(Done.)* `_conference_matrix` now calls `_constructible_order` (with an
+   `assert factor is not None`) instead of re-deriving the predicate; the `m = 1` Jacobsthal matrix
+   is built as `scipy.linalg.circulant` of the character vector (the matrix is circulant because
+   `Q[i, j] = chi(i − j mod p)`), matching how `factorial.py` reuses `toeplitz`/`hankel`; the
+   unreachable `m > 2` branch carries `# pragma: no cover`; and the k=6 test is renamed
+   `test_dsd_k6_main_effects_independent_of_all_second_order` and now asserts the DSD-defining
+   property that main effects are orthogonal to *every* two-factor interaction as well as every
+   quadratic term — strictly stronger than, and no longer a duplicate of,
    `test_dsd_main_effects_orthogonal`.
 
 ---

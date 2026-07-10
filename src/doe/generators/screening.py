@@ -19,10 +19,11 @@ import math
 from collections.abc import Sequence
 
 import numpy as np
+from scipy.linalg import circulant
 
 from ..design import Design
-from ..factors import CategoricalFactor, Factor, FactorSet
-from .factorial import _decode, _generator_spec, _require_box_factors
+from ..factors import CategoricalFactor, Factor, FactorSet, MixtureFactor
+from .factorial import _decode, _generator_spec
 
 #: How far past the requested order to search when reporting the nearest constructible
 #: conference-matrix size in an error message.
@@ -90,13 +91,10 @@ def _jacobsthal_matrix(p: int, m: int) -> np.ndarray:
                 return 0.0
             return 1.0 if is_square(a) else -1.0
 
-        elements1 = list(range(p))
-        q = p
-        Q = np.zeros((q, q))
-        for i, ei in enumerate(elements1):
-            for j, ej in enumerate(elements1):
-                Q[i, j] = chi1(ei - ej)
-        return Q
+        # Q[i, j] = chi(i - j mod p) depends only on i - j, so Q is the circulant matrix whose
+        # first column is the character vector [chi(0), chi(1), ..., chi(p-1)]
+        # (scipy.linalg.circulant(c)[i, j] == c[(i - j) mod p]).
+        return np.asarray(circulant(np.array([chi1(a) for a in range(p)])), dtype=float)
 
     if m == 2:
         nonresidue = next(b for b in range(1, p) if pow(b, (p - 1) // 2, p) != 1)
@@ -124,7 +122,8 @@ def _jacobsthal_matrix(p: int, m: int) -> np.ndarray:
                 Q[i, j] = chi2(sub(gi, gj))
         return Q
 
-    raise ValueError(f"unsupported Galois-field extension degree m={m}")
+    # unreachable: callers gate on _constructible_order, which requires m <= 2
+    raise ValueError(f"unsupported Galois-field extension degree m={m}")  # pragma: no cover
 
 
 def _constructible_order(order: int) -> bool:
@@ -140,6 +139,17 @@ def _constructible_order(order: int) -> bool:
 def _nearest_constructible_orders(order: int) -> list[int]:
     """Constructible even orders near ``order``, for a helpful error message."""
     return [n for n in range(2, order + _SEARCH_SPAN, 2) if _constructible_order(n)]
+
+
+def _suggest_fake_factors(k: int, count: int = 2) -> list[int]:
+    """The smallest ``fake_factors`` values giving ``k`` real factors a constructible order.
+
+    Only values with the parity that keeps ``k + fake_factors`` even are returned (an odd
+    conference-matrix order is never constructible), so these are directly usable suggestions
+    for the :func:`definitive_screening` ``fake_factors`` argument.
+    """
+    start = k % 2  # 0 if k even, 1 if k odd -- keeps k + fake_factors even
+    return [nf for nf in range(start, _SEARCH_SPAN, 2) if _constructible_order(k + nf)][:count]
 
 
 def _conference_matrix(order: int) -> np.ndarray:
@@ -162,8 +172,7 @@ def _conference_matrix(order: int) -> np.ndarray:
         return np.array([[0.0, 1.0], [1.0, 0.0]])
 
     q = order - 1
-    factor = _prime_power_factor(q)
-    if factor is None or factor[1] > 2:
+    if not _constructible_order(order):
         nearby = _nearest_constructible_orders(order)
         lower = [n for n in nearby if n < order]
         upper = [n for n in nearby if n > order]
@@ -178,6 +187,8 @@ def _conference_matrix(order: int) -> np.ndarray:
             f"nearest constructible order(s): {', '.join(hints) if hints else 'none nearby'}"
         )
 
+    factor = _prime_power_factor(q)
+    assert factor is not None  # guaranteed by the _constructible_order check above
     p, m = factor
     Q = _jacobsthal_matrix(p, m)
     C = np.zeros((order, order))
@@ -201,10 +212,11 @@ def definitive_screening(
     estimable, all in ``2k + 1`` runs. The design is the row stack ``[C; -C; 0ᵀ]``: a
     conference matrix ``C`` of order ``k``, its foldover ``-C``, and one all-zero center run.
 
-    For an odd number of factors, one **fake factor** is added to reach an even
-    conference-matrix order and then dropped (yielding ``2k + 3`` runs); ``fake_factors``
-    overrides the count, ``None`` auto-adds the minimum (1 iff ``k`` is odd, else 0). Because
-    every pair of columns in a conference matrix is mutually orthogonal by construction,
+    When the requested factor count has no conference matrix of its own order, one or more
+    **fake factors** are added to reach the next *constructible* order and then dropped (an odd
+    ``k`` needs at least one; ``k = 16`` needs two, building at order 18). ``fake_factors``
+    overrides the count; ``None`` auto-adds the minimum that yields a constructible order.
+    Because every pair of columns in a conference matrix is mutually orthogonal by construction,
     dropping the fake column(s) after generation leaves the real factors' orthogonality intact.
 
     Args:
@@ -213,8 +225,8 @@ def definitive_screening(
             implemented; use :func:`~doe.generators.optimal.d_optimal` instead.
         extra_center_runs: additional all-zero center runs appended beyond the single
             structural one (for a purer lack-of-fit pure-error estimate).
-        fake_factors: number of fake (dropped) factors to pad with; ``None`` auto-adds one
-            iff the factor count is odd.
+        fake_factors: number of fake (dropped) factors to pad with; ``None`` auto-adds the
+            minimum needed to reach a constructible conference-matrix order.
 
     Returns:
         A :class:`~doe.design.Design` in natural units with coded levels ``{-1, 0, +1}``.
@@ -224,11 +236,19 @@ def definitive_screening(
 
     Raises:
         ValueError: for fewer than 3 factors, a negative ``extra_center_runs``/``fake_factors``,
-            an odd real+fake factor count, categorical factors, or an unconstructible
-            conference-matrix order (message names the nearest sizes that do work).
+            categorical or mixture factors, or an explicit ``fake_factors`` that leaves an
+            unconstructible conference-matrix order (the message reports the shortfall in terms
+            of ``k`` and suggests ``fake_factors`` values that do work). With ``fake_factors=None``
+            the order is always constructible, so no ``ValueError`` for order is raised.
     """
     fs = FactorSet(factors)
-    _require_box_factors(fs)
+    mixture = [f.name for f in fs if isinstance(f, MixtureFactor)]
+    if mixture:
+        raise ValueError(
+            f"definitive_screening does not support mixture components {mixture}; "
+            "a DSD screens a box region, not the simplex -- use the generators in "
+            "doe.generators.mixture"
+        )
     categorical = [f.name for f in fs if isinstance(f, CategoricalFactor)]
     if categorical:
         raise ValueError(
@@ -244,17 +264,32 @@ def definitive_screening(
         raise ValueError("extra_center_runs must be >= 0")
 
     if fake_factors is None:
-        n_fake = 1 if k % 2 == 1 else 0
+        # Auto-pad to the next *constructible* conference-matrix order, not merely the next even
+        # one: e.g. k=16 has no order-16 conference matrix, so add 2 fake factors and build at
+        # order 18. n_fake advances by 2 to preserve the even order (parity matches k).
+        n_fake = k % 2
+        while not _constructible_order(k + n_fake):
+            n_fake += 2
     else:
         if fake_factors < 0:
             raise ValueError("fake_factors must be >= 0")
         n_fake = fake_factors
 
     order = k + n_fake
-    if order % 2 != 0:
+    if not _constructible_order(order):
+        suggestions = _suggest_fake_factors(k)
+        hint = (
+            "; try " + " or ".join(
+                f"fake_factors={nf} ({2 * (k + nf) + 1} runs)" for nf in suggestions
+            )
+            if suggestions
+            else ""
+        )
+        parity = " (the real + fake factor count must be even)" if order % 2 != 0 else ""
         raise ValueError(
-            f"fake_factors={fake_factors} leaves an odd conference-matrix order {order}; "
-            "the real + fake factor count must be even"
+            f"definitive_screening cannot build a design for k={k} with "
+            f"fake_factors={fake_factors}: no conference matrix of order {order} "
+            f"exists{parity}{hint}"
         )
 
     C = _conference_matrix(order)

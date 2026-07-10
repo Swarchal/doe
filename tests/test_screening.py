@@ -10,8 +10,12 @@ import numpy as np
 import pytest
 
 from doe.analysis.model import build_model_matrix
-from doe.factors import CategoricalFactor, ContinuousFactor
-from doe.generators.screening import _conference_matrix, definitive_screening
+from doe.factors import CategoricalFactor, ContinuousFactor, MixtureFactor
+from doe.generators.screening import (
+    _conference_matrix,
+    _suggest_fake_factors,
+    definitive_screening,
+)
 
 
 def _factors(n, low=0.0, high=10.0):
@@ -75,40 +79,28 @@ def test_dsd_odd_k_adds_fake_factor():
     assert design.factors.names == ["a", "b", "c", "d", "e"]
 
 
-def test_dsd_k6_matches_jones_nachtsheim_table():
-    # Reproducing the exact published k=6 matrix up to row/column permutation and sign is
-    # hard to anchor robustly; instead assert the full set of structural properties that
-    # only a valid 13-run definitive screening design satisfies (Jones & Nachtsheim 2011,
-    # Table 4): 13 runs, three coded levels, one all-zero center run, a foldover
-    # [C; -C] core with mutually orthogonal columns of equal (conference-matrix) norm, two
-    # structural zeros per factor column, and main effects orthogonal to every quadratic term.
+def test_dsd_k6_main_effects_independent_of_all_second_order():
+    # The defining efficiency property of a definitive screening design (Jones & Nachtsheim
+    # 2011): main effects are completely independent not just of quadratic terms but of *every*
+    # two-factor interaction as well -- so a first-order fit's main effects are unbiased by any
+    # active second-order effect. The k=6 case is the pure conference-matrix DSD (no fake
+    # factor), where this holds exactly. This is strictly stronger than the main-vs-quadratic
+    # orthogonality that ``test_dsd_main_effects_orthogonal`` checks.
     design = definitive_screening(_factors(6))
     assert design.n_runs == 13
 
-    coded = design.coded().to_numpy()
-    assert set(np.unique(coded)) == {-1.0, 0.0, 1.0}
-
-    zero_rows = np.all(coded == 0.0, axis=1)
-    assert zero_rows.sum() == 1
-
-    structural = coded[~zero_rows]
-    assert structural.shape == (12, 6)
-    gram = structural.T @ structural
-    off_diagonal = gram - np.diag(np.diag(gram))
-    assert np.allclose(off_diagonal, 0.0, atol=1e-9)
-    # every factor's foldover column has the same (conference-matrix) norm
-    assert np.allclose(np.diag(gram), np.diag(gram)[0])
-
-    for j in range(6):
-        assert np.count_nonzero(coded[:, j] == 0.0) == 2 + 1
-
-    matrix = build_model_matrix(design, order=2, interactions=False)
+    matrix = build_model_matrix(design, order=2, interactions=True)
     factor_names = set(design.factors.names)
     main_idx = [i for i, name in enumerate(matrix.term_names) if name in factor_names]
+    inter_idx = [i for i, name in enumerate(matrix.term_names) if ":" in name]
     quad_idx = [i for i, name in enumerate(matrix.term_names) if name.endswith("^2")]
+    assert len(main_idx) == 6
+    assert len(inter_idx) == 6 * 5 // 2  # all 15 two-factor interactions
+    assert len(quad_idx) == 6
+
     main = matrix.X[:, main_idx]
-    quad = matrix.X[:, quad_idx]
-    assert np.allclose(main.T @ quad, 0.0, atol=1e-9)
+    assert np.allclose(main.T @ matrix.X[:, inter_idx], 0.0, atol=1e-9)
+    assert np.allclose(main.T @ matrix.X[:, quad_idx], 0.0, atol=1e-9)
 
 
 @pytest.mark.parametrize("order", [2, 4, 6, 8, 10, 12, 14, 18, 20, 24, 26, 30])
@@ -134,3 +126,50 @@ def test_dsd_rejects_multilevel_categorical():
     factors = [*_factors(3), CategoricalFactor("cat", ("x", "y", "z"))]
     with pytest.raises(ValueError):
         definitive_screening(factors)
+
+
+def test_dsd_rejects_mixture_with_own_message():
+    # mixture rejection must not leak factorial._require_box_factors' "factorial designs" text
+    factors = [MixtureFactor(chr(ord("a") + i)) for i in range(3)]
+    with pytest.raises(ValueError, match="simplex"):
+        definitive_screening(factors)
+
+
+def test_dsd_even_k_auto_pads_to_constructible_order():
+    # order 16 has no conference matrix; k=16 must auto-add 2 fake factors -> order 18, 37 runs
+    design = definitive_screening(_factors(16))
+    assert design.meta["fake_factors"] == 2
+    assert design.n_runs == 2 * 18 + 1
+    assert design.factors.names == [chr(ord("a") + i) for i in range(16)]
+    coded = design.coded().to_numpy()
+    assert set(np.unique(coded)) == {-1.0, 0.0, 1.0}
+
+
+def test_dsd_odd_k_auto_pads_past_unconstructible_order():
+    # k=15 (odd): order 16 is unconstructible, so it skips to fake_factors=3 -> order 18
+    design = definitive_screening(_factors(15))
+    assert design.meta["fake_factors"] == 3
+    assert design.n_runs == 2 * 18 + 1
+    assert len(design.factors.names) == 15
+
+
+def test_dsd_explicit_unconstructible_fake_factors_raises_actionable():
+    # forcing an unconstructible order must name k and suggest a working fake_factors value
+    with pytest.raises(ValueError, match=r"k=16") as exc:
+        definitive_screening(_factors(16), fake_factors=0)
+    assert "fake_factors=2" in str(exc.value)
+
+
+def test_dsd_explicit_odd_order_raises_actionable():
+    # k=6 with one fake factor -> odd order 7; message flags parity and suggests even fake counts
+    with pytest.raises(ValueError, match=r"even") as exc:
+        definitive_screening(_factors(6), fake_factors=1)
+    assert "fake_factors=0" in str(exc.value)
+
+
+def test_suggest_fake_factors_parity_and_constructibility():
+    # k=16: order 16 fails, order 18 works -> fake_factors 2 (even, matches k parity)
+    assert _suggest_fake_factors(16)[0] == 2
+    # k=15 (odd): fake counts must be odd; first constructible is 3 (order 18)
+    assert all(nf % 2 == 1 for nf in _suggest_fake_factors(15))
+    assert _suggest_fake_factors(15)[0] == 3
