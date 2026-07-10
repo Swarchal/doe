@@ -42,9 +42,24 @@ uv run mypy                              # type-check (strict; checks src/)
 uv run --extra docs sphinx-build -b html docs docs/_build/html   # build the HTML docs
 ```
 
+The repo is a **uv workspace**: the root package is the `doe` library, and
+`doe-service/` is a workspace member holding the (skeleton) stateless FastAPI HTTP
+service over it (`doe_service` imports `doe`, never the reverse — `doe` stays
+scipy-stack-only). See `docs/WEBSERVICE.md` (architecture + packaging decision) and
+`docs/WEBSERVICE_API.md` (the v1 endpoint contract). Service checks run from its
+directory:
+
+```bash
+cd doe-service
+uv run --extra dev pytest                # service tests
+uv run --extra dev mypy                  # strict, own config in its pyproject.toml
+uv run --extra dev uvicorn --factory doe_service.main:create_app --reload  # dev server
+```
+
 CI (`.github/workflows/ci.yml`) runs these same three checks — `ruff check .`, `mypy`,
 and `pytest` — via `uv run --extra dev` on a Python 3.11/3.12/3.13 matrix, on pushes to
-`main` and on pull requests.
+`main` and on pull requests, plus the `doe-service` mypy/pytest from its directory
+(root `ruff check .` already lints it).
 
 ## Architecture
 

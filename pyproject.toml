@@ -31,6 +31,9 @@ docs = [
     "matplotlib>=3.7",  # so autodoc can import doe.plotting members
 ]
 
+[tool.uv.workspace]
+members = ["doe-service"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -43,7 +46,7 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
-src = ["src", "tests"]
+src = ["src", "tests", "doe-service/src", "doe-service/tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

@@ -34,3 +34,13 @@ jobs:
 
       - name: Run tests
         run: uv run --extra dev pytest
+
+      # doe-service (workspace member) — ruff above already lints it repo-wide;
+      # mypy and pytest are per-package, run from its directory.
+      - name: Type-check doe-service (mypy)
+        working-directory: doe-service
+        run: uv run --extra dev mypy
+
+      - name: Test doe-service
+        working-directory: doe-service
+        run: uv run --extra dev pytest
