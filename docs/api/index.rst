@@ -26,6 +26,9 @@ module by module.
 :mod:`doe.generators.mixture`
     Mixture designs (simplex-lattice, simplex-centroid, extreme vertices).
 
+:mod:`doe.generators.screening`
+    Definitive screening designs (conference-matrix DSDs).
+
 :mod:`doe.analysis.model`
     Model-matrix construction in coded units.
 
@@ -61,6 +64,7 @@ module by module.
    generators.optimal
    generators.spacefilling
    generators.mixture
+   generators.screening
    analysis.model
    analysis.fit
    analysis.anova

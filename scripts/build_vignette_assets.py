@@ -30,6 +30,7 @@ from doe import (
     central_composite,
     condition_number,
     d_optimal,
+    definitive_screening,
     desirability,
     discrepancy,
     efficiency,
@@ -984,5 +985,106 @@ print(f"\nd_optimal mixture (7 runs): row sums all 1.0 -> {np.allclose(row_sums,
 
 ax = ternary_contour(result, meas)
 save(ax, "v20_ternary_contour.png")
+
+
+# --------------------------------------------------------------------------- #
+# Vignette 21: definitive screening designs -- factors AND curvature at once
+# --------------------------------------------------------------------------- #
+banner("Vignette 21: definitive screening designs")
+
+# Six candidate factors for a transient-transfection reporter assay. A two-level
+# screen (Vignettes 4-5) tells us which factors matter, but -- sampling only the ends
+# of each range -- it can never see an interior optimum. A definitive screening design
+# runs every factor at three levels in just 2k+1 runs, so main effects AND curvature
+# come out of a single design.
+dsd_factors = [
+    ContinuousFactor("dna_ng", 100, 500, units="ng"),
+    ContinuousFactor("lipid_uL", 0.5, 2.5, units="uL"),
+    ContinuousFactor("incubation_h", 24, 72, units="h"),
+    ContinuousFactor("cell_density", 5_000, 20_000, units="cells/well"),
+    ContinuousFactor("serum_pct", 2, 10, units="%"),
+    ContinuousFactor("dmso_pct", 0.1, 1.0, units="%"),
+]
+dsd = definitive_screening(dsd_factors)
+print(f"dsd.n_runs = {dsd.n_runs} for {len(dsd_factors)} factors (2k+1)")
+print("dsd.coded():")
+print(dsd.coded())
+print("\npoint_types:", dsd.point_types)
+
+# Ground truth (coded units): DNA and lipid are strong linear drivers; incubation time
+# has an interior optimum (a linear term plus strong negative curvature) -- too short
+# under-expresses, too long is toxic. The other three factors are inert. That curvature
+# is the whole point: it is exactly what the 2-level screens structurally cannot detect.
+codeddsd = dsd.coded().to_numpy(dtype=float)
+rng = np.random.default_rng(21)
+true = (
+    60
+    + 9 * codeddsd[:, 0]  # dna_ng, linear
+    + 6 * codeddsd[:, 1]  # lipid_uL, linear
+    + 4 * codeddsd[:, 2]  # incubation_h, linear
+    - 8 * codeddsd[:, 2] ** 2  # incubation_h, curvature (interior optimum)
+)
+signal = np.round(true + rng.normal(0, 0.7, size=true.shape), 1)
+dsd = dsd.with_response("signal", signal)
+print("\nsignal (reporter, a.u.):", list(signal))
+
+# Step 1 -- main-effects screen: fit main effects only (a DSD keeps them orthogonal),
+# rank by |effect|, and read the half-normal plot.
+res_main = fit_ols(dsd, "signal", order=1, interactions=False)
+print("\nmain-effect screen (|effect|, sorted):")
+order = np.argsort(np.abs(res_main.effects))[::-1]
+for i in order:
+    if res_main.term_names[i] == "Intercept":
+        continue
+    print(f"  {res_main.term_names[i]:>16s}: {res_main.effects[i]:+.2f}")
+
+# Step 2 -- project onto the vital few and fit a REDUCED QUADRATIC in the SAME 13 runs.
+# This is the DSD payoff: curvature is estimated without a second (CCD) experiment.
+active = ["dna_ng", "lipid_uL", "incubation_h"]
+reduced = dsd.project(active)
+res_quad = fit_ols(reduced, "signal", model="quadratic")
+print("\nreduced quadratic fit summary():")
+print(res_quad.summary().round(2))
+print(f"R^2 = {res_quad.r_squared:.4f}")
+print("\nres_quad.anova():")
+print(res_quad.anova().to_string(float_format=lambda v: f"{v:.4g}"))
+
+# Figure 1: the design layout -- 13 runs at three levels. The middle (0) column entries
+# are what make curvature estimable; the 2-level screens have none.
+fig, ax = plt.subplots(figsize=(6.6, 6.2))
+ax.imshow(codeddsd, cmap="RdBu_r", vmin=-1, vmax=1, aspect="auto")
+sym = {1: "+", 0: "0", -1: "−"}
+for i in range(dsd.n_runs):
+    for j in range(len(dsd_factors)):
+        v = int(round(codeddsd[i, j]))
+        ax.text(
+            j, i, sym[v], ha="center", va="center", fontsize=8,
+            color="white" if v > 0 else "black",
+        )
+ax.set_xticks(range(len(dsd_factors)))
+ax.set_xticklabels(dsd.factors.names, rotation=90, fontsize=8)
+ax.set_yticks(range(dsd.n_runs))
+ax.set_yticklabels(
+    [f"run {i + 1}" + ("  (center)" if pt == "center" else "")
+     for i, pt in enumerate(dsd.point_types or ())],
+    fontsize=8,
+)
+ax.set_title(
+    "Definitive screening design: 6 factors in 13 runs\n"
+    "foldover pair [C; −C] + one center run\n"
+    "(red +1, white 0, blue −1 — every factor takes its midpoint)",
+    fontsize=9,
+)
+save(ax, "v21_dsd_layout.png")
+
+# Figure 2: half-normal plot of the main effects -- the vital few leave the line.
+ax = half_normal_plot(res_main)
+save(ax, "v21_half_normal.png")
+
+# Figure 3: the reduced-quadratic surface -- a curved ridge peaking at intermediate
+# incubation time, the interior optimum a 2-level screen would have flown straight over.
+ax = contour_plot(res_quad, "incubation_h", "dna_ng")
+ax.set_title("Reduced quadratic from the DSD: signal peaks at mid incubation")
+save(ax, "v21_dsd_contour.png")
 
 print("\nDONE")

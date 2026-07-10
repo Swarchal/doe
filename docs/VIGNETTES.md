@@ -1685,12 +1685,125 @@ bounded region, `fit_ols(..., model="scheffe-quadratic")` for the blending model
 
 ---
 
+### Vignette 21 — One design for factors _and_ curvature: definitive screening
+
+The screens in Part II (`fractional_factorial`, `plackett_burman`) are two-level: every factor is
+set only to its low or high end. That is efficient for asking _which factors matter_, but it has a
+blind spot — sampling only the ends of a range, a two-level design **cannot see an interior
+optimum**. If a factor is best somewhere in the middle (an incubation that is too short _or_ too
+long both hurt), a two-level screen draws a straight line through the two ends and misses the hump
+entirely. The classic fix is a two-stage workflow: screen at two levels, then run a separate
+response-surface design (Part III) on the survivors to catch curvature. That is two experiments.
+
+A **definitive screening design** (Jones & Nachtsheim, 2011) does both in one. It runs every
+factor at _three_ levels — low, **midpoint**, high — in just `2k + 1` runs, and is built so that
+main effects are orthogonal to each other _and_ to every second-order (quadratic and
+two-factor-interaction) term. So a main-effect estimate is never biased by an active interaction
+or curvature, and — because of the midpoints — curvature is estimable from the same runs.
+
+```python
+from doe import ContinuousFactor, definitive_screening
+
+dsd_factors = [
+    ContinuousFactor("dna_ng", 100, 500, units="ng"),
+    ContinuousFactor("lipid_uL", 0.5, 2.5, units="uL"),
+    ContinuousFactor("incubation_h", 24, 72, units="h"),
+    ContinuousFactor("cell_density", 5_000, 20_000, units="cells/well"),
+    ContinuousFactor("serum_pct", 2, 10, units="%"),
+    ContinuousFactor("dmso_pct", 0.1, 1.0, units="%"),
+]
+dsd = definitive_screening(dsd_factors)
+dsd.n_runs                       # 13   (= 2*6 + 1)
+dsd.point_types[-1]              # 'center'
+```
+
+Six factors in **13 runs** — a two-level design plus a follow-up surface would cost far more. The
+structure is a _foldover pair_ plus a center point: a conference matrix `C`, its mirror image
+`−C`, and one all-zero run. Each factor takes its midpoint (the `0` level) exactly twice — once on
+the diagonal of `C`, once on the diagonal of `−C` — which is what makes the squared terms
+estimable:
+
+![A 13-row by 6-column grid of the coded design, coloured red for +1, blue for −1, white for 0. Runs 1–6 form a conference matrix with a zero (white) running down its diagonal; runs 7–12 are the sign-flipped mirror image with the same white diagonal; run 13 is an all-white (all-zero) center run.](img/v21_dsd_layout.png)
+
+**Step 1 — screen the main effects.** Fit main effects only (the DSD keeps them orthogonal, so
+this is clean) and read the half-normal plot, exactly as in Vignette 4:
+
+```python
+res_main = fit_ols(dsd, "signal", order=1, interactions=False)
+# main-effect screen (|effect|, sorted):
+#             dna_ng: +18.00
+#           lipid_uL: +11.72
+#       incubation_h: +8.96
+#           dmso_pct: +0.58
+#       cell_density: -0.30
+#          serum_pct: -0.06
+```
+
+Three factors leave the line; the other three sit on top of zero. DNA, lipid, and incubation time
+are the vital few.
+
+![Half-normal plot of the six main effects: dna_ng, lipid_uL and incubation_h climb well above the near-zero cluster of serum_pct, cell_density and dmso_pct.](img/v21_half_normal.png)
+
+**Step 2 — fit curvature in the _same_ runs.** This is the payoff. Project onto the three
+survivors (Vignette 17's `project` again) and fit a full **quadratic** — no second experiment
+needed. There is enough information in the 13 runs because we dropped the three inert factors:
+
+```python
+reduced = dsd.project(["dna_ng", "lipid_uL", "incubation_h"])
+res_quad = fit_ols(reduced, "signal", model="quadratic")
+res_quad.summary().round(2)
+#                        coefficient  effect  std_error      t     p
+# Intercept                    58.80   58.80       0.60  98.23  0.00
+# dna_ng                        9.00   18.00       0.19  47.54  0.00
+# lipid_uL                      5.86   11.72       0.19  30.96  0.00
+# incubation_h                  4.48    8.96       0.19  23.67  0.00
+# dna_ng:lipid_uL              -0.26   -0.52       0.27  -0.95  0.41
+# dna_ng:incubation_h           0.24    0.48       0.27   0.87  0.45
+# lipid_uL:incubation_h        -0.11   -0.22       0.27  -0.40  0.72
+# dna_ng^2                      0.33    0.66       0.46   0.72  0.52
+# lipid_uL^2                    0.38    0.76       0.46   0.83  0.47
+# incubation_h^2               -7.22  -14.44       0.46 -15.70  0.00
+#
+# R^2 = 0.9993
+```
+
+There it is: `incubation_h^2` is large and unambiguously significant (`t = −15.7`,
+`p < 0.001`), while DNA and lipid are the linear drivers the half-normal already flagged. The
+ANOVA agrees — the curvature term carries real sum-of-squares, not noise:
+
+```python
+res_quad.anova()
+#                             SS  df       MS       F         p
+# dna_ng                     810   1      810    2260 2.049e-05
+# lipid_uL                 343.4   1    343.4   958.3 7.406e-05
+# incubation_h             200.7   1    200.7   560.1 0.0001653
+# ...
+# incubation_h^2           88.35   1    88.35   246.6 0.0005614
+# Residual                 1.075   3   0.3583     NaN       NaN
+```
+
+Plotting the fitted surface shows the hump directly — signal rises with DNA (a linear ramp) but
+peaks at an _intermediate_ incubation time of roughly 55 h and falls off on either side. A
+two-level screen, sampling only 24 h and 72 h, would have drawn a line straight over this ridge:
+
+![Filled contour of fitted signal over incubation_h (x) and dna_ng (y). Signal increases steadily with dna_ng, but along incubation_h it rises to a ridge near 55 h and then declines, so the brightest region sits at high DNA and mid-range incubation.](img/v21_dsd_contour.png)
+
+**Takeaway.** When you are screening several factors _and_ suspect some have an interior optimum,
+a definitive screening design collapses the two-stage screen-then-surface workflow into one
+`2k + 1`-run experiment: `definitive_screening` to build it, a main-effects `fit_ols` +
+`half_normal_plot` to find the vital few, then `project` + a quadratic `fit_ols` to pin the
+curvature — all from the same runs. It is analysed with the exact machinery you already know; only
+the design is new.
+
+---
+
 ## Where to go next
 
 | You want to…                                  | Reach for…                                           | Part |
 | --------------------------------------------- | ---------------------------------------------------- | ---- |
 | Quantify main effects & interactions          | `full_factorial` + `fit_ols` + `pareto_plot` / `interaction_plot` | I |
 | See which factors matter (cheap, many inputs) | `fractional_factorial` / `plackett_burman` + `half_normal_plot` | II |
+| Screen factors _and_ catch curvature in one design | `definitive_screening` + `half_normal_plot` + `project` + quadratic `fit_ols` | VII |
 | Locate an optimum on a curved surface         | `central_composite` / `box_behnken` + `contour_plot` | III |
 | Test whether effects are real, not just big   | `FitResult.anova`, `FitResult.conf_int`              | IV |
 | Check the model is trustworthy                | `residuals_vs_fitted`, `normal_qq`, `predicted_vs_actual`, `FitResult.lack_of_fit` | IV |

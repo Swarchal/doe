@@ -65,6 +65,7 @@ from .generators.optimal import (
     i_optimal,
 )
 from .generators.rsm import box_behnken, central_composite
+from .generators.screening import definitive_screening
 from .generators.spacefilling import halton, latin_hypercube, sobol
 from .interactive import to_html
 from .serialization import ValidationError, validate_design_dict
@@ -95,6 +96,7 @@ __all__ = [
     "coordinate_exchange",
     "correlation_matrix",
     "d_optimal",
+    "definitive_screening",
     "desirability",
     "discrepancy",
     "efficiency",
