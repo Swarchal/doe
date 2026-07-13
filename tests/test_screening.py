@@ -13,6 +13,9 @@ from doe.analysis.model import build_model_matrix
 from doe.factors import CategoricalFactor, ContinuousFactor, MixtureFactor
 from doe.generators.screening import (
     _conference_matrix,
+    _jacobsthal_matrix,
+    _order_exists,
+    _skew_conference_matrix,
     _suggest_fake_factors,
     definitive_screening,
 )
@@ -103,7 +106,7 @@ def test_dsd_k6_main_effects_independent_of_all_second_order():
     assert np.allclose(main.T @ matrix.X[:, quad_idx], 0.0, atol=1e-9)
 
 
-@pytest.mark.parametrize("order", [2, 4, 6, 8, 10, 12, 14, 18, 20, 24, 26, 30])
+@pytest.mark.parametrize("order", [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 24, 26, 28, 30, 32])
 def test_conference_matrix_is_valid(order):
     # verify the defining property directly: zero diagonal, +/-1 off-diagonal,
     # CᵀC == (order - 1) I -- for every order the construction claims to support.
@@ -116,10 +119,31 @@ def test_conference_matrix_is_valid(order):
     assert np.allclose(gram, (order - 1) * np.eye(order))
 
 
-@pytest.mark.parametrize("order", [16, 22, 28])
-def test_conference_matrix_unsupported_order_raises(order):
-    with pytest.raises(ValueError):
-        _conference_matrix(order)
+@pytest.mark.parametrize("order", [4, 8, 12, 16, 20, 24, 32])
+def test_skew_conference_matrix_is_skew_and_valid(order):
+    # the doubling construction (which is how order 16 is reached) needs a *skew* input,
+    # so the skew builder must deliver Cᵀ == -C on top of the conference property.
+    C = _skew_conference_matrix(order)
+    assert np.allclose(C.T, -C)
+    assert np.allclose(np.diag(C), 0.0)
+    assert set(np.unique(C[~np.eye(order, dtype=bool)])) <= {-1.0, 1.0}
+    assert np.allclose(C.T @ C, (order - 1) * np.eye(order))
+
+
+def test_conference_matrix_order_22_raises_as_nonexistent():
+    # 22 = 2 mod 4 forces a symmetric conference matrix, which needs 21 to be a sum of two
+    # squares -- it is not, so order 22 is impossible, not merely unimplemented.
+    assert not _order_exists(22)
+    with pytest.raises(ValueError, match="does not exist|no conference matrix of order 22 exists"):
+        _conference_matrix(22)
+
+
+def test_gf_cubic_jacobsthal_matrix_is_valid():
+    # GF(27) is the first field needing the general polynomial path; it is what unlocks order 28
+    Q = _jacobsthal_matrix(3, 3)
+    assert Q.shape == (27, 27)
+    assert np.allclose(np.diag(Q), 0.0)
+    assert np.allclose(Q @ Q.T, 27 * np.eye(27) - np.ones((27, 27)))
 
 
 def test_dsd_rejects_multilevel_categorical():
@@ -135,29 +159,45 @@ def test_dsd_rejects_mixture_with_own_message():
         definitive_screening(factors)
 
 
-def test_dsd_even_k_auto_pads_to_constructible_order():
-    # order 16 has no conference matrix; k=16 must auto-add 2 fake factors -> order 18, 37 runs
-    design = definitive_screening(_factors(16))
-    assert design.meta["fake_factors"] == 2
-    assert design.n_runs == 2 * 18 + 1
-    assert design.factors.names == [chr(ord("a") + i) for i in range(16)]
+@pytest.mark.parametrize("k", [16, 28])
+def test_dsd_exact_run_count_for_doubling_and_cubic_orders(k):
+    # order 16 (doubling a skew order-8) and order 28 (Paley over GF(27)) are constructible, so
+    # these factor counts get the exact 2k + 1 design with no fake factors
+    design = definitive_screening(_factors(k))
+    assert design.meta["fake_factors"] == 0
+    assert design.n_runs == 2 * k + 1
+    assert design.factors.names == [chr(ord("a") + i) for i in range(k)]
     coded = design.coded().to_numpy()
     assert set(np.unique(coded)) == {-1.0, 0.0, 1.0}
+    # main effects stay orthogonal, which is the whole point of building at the exact order
+    main = coded[: 2 * k]
+    assert np.allclose(main.T @ main, np.diag(np.diag(main.T @ main)))
 
 
-def test_dsd_odd_k_auto_pads_past_unconstructible_order():
-    # k=15 (odd): order 16 is unconstructible, so it skips to fake_factors=3 -> order 18
+def test_dsd_odd_k_adds_one_fake_factor_to_reach_order_16():
+    # k=15 previously skipped past order 16 (unconstructible) to order 18; now it lands on 16
     design = definitive_screening(_factors(15))
-    assert design.meta["fake_factors"] == 3
-    assert design.n_runs == 2 * 18 + 1
+    assert design.meta["fake_factors"] == 1
+    assert design.n_runs == 2 * 16 + 1
     assert len(design.factors.names) == 15
 
 
+def test_dsd_auto_pads_past_the_nonexistent_order_22():
+    # order 22 does not exist, so k=21 (odd) must advance to order 24 -- three fake factors
+    design = definitive_screening(_factors(21))
+    assert design.meta["fake_factors"] == 3
+    assert design.n_runs == 2 * 24 + 1
+    assert len(design.factors.names) == 21
+
+
 def test_dsd_explicit_unconstructible_fake_factors_raises_actionable():
-    # forcing an unconstructible order must name k and suggest a working fake_factors value
-    with pytest.raises(ValueError, match=r"k=16") as exc:
-        definitive_screening(_factors(16), fake_factors=0)
-    assert "fake_factors=2" in str(exc.value)
+    # forcing order 22 must name k, say the matrix does not exist, and suggest a working count
+    with pytest.raises(ValueError, match=r"k=21") as exc:
+        definitive_screening(_factors(21), fake_factors=1)
+    message = str(exc.value)
+    assert "no conference matrix of order 22 exists" in message
+    assert "sum of two squares" in message
+    assert "fake_factors=3" in message
 
 
 def test_dsd_explicit_odd_order_raises_actionable():
@@ -168,8 +208,8 @@ def test_dsd_explicit_odd_order_raises_actionable():
 
 
 def test_suggest_fake_factors_parity_and_constructibility():
-    # k=16: order 16 fails, order 18 works -> fake_factors 2 (even, matches k parity)
-    assert _suggest_fake_factors(16)[0] == 2
-    # k=15 (odd): fake counts must be odd; first constructible is 3 (order 18)
-    assert all(nf % 2 == 1 for nf in _suggest_fake_factors(15))
-    assert _suggest_fake_factors(15)[0] == 3
+    # k=16 is now constructible outright -> no fake factors needed
+    assert _suggest_fake_factors(16)[0] == 0
+    # k=21 (odd): fake counts must be odd, and order 22 does not exist, so the first is 3
+    assert all(nf % 2 == 1 for nf in _suggest_fake_factors(21))
+    assert _suggest_fake_factors(21)[0] == 3

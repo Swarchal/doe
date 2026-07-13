@@ -172,25 +172,23 @@ plus the review's robustness/quality follow-ups, are tracked here so the plan st
 - **Conference matrices are constructed, not tabulated.** §1.1 says "tabulated seeds
   (Paley/symmetric constructions for `k ≤ 30`)". The implementation instead uses a general **Paley
   border construction** (`C = [[0, 1ᵀ], [1, Q]]`, `Q` the Jacobsthal/quadratic-character matrix)
-  over `GF(p)` and `GF(p²)`. It covers even orders whose predecessor `q = order − 1` is a prime or
-  an odd-prime-square (4, 6, 8, 10, 12, 14, 18, 20, 24, 26, 30, …). Orders 16, 22, 28
-  (predecessors `15 = 3·5`, `21 = 3·7`, `27 = 3³`) have no such construction, but `definitive_screening`
-  now **auto-advances `fake_factors` to the next constructible order** (follow-up 1, done), so an
-  ordinary `k = 16` builds at order 18 rather than erroring. `_conference_matrix` itself still
-  raises for the missing orders when called directly.
+  over `GF(p^m)`, plus a **skew doubling** construction. Together they cover **every even order
+  from 2 to 32 except 22** — and order 22 provably does not exist (§1.4.1). `definitive_screening`
+  also **auto-advances `fake_factors` to the next constructible order** (follow-up 1, done), which
+  now only ever bites at `k = 21`/`k = 22` (advancing to order 24).
 - **The categorical extension is not implemented.** §1.1 describes the Jones–Nachtsheim (2013)
   two-level categorical DSD; the shipped code **rejects all categorical factors** (pointing to
-  `d_optimal`). Continuous-only landed first, as planned; the categorical path is deferred.
+  `d_optimal`). Continuous-only landed first, as planned; the categorical path is deferred
+  (build plan in §1.4.2).
 
-**Follow-ups (ranked; all implemented — the only open item is the deeper 16/22/28 symmetric
-construction noted under follow-up 1):**
+**Follow-ups (ranked; all implemented — the open items, the missing conference-matrix orders
+and the categorical extension, are planned in §1.4):**
 
-1. **Close the coverage gap / search forward for a constructible order.** *(Done.)* With
-   `fake_factors=None`, `definitive_screening` now auto-advances `n_fake` by 2 until
-   `_constructible_order(k + n_fake)` holds, so previously-erroring counts like `k = 16` (order 18,
-   `fake_factors = 2`) and `k = 15/21/27` build. Widening the construction itself (a
-   symmetric-conference construction for the 16/22/28 family) remains the deeper, still-open
-   alternative for when the *exact* `2k + 1` run count is wanted.
+1. **Close the coverage gap / search forward for a constructible order.** *(Done, both ways.)*
+   With `fake_factors=None`, `definitive_screening` auto-advances `n_fake` by 2 until
+   `_constructible_order(k + n_fake)` holds. The construction itself has since been widened
+   (§1.4.1, done), so orders 16 and 28 now build directly and `k = 16`/`k = 28` get their *exact*
+   `2k + 1` designs; the fallback advance now only fires around the nonexistent order 22.
 2. **Make the unconstructible-order error actionable.** *(Done.)* An explicit `fake_factors` that
    leaves an unconstructible order now raises in terms of `k`, states the shortfall, and suggests
    concrete `fake_factors` values (with their run counts) via `_suggest_fake_factors`.
@@ -210,6 +208,144 @@ construction noted under follow-up 1):**
    property that main effects are orthogonal to *every* two-factor interaction as well as every
    quadratic term — strictly stronger than, and no longer a duplicate of,
    `test_dsd_main_effects_orthogonal`.
+
+### 1.4 Finishing Phase 5a — build plan for the deferred work
+
+Two items remained from §1.1–§1.3: the missing conference-matrix orders (§1.4.1, **done**) and
+the Jones–Nachtsheim (2013) two-level categorical extension (§1.4.2, still open). They are
+independent, but the orders were built first: the categorical construction consumes a conference
+matrix of order `m + c`, so every order closed widens the categorical coverage for free.
+
+#### 1.4.1 Conference-matrix coverage — orders 16 and 28 (order 22 does not exist) — *done*
+
+> **As built.** Implemented as planned with one simplification: **order 28 needed no skew
+> construction at all.** The plan assumed the skew Paley border was required for `q ≡ 3 (mod 4)`,
+> but `Q Qᵀ = q I − J` holds for *every* prime power regardless of the character's symmetry, so
+> the existing all-`+1` border already yields a valid (non-skew) conference matrix over `GF(27)`
+> — the shipped orders 4, 8 and 12 (`q ≡ 3 mod 4`) were always being built that way. Order 28
+> therefore reduced to step 3 alone (the `GF(p³)` Jacobsthal matrix). The skew border (step 1)
+> is still needed, but *only* to seed the doubling that reaches order 16, so it lives in a
+> dedicated `_skew_conference_matrix` rather than as a variant of the main builder.
+>
+> Coverage is now every even order 2–32 except 22. `k = 16` builds the exact 33-run DSD (was 37
+> runs at order 18) and `k = 15` lands on order 16; `k = 28` is exact and `k = 27` takes one fake
+> factor. `k = 21`/`k = 22` still advance to order 24, and forcing order 22 raises a message
+> saying the matrix *does not exist* (it would have to be symmetric, requiring 21 to be a sum of
+> two squares) rather than merely being unimplemented — `_order_exists` encodes that distinction.
+
+Existence facts that bound the work (Belevitch / van Lint–Seidel):
+
+- For `n ≡ 2 (mod 4)` a conference matrix can exist only in *symmetric* form, which requires
+  `n − 1` to be a sum of two squares. `21 = 3·7` is not, so **no conference matrix of order 22
+  exists** — `k = 21` is permanently served by the fake-factor advance to order 24. This is a
+  mathematical fact to document in the error message, not a gap to close.
+- For `n ≡ 0 (mod 4)` conference matrices are *skew* (`Cᵀ = −C`). Orders 16 and 28 both exist
+  in skew form; they are the real gaps. A skew `C` still satisfies `CᵀC = (n−1)I` with zero
+  diagonal and `±1` off-diagonal, which is all the DSD fold-over `[C; −C; 0]` uses — the DSD
+  invariant tests apply unchanged.
+
+Construction plan (pure numpy, no new deps; each step is independently testable):
+
+1. **Skew Paley form.** For prime-power `q ≡ 3 (mod 4)` the Jacobsthal matrix is already skew
+   (`Qᵀ = −Q`, since `χ(−1) = −1`); bordering it as `[[0, 1ᵀ], [−1, Q]]` (note the `−1` column,
+   vs. the current all-`+1` border) yields a *skew* conference matrix of order `q + 1`. Add this
+   as a skew variant of `_conference_matrix` — the existing non-skew output stays as-is for the
+   orders already served, so shipped designs are bit-stable.
+2. **Skew doubling closes order 16.** If `C` is a skew conference matrix of order `n`, then
+   `[[C, C+I], [C−I, −C]]` is a skew conference matrix of order `2n` (blockwise check using
+   `Cᵀ = −C` and `CᵀC = (n−1)I`; the identity terms put `±1` where the off-diagonal blocks need
+   them and the diagonal blocks keep the zero diagonal). Order 8 (`q = 7`, skew via step 1)
+   doubles to 16. The doubling requires a *skew* input — doubling the symmetric order-14 matrix
+   does **not** give 28.
+3. **`GF(p³)` Jacobsthal closes order 28.** `q = 27 = 3³ ≡ 3 (mod 4)` is a prime *cube*, one
+   step past the current `GF(p)`/`GF(p²)` support. Generalize `_jacobsthal_matrix` to `GF(p^m)`:
+   elements as coefficient tuples multiplied modulo an irreducible polynomial (e.g.
+   `x³ − x + 1` over `GF(3)` — no roots, hence irreducible), and `χ` computed by enumerating
+   the nonzero squares rather than exponentiating. The `m = 2` code is already most of this;
+   whether to generalize fully or special-case `m = 3` is a build-time call (smallest clear
+   diff wins). Then order 28 is the skew Paley border of step 1 over `GF(27)`.
+4. **Wire up and re-describe.** `_constructible_order` learns the new orders (result: every
+   even order 4–30 *except 22* is constructible); the `# pragma: no cover` on the old `m > 2`
+   branch goes away; the explicit-`fake_factors` error and `_suggest_fake_factors` output for
+   `k = 21` state that order 22 is nonexistent (not merely unimplemented); the §1.3 delta text
+   above is updated to match.
+
+Anchors (`test_screening.py`):
+
+- The parametrized conference-matrix invariant test (`CᵀC = (n−1)I`, zero diagonal, `±1`
+  off-diagonal) extends to orders 16 and 28; the skew constructions additionally assert
+  `Cᵀ = −C`.
+- `k = 16` now builds the *exact* 33-run DSD with no fake factors (previously auto-advanced to
+  order 18 / 37 runs); `k = 15` lands on order 16; `k = 27` (order 28 via one fake) and
+  `k = 28` (exact) build.
+- `k = 21` still auto-advances to order 24, and an explicit `fake_factors=0` raises a message
+  mentioning nonexistence.
+
+#### 1.4.2 Categorical extension — Jones–Nachtsheim (2013) DSD-augment
+
+> **Scope decision:** implement **DSD-augment only**. Of the paper's two methods, DSD-augment
+> keeps the property that names the class — every main effect remains unbiased by any active
+> second-order effect — at the cost of slightly non-orthogonal main effects; ORTH-augment gains
+> exact main-effect orthogonality but introduces partial aliasing between main effects and
+> interactions involving the categoricals, surrendering the definitive property. No `method=`
+> kwarg until a second method actually ships.
+
+**Step 0 (gates the rest): obtain the paper** (*JQT* 45(2), 121–129) and transcribe the exact
+augmentation rules — the sign conventions for the replaced zeros and the pseudo-center pair —
+plus its tabulated example designs, which become test fixtures. The outline below is the shape
+of the construction; the paper is the authority on the sign choices.
+
+Construction (`m` continuous + `c` two-level categorical, `k = m + c`):
+
+1. Build the conference matrix of order `k` (the §1.1 fake-factor logic operates on `k`
+   unchanged, now with §1.4.1's wider coverage).
+2. Stack `[C; −C]`; assign `m` columns to the continuous factors (levels `{−1, 0, +1}`, decoded
+   via `ContinuousFactor.decode` as today) and `c` columns to the categoricals.
+3. A categorical column cannot hold `0`: replace each zero pair (the diagonal zero in `C` and
+   its fold-over image in `−C`) with `±1` per the paper's rule.
+4. Replace the single all-zero center run with a **pseudo-center pair**: continuous factors at
+   `0`, categoricals at all-`−1` and all-`+1` — giving `2(m + c) + 2` runs.
+5. Decode categoricals as `−1` → first level, `+1` → second level, matching the deviation-coding
+   convention `build_model_matrix` already uses, so the fitted categorical contrast column
+   reproduces the design column exactly.
+
+Semantics to get right (decided now, not in the code review):
+
+- **`point_types` tags the pair `"pseudo-center"`, not `"center"`.** The two runs differ in
+  their categorical coordinates, so they are *not* replicates; tagging them `"center"` would
+  hand `lack_of_fit` a false pure-error estimate. Consequently `lack_of_fit` stays out of the
+  categorical-DSD flow entirely — a documented limitation. (Generalizing pure error to "any
+  replicated setting" would lift it, but that is an `anova.py` follow-up, not part of 5a.)
+- **`extra_center_runs` with `c ≥ 1` adds whole pseudo-center *pairs*** (continuous at 0,
+  categoricals all-`−1`/all-`+1`), keeping the two categorical arms balanced.
+- **Validation:** two-level `CategoricalFactor`s are accepted; >2-level still raises pointing
+  to `d_optimal`; mixture factors still raise; the all-continuous path must be bit-identical to
+  today's output (regression-tested against a frozen design).
+
+Anchors (`test_screening.py`):
+
+- Reproduce a tabulated JN 2013 design from the step-0 fixtures, up to row/column/sign
+  conventions — the same anchoring pattern as the `k = 6` continuous DSD.
+- Structure: run count `2(m+c) + 2`; each continuous column has exactly two zeros; categorical
+  columns are zero-free and balanced; the pseudo-center pair is tagged and round-trips through
+  `replicate`/`randomize`/`project`/`to_dict`/`from_dict`.
+- **The definitive property, asserted numerically:** for the main-effects model, the alias
+  matrix `(X₁ᵀX₁)⁻¹X₁ᵀX₂` against all quadratic and two-factor-interaction columns has
+  (near-)zero main-effect rows, to the tolerance the paper claims.
+- Recovery: an injected response with active continuous mains, one quadratic, and one
+  categorical main effect is recovered by the documented fit-reduced-model flow.
+
+#### 1.4.3 Delivery
+
+No new public API (`definitive_screening`'s signature is unchanged; it just stops rejecting
+two-level categoricals) and no serialization schema change. Closing steps: update the §1.3
+as-built deltas and Vignette 21 (optionally extending it with a categorical factor — re-run
+`scripts/build_vignette_assets.py`); check whether `doe-service`'s DSD endpoint validation
+rejects categorical factors and relax it with a golden contract test if so; keep
+`uv run pytest` / `ruff check .` / `mypy` green in both packages throughout.
+
+**Build order:** §1.4.1 steps 1–4 (each green before the next) → §1.4.2 step 0 (the paper) →
+§1.4.2 construction + anchors → §1.4.3 docs/service sweep.
 
 ---
 

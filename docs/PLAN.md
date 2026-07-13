@@ -31,6 +31,7 @@ Everything below hangs off those two halves.
 - Full factorial (2-level and general mixed-level)
 - Fractional factorial `2^(k-p)` with generators, defining relation, resolution, and alias structure
 - Plackett-Burman (efficient main-effects screening)
+- Definitive screening designs (Jones–Nachtsheim conference matrices)
 
 **Response surface methodology (RSM)**
 - Central composite designs (circumscribed/inscribed/face-centered)
@@ -69,31 +70,52 @@ Everything below hangs off those two halves.
 - RSM contour and 3D surface plots
 - Correlation/alias heatmaps
 
+## 5. Interchange & delivery
+
+- Serialization: a versioned `Design.to_dict`/`from_dict` round-trip plus schema validation, so a
+  design can be handed to another tool (e.g. a liquid-handler protocol generator) and back
+- HTML run sheets for taking a design to the bench
+- An HTTP API over the library, for callers that aren't Python
+
 ## Proposed package layout
+
+This is the layout as built:
 
 ```
 src/doe/
-  factors.py          # Factor, FactorSet, coding/scaling
-  design.py           # Design container + diagnostics
+  factors.py          # Continuous/Categorical/Mixture factors, FactorSet, coding/scaling
+  design.py           # Design container (replicate/randomize/project, point types, to_dict)
+  serialization.py    # versioned schema + validate_design_dict for the Design payload
+  interactive.py      # to_html: self-contained sortable run sheet
   generators/
     factorial.py      # full, fractional, Plackett-Burman
     rsm.py            # CCD, Box-Behnken
-    optimal.py        # D/A/I-optimal, exchange algorithms
+    screening.py      # definitive screening designs
+    optimal.py        # D/I-optimal coordinate exchange, candidate_grid, augment
     spacefilling.py   # LHS, Sobol, Halton
-    mixture.py
+    mixture.py        # simplex-lattice/centroid, extreme vertices, mixture candidates
   analysis/
-    model.py          # formula/terms, design->model matrix
-    fit.py            # OLS, effects, ANOVA
-    optimize.py       # RSM optimization, desirability
+    model.py          # term list -> model matrix (incl. Scheffé blending models)
+    fit.py            # OLS, effects, confidence/prediction intervals
+    anova.py          # ANOVA table, lack-of-fit, PRESS/predicted R²
+    diagnostics.py    # efficiency, VIF, leverage, alias/correlation, coverage metrics
+    optimize.py       # stationary point, constrained optimum, desirability
   plotting.py
 tests/                # mirrors the above; validate against known textbook designs
 ```
 
+A `doe-service/` workspace member wraps the library in a stateless FastAPI HTTP API
+(`doe_service` imports `doe`, never the reverse, so `doe` stays scipy-stack-only). See
+[`WEBSERVICE.md`](WEBSERVICE.md), [`WEBSERVICE_API.md`](WEBSERVICE_API.md) and
+[`WEBSERVICE_BUILD.md`](WEBSERVICE_BUILD.md).
+
 ## Dependencies
 
-`numpy`, `scipy`, `pandas`, `matplotlib`. Consider `statsmodels` (optional extra) for richer
-ANOVA/regression rather than reimplementing it. `pyproject.toml` + `uv`, with `pytest` for tests
-and an `[optional]` group for plotting/statsmodels.
+Required: `numpy`, `scipy`, `pandas`. Optional extras: `plotting` (`matplotlib` — imported
+lazily, so the core library works without it), `stats` (`statsmodels`), `docs` (Sphinx) and
+`dev` (`pytest`, `ruff`, `mypy`). Regression/ANOVA is implemented directly on the scipy stack
+rather than delegated to `statsmodels`. Packaging is `pyproject.toml` + `uv`, as a workspace
+whose root member is `doe` and whose other member is `doe-service`.
 
 ## Phased roadmap
 
@@ -113,15 +135,22 @@ and an `[optional]` group for plotting/statsmodels.
    `simplex_lattice`/`simplex_centroid`/`extreme_vertices`/`mixture_candidates`, Scheffé
    blending models, `ternary_contour`) are both *done*. See [`PHASE4.md`](PHASE4.md) for the
    detailed build plan.
-5. **Phase 5 — Screening & restricted randomization** *(not yet started)*:
-   - **Definitive screening designs (DSD)** — Jones–Nachtsheim conference-matrix designs that
-     screen main effects and detect curvature/2FIs in few runs, avoiding the full-factorial →
-     CCD two-stage flow. Reuses the existing OLS/RSM analysis machinery unchanged.
-   - **Split-plot / hard-to-change factors** — restricted randomization for factors that cannot
-     be reset every run (the industrial norm). Touches the analysis layer, not just generation:
-     needs a whole-plot/sub-plot structure on `Design` and a GLS/REML fit path rather than OLS.
-   - **Classical / blocking** — randomized complete block, Latin square, blocked factorials
-     (fractions assigned to blocks via defining contrasts), richer run-order utilities.
+5. **Phase 5 — Screening & restricted randomization** *(in progress)*. See
+   [`PHASE5.md`](PHASE5.md) for the detailed build plan.
+   - **Phase 5a — Definitive screening designs (DSD)** *(done)*: `definitive_screening` builds
+     Jones–Nachtsheim conference-matrix designs that screen main effects and detect
+     curvature/2FIs in few runs, avoiding the full-factorial → CCD two-stage flow. Reuses the
+     existing OLS/RSM analysis machinery unchanged.
+   - **Phase 5b — Split-plot / hard-to-change factors** *(not yet started)*: restricted
+     randomization for factors that cannot be reset every run (the industrial norm). Touches the
+     analysis layer, not just generation: needs a whole-plot/sub-plot structure on `Design` and a
+     GLS/REML fit path rather than OLS.
+   - **Phase 5c — Classical / blocking** *(not yet started)*: randomized complete block, Latin
+     square, blocked factorials (fractions assigned to blocks via defining contrasts), richer
+     run-order utilities.
+
+Alongside the phases, serialization (`Design.to_dict`/`from_dict` + schema validation), the HTML
+run sheet, and the `doe-service` HTTP API (v1 complete) have all shipped.
 
 A good correctness anchor throughout: reproduce canonical designs from Montgomery's *Design and
 Analysis of Experiments* in tests, so generated designs are verified against published references.

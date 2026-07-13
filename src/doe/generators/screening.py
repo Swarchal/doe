@@ -11,10 +11,16 @@ section 1 for the build plan and correctness anchors.
 Analysis is unchanged: a DSD is a plain :class:`~doe.design.Design`; because it uses three
 coded levels ``{-1, 0, +1}``, ``build_model_matrix`` already emits squared terms for its
 continuous factors, so ``fit_ols`` / ``anova_table`` / ``half_normal_plot`` consume it as-is.
+
+Conference matrices are built, not tabulated: a Paley border over ``GF(p**m)`` plus a doubling
+construction for the skew orders covers every even order from 2 to 32 except 22 -- and *no*
+conference matrix of order 22 exists (see :func:`_order_exists`). Factor counts that land on
+order 22 fall back to padding with fake factors.
 """
 
 from __future__ import annotations
 
+import itertools
 import math
 from collections.abc import Sequence
 
@@ -66,6 +72,57 @@ def _prime_power_factor(q: int) -> tuple[int, int] | None:
     return (p, m) if remaining == 1 else None
 
 
+def _is_sum_of_two_squares(n: int) -> bool:
+    """True if ``n == a**2 + b**2`` for non-negative integers ``a``, ``b``."""
+    a = 0
+    while a * a <= n:
+        b = math.isqrt(n - a * a)
+        if b * b + a * a == n:
+            return True
+        a += 1
+    return False
+
+
+def _poly_remainder(a: list[int], b: list[int], p: int) -> list[int]:
+    """Remainder of polynomial ``a`` divided by monic polynomial ``b`` over ``GF(p)``.
+
+    Coefficients are listed low-degree first, with trailing zeros stripped from the result
+    (so the zero polynomial is ``[]``).
+    """
+    r = list(a)
+    deg_b = len(b) - 1
+    while True:
+        while r and r[-1] == 0:
+            r.pop()
+        if len(r) - 1 < deg_b:
+            return r
+        shift = len(r) - 1 - deg_b
+        lead = r[-1]
+        for i, coeff in enumerate(b):
+            r[i + shift] = (r[i + shift] - lead * coeff) % p
+
+
+def _irreducible_poly(p: int, m: int) -> list[int]:
+    """A monic degree-``m`` polynomial irreducible over ``GF(p)``, low-degree coefficients first.
+
+    Found by trial division against every monic polynomial of degree ``1 .. m // 2`` -- a
+    reducible polynomial always has a factor of at most half its degree. The search space is
+    tiny for the field sizes screening designs reach (``GF(27)`` is the first one that needs
+    this path at all).
+    """
+    for tail in itertools.product(range(p), repeat=m):
+        if tail[0] == 0:
+            continue  # divisible by x
+        f = [*tail, 1]
+        if all(
+            _poly_remainder(f, [*divisor, 1], p)
+            for degree in range(1, m // 2 + 1)
+            for divisor in itertools.product(range(p), repeat=degree)
+        ):
+            return f
+    raise ValueError(f"no irreducible polynomial of degree {m} over GF({p})")  # pragma: no cover
+
+
 def _jacobsthal_matrix(p: int, m: int) -> np.ndarray:
     """The ``q x q`` Jacobsthal (quadratic-character) matrix over ``GF(p**m)``, ``q = p**m``.
 
@@ -75,10 +132,13 @@ def _jacobsthal_matrix(p: int, m: int) -> np.ndarray:
     ``Q Q^T = q I - J`` for any prime power ``q`` -- the identity the Paley border construction
     in :func:`_conference_matrix` relies on.
 
-    Only ``m in {1, 2}`` are implemented: ``m=1`` is plain arithmetic mod ``p``; ``m=2`` builds
-    ``GF(p**2)`` as ``{a + b*x : a, b in Z_p}`` with ``x**2`` fixed to a quadratic non-residue
-    mod ``p`` (so ``x**2 - nonresidue`` is irreducible over ``GF(p)``). Cubic and higher
-    extensions (e.g. ``p**3 = 27``) are not supported.
+    ``m=1`` is plain arithmetic mod ``p``. ``m=2`` builds ``GF(p**2)`` as
+    ``{a + b*x : a, b in Z_p}`` with ``x**2`` fixed to a quadratic non-residue mod ``p`` (so
+    ``x**2 - nonresidue`` is irreducible over ``GF(p)``); it keeps its own explicit binomial
+    form so that the designs it already ships (orders 10 and 26) stay bit-for-bit stable.
+    ``m>=3`` builds ``GF(p**m)`` generically, as degree-``m`` coefficient tuples multiplied
+    modulo an irreducible polynomial from :func:`_irreducible_poly` -- this is the path that
+    reaches ``GF(27)``, and with it conference-matrix order 28.
     """
     if m == 1:
 
@@ -122,8 +182,45 @@ def _jacobsthal_matrix(p: int, m: int) -> np.ndarray:
                 Q[i, j] = chi2(sub(gi, gj))
         return Q
 
-    # unreachable: callers gate on _constructible_order, which requires m <= 2
-    raise ValueError(f"unsupported Galois-field extension degree m={m}")  # pragma: no cover
+    poly = _irreducible_poly(p, m)
+    zero = (0,) * m
+
+    def mul_m(x: tuple[int, ...], y: tuple[int, ...]) -> tuple[int, ...]:
+        product = [0] * (2 * m - 1)
+        for i, xi in enumerate(x):
+            for j, yj in enumerate(y):
+                product[i + j] = (product[i + j] + xi * yj) % p
+        reduced = _poly_remainder(product, poly, p)
+        return tuple(reduced + [0] * (m - len(reduced)))
+
+    def sub_m(x: tuple[int, ...], y: tuple[int, ...]) -> tuple[int, ...]:
+        return tuple((a - b) % p for a, b in zip(x, y, strict=True))
+
+    elements = list(itertools.product(range(p), repeat=m))
+    squares_m = {mul_m(e, e) for e in elements if e != zero}
+
+    q = p**m
+    Qm = np.zeros((q, q))
+    for i, ei in enumerate(elements):
+        for j, ej in enumerate(elements):
+            difference = sub_m(ei, ej)
+            Qm[i, j] = 0.0 if difference == zero else (1.0 if difference in squares_m else -1.0)
+    return Qm
+
+
+def _skew_constructible_order(order: int) -> bool:
+    """True if :func:`_skew_conference_matrix` can build this order.
+
+    Skew conference matrices exist only for ``order % 4 == 0``. Two constructions reach them:
+    the skew Paley border (``order - 1`` a prime power ``= 3 mod 4``, so its Jacobsthal matrix
+    is skew), and doubling a smaller skew matrix.
+    """
+    if order < 4 or order % 4 != 0:
+        return False
+    factor = _prime_power_factor(order - 1)
+    if factor is not None and (order - 1) % 4 == 3:
+        return True
+    return _skew_constructible_order(order // 2)
 
 
 def _constructible_order(order: int) -> bool:
@@ -132,8 +229,19 @@ def _constructible_order(order: int) -> bool:
         return False
     if order == 2:
         return True
-    factor = _prime_power_factor(order - 1)
-    return factor is not None and factor[1] <= 2
+    return _prime_power_factor(order - 1) is not None or _skew_constructible_order(order)
+
+
+def _order_exists(order: int) -> bool:
+    """True unless a conference matrix of this even order is known *not* to exist.
+
+    A conference matrix of order ``n = 2 mod 4`` must be symmetric, which forces ``n - 1`` to be
+    a sum of two squares (Belevitch; van Lint & Seidel). Order 22 is the first casualty --
+    ``21 = 3 * 7`` is not a sum of two squares -- so no amount of construction work will produce
+    one. Orders ``n = 0 mod 4`` are only *conjectured* to always exist, so this returns ``True``
+    for them: unconstructible there means "not implemented", not "impossible".
+    """
+    return order % 4 != 2 or _is_sum_of_two_squares(order - 1)
 
 
 def _nearest_constructible_orders(order: int) -> list[int]:
@@ -152,26 +260,58 @@ def _suggest_fake_factors(k: int, count: int = 2) -> list[int]:
     return [nf for nf in range(start, _SEARCH_SPAN, 2) if _constructible_order(k + nf)][:count]
 
 
+def _skew_conference_matrix(order: int) -> np.ndarray:
+    """Return a *skew* conference matrix (``Cᵀ = -C``) of the given ``order`` (a multiple of 4).
+
+    Two constructions, tried in that order:
+
+    * **Skew Paley border.** For ``q = order - 1`` a prime power ``= 3 mod 4``, the Jacobsthal
+      matrix is skew (``chi(-1) = -1``), and bordering it with a *negated* first column,
+      ``C = [[0, 1ᵀ], [-1, Q]]``, makes the whole matrix skew while keeping ``CᵀC = q I``.
+    * **Doubling.** If ``C`` is skew of order ``n``, then ``[[C, C+I], [C-I, -C]]`` is skew of
+      order ``2n``: the identity terms fill the diagonals of the off-diagonal blocks (which the
+      zero diagonals of ``C`` would otherwise leave empty), and the cross terms cancel because
+      ``Cᵀ = -C``. This is what reaches order 16, whose predecessor ``15 = 3 * 5`` is not a
+      prime power, by doubling order 8.
+    """
+    factor = _prime_power_factor(order - 1)
+    if factor is not None and (order - 1) % 4 == 3:
+        p, m = factor
+        C = np.zeros((order, order))
+        C[0, 1:] = 1.0
+        C[1:, 0] = -1.0
+        C[1:, 1:] = _jacobsthal_matrix(p, m)
+        return C
+
+    half = _skew_conference_matrix(order // 2)
+    identity = np.eye(order // 2)
+    return np.block([[half, half + identity], [half - identity, -half]])
+
+
 def _conference_matrix(order: int) -> np.ndarray:
     """Return a conference matrix of the given (even) ``order``.
 
     A conference matrix ``C`` is ``order x order`` with zero diagonal, ``+/-1`` off the
     diagonal, and ``Cᵀ C = (order - 1) I`` (mutually orthogonal columns).
 
-    Built via the Paley border construction: for ``q = order - 1`` a prime or odd-prime-square,
+    Built via the Paley border construction: for ``q = order - 1`` a prime power,
     ``C = [[0, 1ᵀ], [1, Q]]`` where ``Q`` is the ``q x q`` Jacobsthal matrix over ``GF(q)``
-    (see :func:`_jacobsthal_matrix`). This covers every even order whose predecessor is prime
-    or the square of an odd prime (e.g. 4, 6, 8, 10, 12, 14, 18, 20, 24, 26, 30, ...); orders
-    like 16, 22, 28 (predecessor ``15 = 3*5``, ``21 = 3*7``, ``27 = 3**3``) are not covered and
-    raise ``ValueError`` naming the nearest constructible sizes. Order 2 is the trivial
-    ``[[0, 1], [1, 0]]`` conference matrix.
+    (see :func:`_jacobsthal_matrix`); since ``Q Qᵀ = q I - J`` for *every* prime power, this
+    border works whether ``Q`` is symmetric or skew. Orders whose predecessor is not a prime
+    power (16, 22, 28 have predecessors ``15 = 3*5``, ``21 = 3*7``, and ``27 = 3**3`` -- the
+    last of which *is* a prime power, reached through the ``GF(p**3)`` path) fall back to
+    :func:`_skew_conference_matrix`, which reaches every multiple of 4 that doubling can build
+    from a skew Paley matrix. Order 2 is the trivial ``[[0, 1], [1, 0]]`` conference matrix.
+
+    The one gap in the range screening designs care about is **order 22, which does not exist**
+    (see :func:`_order_exists`); unconstructible orders raise ``ValueError`` naming the nearest
+    constructible sizes.
     """
     if order < 2 or order % 2 != 0:
         raise ValueError(f"conference matrix order must be a positive even integer, got {order}")
     if order == 2:
         return np.array([[0.0, 1.0], [1.0, 0.0]])
 
-    q = order - 1
     if not _constructible_order(order):
         nearby = _nearest_constructible_orders(order)
         lower = [n for n in nearby if n < order]
@@ -181,14 +321,21 @@ def _conference_matrix(order: int) -> np.ndarray:
             hints.append(f"{lower[-1]} (smaller)")
         if upper:
             hints.append(f"{upper[0]} (larger)")
+        reason = (
+            f"no conference matrix of order {order} exists "
+            f"({order} = 2 mod 4 requires {order - 1} to be a sum of two squares, and it is not)"
+            if not _order_exists(order)
+            else f"no conference matrix construction available for order {order}"
+        )
         raise ValueError(
-            f"no conference matrix construction available for order {order} "
-            f"({q} is not prime or an odd prime square); "
-            f"nearest constructible order(s): {', '.join(hints) if hints else 'none nearby'}"
+            f"{reason}; nearest constructible order(s): "
+            f"{', '.join(hints) if hints else 'none nearby'}"
         )
 
-    factor = _prime_power_factor(q)
-    assert factor is not None  # guaranteed by the _constructible_order check above
+    factor = _prime_power_factor(order - 1)
+    if factor is None:
+        return _skew_conference_matrix(order)
+
     p, m = factor
     Q = _jacobsthal_matrix(p, m)
     C = np.zeros((order, order))
@@ -214,8 +361,9 @@ def definitive_screening(
 
     When the requested factor count has no conference matrix of its own order, one or more
     **fake factors** are added to reach the next *constructible* order and then dropped (an odd
-    ``k`` needs at least one; ``k = 16`` needs two, building at order 18). ``fake_factors``
-    overrides the count; ``None`` auto-adds the minimum that yields a constructible order.
+    ``k`` needs at least one; ``k = 21`` needs three, building at order 24, because no
+    conference matrix of order 22 exists). ``fake_factors`` overrides the count; ``None``
+    auto-adds the minimum that yields a constructible order.
     Because every pair of columns in a conference matrix is mutually orthogonal by construction,
     dropping the fake column(s) after generation leaves the real factors' orthogonality intact.
 
@@ -285,11 +433,18 @@ def definitive_screening(
             if suggestions
             else ""
         )
-        parity = " (the real + fake factor count must be even)" if order % 2 != 0 else ""
+        if order % 2 != 0:
+            reason = f"order {order} is odd (the real + fake factor count must be even)"
+        elif not _order_exists(order):
+            reason = (
+                f"no conference matrix of order {order} exists -- one would have to be "
+                f"symmetric, which requires {order - 1} to be a sum of two squares"
+            )
+        else:
+            reason = f"no conference matrix construction is available for order {order}"
         raise ValueError(
             f"definitive_screening cannot build a design for k={k} with "
-            f"fake_factors={fake_factors}: no conference matrix of order {order} "
-            f"exists{parity}{hint}"
+            f"fake_factors={fake_factors}: {reason}{hint}"
         )
 
     C = _conference_matrix(order)
