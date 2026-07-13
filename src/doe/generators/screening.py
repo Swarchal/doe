@@ -1,12 +1,15 @@
 """Screening design generators (Phase 5a).
 
 Implemented:
-    * :func:`definitive_screening` -- Jones-Nachtsheim conference-matrix DSDs
+    * :func:`definitive_screening` -- Jones-Nachtsheim conference-matrix DSDs, including the
+      Jones-Nachtsheim (2013) two-level categorical extension (DSD-augment)
 
 A definitive screening design (DSD) screens ``k`` factors' main effects *and* detects
 curvature / two-factor interactions in ``2k + 1`` runs, collapsing the classic
-full-factorial -> CCD two-stage screen into one three-level design. See ``docs/PHASE5.md``
-section 1 for the build plan and correctness anchors.
+full-factorial -> CCD two-stage screen into one three-level design. Two-level categorical
+factors are supported via the DSD-augment construction (``2(m + c) + 2`` runs; see
+:func:`_dsd_augment_categorical`), which keeps every main effect unbiased by any second-order
+term. See ``docs/PHASE5.md`` section 1 for the build plan and correctness anchors.
 
 Analysis is unchanged: a DSD is a plain :class:`~doe.design.Design`; because it uses three
 coded levels ``{-1, 0, +1}``, ``build_model_matrix`` already emits squared terms for its
@@ -28,7 +31,7 @@ import numpy as np
 from scipy.linalg import circulant
 
 from ..design import Design
-from ..factors import CategoricalFactor, Factor, FactorSet, MixtureFactor
+from ..factors import CategoricalFactor, ContinuousFactor, Factor, FactorSet, MixtureFactor
 from .factorial import _decode, _generator_spec
 
 #: How far past the requested order to search when reporting the nearest constructible
@@ -345,13 +348,169 @@ def _conference_matrix(order: int) -> np.ndarray:
     return C
 
 
+def _resolve_order(k: int, fake_factors: int | None) -> int:
+    """Resolve the conference-matrix order for ``k`` real factors and ``fake_factors``.
+
+    Shared by the continuous and categorical DSD paths. With ``fake_factors=None`` the order
+    is auto-advanced to the next constructible even order; with an explicit count the order is
+    ``k + fake_factors`` and an unconstructible result raises an actionable message (naming
+    ``k``, the shortfall, and working ``fake_factors`` suggestions).
+    """
+    if fake_factors is None:
+        # Auto-pad to the next *constructible* conference-matrix order, not merely the next even
+        # one: e.g. k=16 has no order-16 conference matrix, so add 2 fake factors and build at
+        # order 18. n_fake advances by 2 to preserve the even order (parity matches k).
+        n_fake = k % 2
+        while not _constructible_order(k + n_fake):
+            n_fake += 2
+        return n_fake
+
+    if fake_factors < 0:
+        raise ValueError("fake_factors must be >= 0")
+    n_fake = fake_factors
+    order = k + n_fake
+    if _constructible_order(order):
+        return n_fake
+
+    suggestions = _suggest_fake_factors(k)
+    hint = (
+        "; try " + " or ".join(
+            f"fake_factors={nf} ({2 * (k + nf) + 1} runs)" for nf in suggestions
+        )
+        if suggestions
+        else ""
+    )
+    if order % 2 != 0:
+        reason = f"order {order} is odd (the real + fake factor count must be even)"
+    elif not _order_exists(order):
+        reason = (
+            f"no conference matrix of order {order} exists -- one would have to be "
+            f"symmetric, which requires {order - 1} to be a sum of two squares"
+        )
+    else:
+        reason = f"no conference matrix construction is available for order {order}"
+    raise ValueError(
+        f"definitive_screening cannot build a design for k={k} with "
+        f"fake_factors={fake_factors}: {reason}{hint}"
+    )
+
+
+def _dsd_augment_categorical(
+    fs: FactorSet,
+    continuous: list[ContinuousFactor],
+    categorical: list[CategoricalFactor],
+    *,
+    extra_center_runs: int,
+    fake_factors: int | None,
+) -> Design:
+    """DSD-augment construction (Jones & Nachtsheim 2013) for ``m`` continuous + ``c`` categorical.
+
+    Builds the base DSD structural block ``[C; -C]`` over the conference matrix of order
+    ``m + c`` (padded via fake factors as needed), assigns the last ``c`` kept columns to the
+    two-level categorical factors, then:
+
+    * replaces each categorical column's zero pair (the diagonal zeros of ``C`` and ``-C``) with
+      ``z_j`` / ``-z_j`` -- preserving the fold-over pairing, so main effects stay unbiased by all
+      second-order terms (the *definitive* property);
+    * appends a pseudo-center pair (continuous at 0, categorical column ``j`` at ``±b_j``).
+
+    ``z, b ∈ {-1, +1}^c`` are chosen by exhaustively maximizing ``det(X₁ᵀX₁)`` over all ``2^(2c)``
+    sign combinations (``X₁ = [1 | main-effect columns]``), in a deterministic iteration order for
+    reproducibility.
+    """
+    m = len(continuous)
+    c = len(categorical)
+    k = m + c
+    if 2 * c > 20:
+        raise ValueError(
+            f"definitive_screening's categorical (DSD-augment) construction enumerates "
+            f"2^(2c) = 2^{2 * c} sign combinations, which is impractical for c={c} categorical "
+            "factors (2c > 20); use doe.generators.optimal.d_optimal instead"
+        )
+
+    n_fake = _resolve_order(k, fake_factors)
+    order = k + n_fake
+
+    C = _conference_matrix(order)
+    structural = np.vstack([C, -C])[:, :k]  # foldover, fake column(s) dropped
+    n1 = 2 * order
+
+    # continuous columns occupy the first m kept columns; categorical the last c. A categorical
+    # column `col` has its (only) zeros at rows `col` (C's diagonal) and `col + order` (in -C).
+    cont_block = structural[:, :m]
+    cat_zero_rows = [(m + j, m + j + order) for j in range(c)]
+
+    def categorical_columns(z: tuple[int, ...], b: tuple[int, ...]) -> np.ndarray:
+        """Build the ``n1 + 2`` × ``c`` categorical block for a choice of ``z``/``b`` signs."""
+        cat = structural[:, m:k].copy()
+        for j, (r_pos, r_neg) in enumerate(cat_zero_rows):
+            cat[r_pos, j] = z[j]
+            cat[r_neg, j] = -z[j]
+        center = np.array([list(b), [-bj for bj in b]], dtype=float)  # pseudo-center pair
+        return np.vstack([cat, center])
+
+    cont_full = np.vstack([cont_block, np.zeros((2, m))])  # base design: continuous at 0 in pair
+    ones = np.ones((n1 + 2, 1))
+
+    signs: tuple[int, ...] = (-1, 1)
+    best: tuple[tuple[int, ...], tuple[int, ...]] | None = None
+    best_logdet = -np.inf
+    for z in itertools.product(signs, repeat=c):
+        for b in itertools.product(signs, repeat=c):
+            x1 = np.hstack([ones, cont_full, categorical_columns(z, b)])
+            logdet = float(np.linalg.slogdet(x1.T @ x1)[1])
+            if logdet > best_logdet + 1e-9:
+                best_logdet = logdet
+                best = (z, b)
+    assert best is not None  # c >= 1, so the search always runs at least once
+    z_best, b_best = best
+
+    cat_block = categorical_columns(z_best, b_best)
+    if extra_center_runs:
+        # each extra "center run" appends a whole replicated pseudo-center *pair* (the two
+        # categorical arms stay balanced); continuous stays at 0.
+        extra_center = np.tile(
+            np.array([list(b_best), [-bj for bj in b_best]], dtype=float), (extra_center_runs, 1)
+        )
+        cat_block = np.vstack([cat_block, extra_center])
+        cont_full = np.vstack([cont_full, np.zeros((2 * extra_center_runs, m))])
+
+    # re-assemble the coded matrix in the original FactorSet column order
+    n_rows = cont_full.shape[0]
+    coded = np.zeros((n_rows, k))
+    for gi, cont_factor in enumerate(continuous):
+        coded[:, fs.names.index(cont_factor.name)] = cont_full[:, gi]
+    for gj, cat_factor in enumerate(categorical):
+        coded[:, fs.names.index(cat_factor.name)] = cat_block[:, gj]
+
+    point_types = ["dsd"] * n1 + ["pseudo-center"] * (2 + 2 * extra_center_runs)
+    runs = _decode(fs, coded)
+    meta: dict[str, object] = {
+        "generator": _generator_spec(
+            "definitive_screening",
+            extra_center_runs=extra_center_runs,
+            fake_factors=fake_factors,
+        ),
+        "fake_factors": n_fake,
+        "categorical_signs": {"z": list(z_best), "b": list(b_best)},
+        "n_runs": n_rows,
+    }
+    return Design(
+        runs,
+        fs,
+        name=f"definitive_screening_m{m}_c{c}",
+        meta=meta,
+        point_types=tuple(point_types),
+    )
+
+
 def definitive_screening(
     factors: Sequence[Factor],
     *,
     extra_center_runs: int = 0,
     fake_factors: int | None = None,
 ) -> Design:
-    """Generate a definitive screening design (Jones & Nachtsheim, 2011).
+    """Generate a definitive screening design (Jones & Nachtsheim, 2011/2013).
 
     A DSD estimates the ``k`` main effects of ``k`` continuous factors, is orthogonal for
     main effects (main effects are uncorrelated with each other *and* with every
@@ -367,27 +526,41 @@ def definitive_screening(
     Because every pair of columns in a conference matrix is mutually orthogonal by construction,
     dropping the fake column(s) after generation leaves the real factors' orthogonality intact.
 
+    **Two-level categorical factors** are supported via the Jones-Nachtsheim (2013) *DSD-augment*
+    construction: the design is built on ``m + c`` factors, the last ``c`` columns carry the
+    categoricals (each ``±1``, no midpoint -- their zero pair is replaced by an optimized
+    ``z_j`` / ``-z_j``), and a **pseudo-center pair** (2 runs: continuous at 0, categoricals at
+    ``±b_j``) replaces the single all-zero center run, giving ``2(m + c) + 2`` runs. Every run
+    still has a fold-over partner, so all main effects remain unbiased by any second-order term
+    (the *definitive* property); the main-effect information matrix is no longer diagonal, but the
+    categorical correlations are small. The ``z``/``b`` signs are chosen to maximize
+    ``det(X₁ᵀX₁)`` over all ``2^(2c)`` combinations. ``>2``-level categoricals raise (use
+    :func:`~doe.generators.optimal.d_optimal`).
+
     Args:
-        factors: the continuous factors to screen (``k >= 3`` of them). Categorical factors
-            are rejected -- the Jones-Nachtsheim (2013) two-level categorical extension is not
-            implemented; use :func:`~doe.generators.optimal.d_optimal` instead.
-        extra_center_runs: additional all-zero center runs appended beyond the single
-            structural one (for a purer lack-of-fit pure-error estimate).
+        factors: the factors to screen (``k >= 3`` total). Continuous and two-level categorical
+            factors may be mixed; ``>2``-level categoricals and mixture components are rejected.
+        extra_center_runs: additional center runs appended beyond the structural one. With a
+            categorical factor present each unit appends a whole replicated *pseudo-center pair*
+            (2 runs) rather than a single all-zero run.
         fake_factors: number of fake (dropped) factors to pad with; ``None`` auto-adds the
             minimum needed to reach a constructible conference-matrix order.
 
     Returns:
         A :class:`~doe.design.Design` in natural units with coded levels ``{-1, 0, +1}``.
-        The structural center run (and any ``extra_center_runs``) is tagged ``"center"`` in
-        ``point_types``, the remaining runs are tagged ``"dsd"``; ``meta["generator"]``
-        records the call for regeneration and ``meta["fake_factors"]`` the resolved count.
+        The all-continuous path tags the structural center run (and any ``extra_center_runs``)
+        ``"center"`` and the rest ``"dsd"``; the categorical path tags the pseudo-center pair
+        ``"pseudo-center"`` (they are not replicates -- their categorical coordinates differ --
+        so they do not feed ``lack_of_fit``). ``meta["generator"]`` records the call and
+        ``meta["fake_factors"]`` the resolved count (plus ``meta["categorical_signs"]`` for the
+        categorical path).
 
     Raises:
         ValueError: for fewer than 3 factors, a negative ``extra_center_runs``/``fake_factors``,
-            categorical or mixture factors, or an explicit ``fake_factors`` that leaves an
-            unconstructible conference-matrix order (the message reports the shortfall in terms
-            of ``k`` and suggests ``fake_factors`` values that do work). With ``fake_factors=None``
-            the order is always constructible, so no ``ValueError`` for order is raised.
+            ``>2``-level categorical or mixture factors, too many categoricals (``2c > 20``), or
+            an explicit ``fake_factors`` that leaves an unconstructible conference-matrix order
+            (the message reports the shortfall in terms of ``k`` and suggests ``fake_factors``
+            values that do work). With ``fake_factors=None`` the order is always constructible.
     """
     fs = FactorSet(factors)
     mixture = [f.name for f in fs if isinstance(f, MixtureFactor)]
@@ -397,12 +570,12 @@ def definitive_screening(
             "a DSD screens a box region, not the simplex -- use the generators in "
             "doe.generators.mixture"
         )
-    categorical = [f.name for f in fs if isinstance(f, CategoricalFactor)]
-    if categorical:
+    categorical = [f for f in fs if isinstance(f, CategoricalFactor)]
+    multilevel = [f.name for f in categorical if len(f.levels) != 2]
+    if multilevel:
         raise ValueError(
-            f"definitive_screening does not support categorical factors {categorical} "
-            "(the Jones-Nachtsheim 2013 two-level categorical extension is not implemented); "
-            "use doe.generators.optimal.d_optimal instead"
+            f"definitive_screening supports only two-level categorical factors; {multilevel} "
+            "have more than 2 levels -- use doe.generators.optimal.d_optimal instead"
         )
 
     k = len(fs)
@@ -411,41 +584,18 @@ def definitive_screening(
     if extra_center_runs < 0:
         raise ValueError("extra_center_runs must be >= 0")
 
-    if fake_factors is None:
-        # Auto-pad to the next *constructible* conference-matrix order, not merely the next even
-        # one: e.g. k=16 has no order-16 conference matrix, so add 2 fake factors and build at
-        # order 18. n_fake advances by 2 to preserve the even order (parity matches k).
-        n_fake = k % 2
-        while not _constructible_order(k + n_fake):
-            n_fake += 2
-    else:
-        if fake_factors < 0:
-            raise ValueError("fake_factors must be >= 0")
-        n_fake = fake_factors
+    if categorical:
+        continuous = [f for f in fs if isinstance(f, ContinuousFactor)]
+        return _dsd_augment_categorical(
+            fs,
+            continuous,
+            categorical,
+            extra_center_runs=extra_center_runs,
+            fake_factors=fake_factors,
+        )
 
+    n_fake = _resolve_order(k, fake_factors)
     order = k + n_fake
-    if not _constructible_order(order):
-        suggestions = _suggest_fake_factors(k)
-        hint = (
-            "; try " + " or ".join(
-                f"fake_factors={nf} ({2 * (k + nf) + 1} runs)" for nf in suggestions
-            )
-            if suggestions
-            else ""
-        )
-        if order % 2 != 0:
-            reason = f"order {order} is odd (the real + fake factor count must be even)"
-        elif not _order_exists(order):
-            reason = (
-                f"no conference matrix of order {order} exists -- one would have to be "
-                f"symmetric, which requires {order - 1} to be a sum of two squares"
-            )
-        else:
-            reason = f"no conference matrix construction is available for order {order}"
-        raise ValueError(
-            f"definitive_screening cannot build a design for k={k} with "
-            f"fake_factors={fake_factors}: {reason}{hint}"
-        )
 
     C = _conference_matrix(order)
     structural = np.vstack([C, -C])  # the foldover [C; -C]

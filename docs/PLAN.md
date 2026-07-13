@@ -135,19 +135,20 @@ whose root member is `doe` and whose other member is `doe-service`.
    `simplex_lattice`/`simplex_centroid`/`extreme_vertices`/`mixture_candidates`, Scheffé
    blending models, `ternary_contour`) are both *done*. See [`PHASE4.md`](PHASE4.md) for the
    detailed build plan.
-5. **Phase 5 — Screening & restricted randomization** *(in progress)*. See
+5. **Phase 5 — Screening & restricted randomization** *(done)*. See
    [`PHASE5.md`](PHASE5.md) for the detailed build plan.
    - **Phase 5a — Definitive screening designs (DSD)** *(done)*: `definitive_screening` builds
      Jones–Nachtsheim conference-matrix designs that screen main effects and detect
      curvature/2FIs in few runs, avoiding the full-factorial → CCD two-stage flow. Reuses the
-     existing OLS/RSM analysis machinery unchanged.
-   - **Phase 5b — Split-plot / hard-to-change factors** *(not yet started)*: restricted
-     randomization for factors that cannot be reset every run (the industrial norm). Touches the
-     analysis layer, not just generation: needs a whole-plot/sub-plot structure on `Design` and a
-     GLS/REML fit path rather than OLS.
-   - **Phase 5c — Classical / blocking** *(not yet started)*: randomized complete block, Latin
-     square, blocked factorials (fractions assigned to blocks via defining contrasts), richer
-     run-order utilities.
+     existing OLS/RSM analysis machinery unchanged; two-level categorical factors are supported
+     via the Jones–Nachtsheim (2013) DSD-augment construction.
+   - **Phase 5b — Split-plot / hard-to-change factors** *(done)*: the `hard_to_change` factor flag,
+     a `whole_plots` structure on `Design` with plot-aware `randomize`, the `split_plot` generator,
+     and a `fit_gls` REML/GLS fit path (`analysis/variance.py`) that recovers the two variance
+     components and the whole-plot standard errors OLS understates.
+   - **Phase 5c — Classical / blocking** *(done)*: `randomized_complete_block`, `latin_square`, and
+     `blocked_factorial` (fractions assigned to blocks via defining contrasts), the block carried
+     as a reserved categorical column the model matrix absorbs, plus block-aware run ordering.
 
 Alongside the phases, serialization (`Design.to_dict`/`from_dict` + schema validation), the HTML
 run sheet, and the `doe-service` HTTP API (v1 complete) have all shipped.

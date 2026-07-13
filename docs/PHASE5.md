@@ -281,7 +281,31 @@ Anchors (`test_screening.py`):
 - `k = 21` still auto-advances to order 24, and an explicit `fake_factors=0` raises a message
   mentioning nonexistence.
 
-#### 1.4.2 Categorical extension — Jones–Nachtsheim (2013) DSD-augment
+#### 1.4.2 Categorical extension — Jones–Nachtsheim (2013) DSD-augment — *done*
+
+> **As built.** Implemented as `_dsd_augment_categorical` in `generators/screening.py`;
+> `definitive_screening` now dispatches to it whenever any factor is a (two-level)
+> `CategoricalFactor`, and the all-continuous path is untouched (regression-tested bit-identical
+> against a frozen `k = 4` design). The construction follows the paper: build `[C; −C]` over the
+> conference matrix of order `m + c` (existing fake-factor logic on `k = m + c`), assign the last
+> `c` kept columns to the categoricals, replace each categorical column's zero pair with
+> `z_j` / `−z_j`, and append one pseudo-center pair (continuous at 0, categorical `j` at
+> `±b_j`) — so `n = 2·order + 2` runs (`n₁ + 2`). `z, b ∈ {±1}^c` are chosen by exhaustively
+> maximizing `det(X₁ᵀX₁)` over all `2^(2c)` combinations in a deterministic iteration order
+> (`2c > 20` raises, pointing at `d_optimal`). `point_types` tags the pair `"pseudo-center"` (not
+> `"center"`); `extra_center_runs` appends whole replicated pseudo-center *pairs*;
+> `meta["categorical_signs"]` records the resolved `z`/`b`.
+>
+> **One deviation from the sketch/eq. (2).** The paper's Table-2/eq.-(2) example for `m = 4,
+> c = 2` reports `det(X₁ᵀX₁) = 20 428 800`, but that value is **not achievable** with an order-6
+> conference matrix (which is unique up to equivalence): the exhaustive `2^(2c)` search yields
+> `{16 486 400, 20 966 400}`, so our D-optimal augmentation lands at **20 966 400** — a weakly
+> *higher*-determinant design than the paper's tabulated instance, with the *same* diagonal
+> `(14, 10, 10, 10, 10, 14, 14)` and off-diagonals in `{0, ±2}`. The definitive property (the
+> real anchor) holds exactly: the alias matrix's main-effect rows against every quadratic and
+> two-factor-interaction column are `0` to machine precision. The run counts reproduce Table 4's
+> `n_DSD` column (m=4,c=1→14; m=4,c=2→14; m=4,c=3/4→18; …). The tests assert structure + the
+> definitive property + Table-4 run counts rather than the specific eq.-(2) determinant.
 
 > **Scope decision:** implement **DSD-augment only**. Of the paper's two methods, DSD-augment
 > keeps the property that names the class — every main effect remains unbiased by any active
@@ -349,7 +373,21 @@ rejects categorical factors and relax it with a golden contract test if so; keep
 
 ---
 
-## 2. Split-plot / hard-to-change factors — Phase 5b
+## 2. Split-plot / hard-to-change factors — Phase 5b — *done*
+
+> **As built.** `ContinuousFactor`/`CategoricalFactor` gained `hard_to_change: bool = False`
+> (emitted in `to_dict` only when `True`); `FactorSet` gained `whole_plot_factors` /
+> `sub_plot_factors`. `Design` gained `whole_plots: tuple[int, ...] | None` (validated, carried
+> through `with_response`/`project`/`replicate`/`randomize`/`to_dict`/`from_dict`, with
+> `n_whole_plots`/`whole_plot_indices`), and `randomize` became plot-aware plus gained a
+> `within=` keyword (block-aware); both share one `_shuffle_within_groups` helper. `replicate`
+> offsets plot ids so replicated plots are new plots. `generators/splitplot.py::split_plot`
+> crosses whole-plot × sub-plot designs (component designs are `"full"` or a ready-made `Design`).
+> `analysis/variance.py` does one-parameter REML (`v0_inverse` block-diagonal Sherman-Morrison,
+> profiled over `log η`); `analysis/fit.py::fit_gls` returns the same `FitResult` with new
+> optional `sigma2_wp`/`n_whole_plots`/`dof_terms` fields and two-stratum containment df.
+> `fit_ols`/`FitResult.to_dict` are untouched. Anchors: REML == closed-form balanced-split-plot
+> ANOVA components (exact), simulation recovery, and the OLS-understates-whole-plot-SE trap.
 
 The fully-randomized assumption behind every design so far is an industrial fiction whenever a
 factor is expensive or slow to reset (furnace temperature, a coating bath, a raw-material lot).
@@ -428,7 +466,17 @@ Plan:
 
 ---
 
-## 3. Classical / blocking — `generators/blocking.py` (Phase 5c)
+## 3. Classical / blocking — `generators/blocking.py` (Phase 5c) — *done*
+
+> **As built.** `generators/blocking.py` ships `randomized_complete_block`, `latin_square`, and
+> `blocked_factorial`, using **block representation (b)**: a reserved `CategoricalFactor("block",
+> ("B1", …))` in the `FactorSet`, so `build_model_matrix`'s deviation coding fits the block with
+> zero analysis changes. Within-block run order uses the shared `Design.randomize(within="block")`
+> machinery from §2. `blocked_factorial` records the confounded generators **and** their
+> generalized interactions in `meta["confounded_with_blocks"]` (e.g. `["ABC", "BCD", "AD"]`).
+> Anchors: RCB(4,3)→12 runs each treatment once/block; `latin_square(5)`→25 runs each treatment
+> once per row and column; the block column equals the confounded contrast numerically, that
+> effect is inestimable, and the rest fit clean.
 
 Blocking removes a known nuisance source (day, batch, operator) by grouping runs so the nuisance
 is constant within a block and the treatment comparisons are made within blocks. It is

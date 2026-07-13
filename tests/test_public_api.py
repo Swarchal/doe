@@ -22,3 +22,16 @@ def test_phase3_public_api_exports_are_available():
     ]:
         assert name in doe.__all__
         assert getattr(doe, name) is not None
+
+
+def test_phase5_public_api_exports_are_available():
+    for name in [
+        "definitive_screening",
+        "split_plot",
+        "fit_gls",
+        "randomized_complete_block",
+        "latin_square",
+        "blocked_factorial",
+    ]:
+        assert name in doe.__all__
+        assert getattr(doe, name) is not None

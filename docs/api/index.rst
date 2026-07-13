@@ -27,13 +27,22 @@ module by module.
     Mixture designs (simplex-lattice, simplex-centroid, extreme vertices).
 
 :mod:`doe.generators.screening`
-    Definitive screening designs (conference-matrix DSDs).
+    Definitive screening designs (conference-matrix DSDs, + two-level categoricals).
+
+:mod:`doe.generators.splitplot`
+    Split-plot designs for hard-to-change (whole-plot) factors.
+
+:mod:`doe.generators.blocking`
+    Classical blocking: randomized complete block, Latin square, blocked factorial.
 
 :mod:`doe.analysis.model`
     Model-matrix construction in coded units.
 
 :mod:`doe.analysis.fit`
-    OLS fitting and effect estimation.
+    OLS and split-plot GLS fitting and effect estimation.
+
+:mod:`doe.analysis.variance`
+    REML variance components for the two-stratum split-plot model.
 
 :mod:`doe.analysis.anova`
     ANOVA, lack-of-fit, and predictive metrics.
@@ -65,8 +74,11 @@ module by module.
    generators.spacefilling
    generators.mixture
    generators.screening
+   generators.splitplot
+   generators.blocking
    analysis.model
    analysis.fit
+   analysis.variance
    analysis.anova
    analysis.diagnostics
    analysis.optimize

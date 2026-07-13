@@ -93,6 +93,15 @@ class FitResult:
     #: labelling multi-response output (e.g. a future ``desirability`` report); not yet read
     #: anywhere.
     response_name: str | None = None
+    #: Whole-plot variance component ``σ²_wp`` from a :func:`fit_gls` split-plot fit (``None`` for
+    #: an OLS fit). ``mse`` holds the sub-plot variance ``σ²`` for such a fit.
+    sigma2_wp: float | None = None
+    #: Number of whole plots in a :func:`fit_gls` fit (``None`` for OLS).
+    n_whole_plots: int | None = None
+    #: Per-term residual degrees of freedom for a two-stratum :func:`fit_gls` fit (``None`` for
+    #: OLS, where the single scalar ``dof_resid`` applies to every term). Whole-plot terms test
+    #: against whole-plot df, sub-plot terms against ``dof_resid``; :meth:`conf_int` uses it.
+    dof_terms: np.ndarray | None = None
 
     def _require_source(self) -> tuple[Design, np.ndarray]:
         """Return the stashed ``(design, response)`` or explain why they are missing."""
@@ -291,11 +300,19 @@ class FitResult:
         """
         if not 0.0 < level < 1.0:
             raise ValueError("level must be between 0 and 1")
-        if self.dof_resid <= 0:
+        if self.dof_terms is not None:
+            # two-stratum split-plot fit: each term uses its own (whole-plot or sub-plot) df
+            dof = np.asarray(self.dof_terms, dtype=float)
+            with np.errstate(invalid="ignore"):
+                t_crit = np.where(
+                    dof > 0, stats.t.ppf(0.5 + level / 2.0, np.where(dof > 0, dof, 1.0)), np.nan
+                )
+            half = t_crit * self.std_errors
+        elif self.dof_resid <= 0:
             half = np.full_like(self.coefficients, np.nan)
         else:
-            t_crit = float(stats.t.ppf(0.5 + level / 2.0, self.dof_resid))
-            half = t_crit * self.std_errors
+            t_crit_scalar = float(stats.t.ppf(0.5 + level / 2.0, self.dof_resid))
+            half = t_crit_scalar * self.std_errors
         return pd.DataFrame(
             {"lower": self.coefficients - half, "upper": self.coefficients + half},
             index=pd.Index(self.term_names, name="term"),
@@ -574,4 +591,149 @@ def fit_ols(
         design,
         y,
         response_name,
+    )
+
+
+def _term_factor_names(term: str) -> set[str]:
+    """The base factor names a model term references (empty for the intercept).
+
+    ``"temperature:catalyst[B]"`` -> ``{"temperature", "catalyst"}``; ``"time^2"`` -> ``{"time"}``.
+    """
+    if term == "Intercept":
+        return set()
+    names: set[str] = set()
+    for part in term.split(":"):
+        base = part.split("[", maxsplit=1)[0]
+        if base.endswith("^2"):
+            base = base[:-2]
+        names.add(base)
+    return names
+
+
+def fit_gls(
+    design: Design,
+    response: np.ndarray | str,
+    *,
+    order: int = 1,
+    interactions: bool = True,
+    model: ModelSpec | None = None,
+) -> FitResult:
+    """Fit a split-plot design by generalized least squares with REML variance components.
+
+    A split-plot design (``design.whole_plots is not None``) has two error strata -- whole-plot
+    and sub-plot -- so OLS is wrong: it pools them into one error and *understates* whole-plot
+    standard errors (the classic anticonservative split-plot trap). ``fit_gls`` estimates the
+    variance ratio by REML (:func:`~doe.analysis.variance.reml_variance_components`), then returns
+    the GLS estimates ``β̂ = (XᵀV⁻¹X)⁻¹XᵀV⁻¹y`` with ``Cov(β̂) = (XᵀV⁻¹X)⁻¹``.
+
+    The model matrix is built exactly as in :func:`fit_ols` (same ``order``/``interactions``/
+    ``model``), and the result is the **same** :class:`FitResult` type, so every downstream
+    consumer reads it unchanged. It additionally carries the variance components
+    (:attr:`~FitResult.sigma2_wp`, ``mse`` = sub-plot ``σ²``, :attr:`~FitResult.n_whole_plots`)
+    and per-term degrees of freedom (:attr:`~FitResult.dof_terms`) following the containment rule:
+    a term built only from hard-to-change factors (and the intercept) is tested against whole-plot
+    df (``n_plots − #whole-plot-level terms``); every other term against the sub-plot residual df
+    (the scalar :attr:`~FitResult.dof_resid`). Effects keep their ``2 × coefficient`` meaning
+    (factors are coded to ``[-1, +1]``, unlike the mixture/Scheffé path).
+
+    Raises:
+        ValueError: when ``design.whole_plots is None`` (use :func:`fit_ols`), for a mixture
+            design (split-plot × mixture is out of scope), or a Scheffé ``model``.
+    """
+    if design.whole_plots is None:
+        raise ValueError(
+            "fit_gls requires a split-plot design (design.whole_plots is not None); "
+            "a fully-randomized design is fitted with fit_ols"
+        )
+    if design.factors.is_mixture:
+        raise ValueError("fit_gls does not support mixture designs")
+    if model is not None:
+        if model not in MODEL_SPECS:
+            raise ValueError(f"unknown model {model!r}; expected one of {sorted(MODEL_SPECS)}")
+        if model.startswith("scheffe"):
+            raise ValueError("fit_gls does not support Scheffé (mixture) models")
+        order, interactions = MODEL_SPECS[model]
+
+    from .variance import reml_variance_components, v0_inverse
+
+    response_name: str | None = None
+    if isinstance(response, str):
+        if response not in design.runs.columns:
+            raise ValueError(
+                f"no response column {response!r} on the design; "
+                f"available columns: {list(design.runs.columns)}"
+            )
+        response_name = response
+        response = design.runs[response].to_numpy()
+    y = np.asarray(response, dtype=float)
+    if y.shape[0] != design.n_runs:
+        raise ValueError("response length must match number of runs")
+
+    mm = build_model_matrix(design, order=order, interactions=interactions)
+    x = mm.X
+    whole_plots = design.whole_plots
+
+    sigma2_wp, sigma2, _reml_ll = reml_variance_components(x, y, whole_plots)
+    eta = sigma2_wp / sigma2 if sigma2 > 0 else 0.0
+    v_inv = v0_inverse(eta, whole_plots)
+
+    xtvi = x.T @ v_inv
+    xtvix_inv = np.linalg.pinv(xtvi @ x)
+    coef = xtvix_inv @ (xtvi @ y)
+    cov_beta = sigma2 * xtvix_inv
+    std_errors = np.sqrt(np.diag(cov_beta))
+
+    fitted = x @ coef
+    residuals = y - fitted
+    ss_res = float(residuals @ residuals)
+    ss_tot = float(((y - y.mean()) ** 2).sum())
+    r_squared = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+
+    # two-stratum degrees of freedom by the containment rule
+    wp_names = {f.name for f in design.factors.whole_plot_factors}
+    is_wp_term = np.array(
+        [_term_factor_names(term) <= wp_names for term in mm.term_names], dtype=bool
+    )
+    n_plots = len(set(whole_plots))
+    n_runs = x.shape[0]
+    n_wp_terms = int(is_wp_term.sum())
+    n_sp_terms = len(mm.term_names) - n_wp_terms
+    dof_wp = n_plots - n_wp_terms
+    dof_sp = n_runs - n_plots - n_sp_terms
+    dof_terms = np.where(is_wp_term, dof_wp, dof_sp).astype(int)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t_values = coef / std_errors
+        p_values = np.array(
+            [
+                2.0 * stats.t.sf(abs(t), d) if d > 0 else np.nan
+                for t, d in zip(t_values, dof_terms, strict=True)
+            ]
+        )
+
+    effects = 2.0 * coef
+    effects[0] = coef[0]  # intercept is the grand mean, not a swing
+    return FitResult(
+        mm.term_names,
+        coef,
+        effects,
+        fitted,
+        residuals,
+        r_squared,
+        x,
+        int(dof_sp),
+        sigma2,
+        cov_beta,
+        std_errors,
+        t_values,
+        p_values,
+        design.factors,
+        order,
+        interactions,
+        design,
+        y,
+        response_name,
+        sigma2_wp=sigma2_wp,
+        n_whole_plots=n_plots,
+        dof_terms=dof_terms,
     )

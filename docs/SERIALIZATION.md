@@ -112,6 +112,14 @@ Shape conventions:
 - `runs` records are flat `{column: value}` maps (factor columns plus any
   `std_order` / response columns), not a nested `values` object.
 - `point_types` is a single array aligned to `runs`, not a per-run field.
+- `whole_plots` (split-plot designs only) is a single array of integer plot ids aligned to
+  `runs`, one per run; runs sharing an id form one whole plot. It is **emitted only when set**,
+  so fully-randomized designs serialize byte-for-byte as before, and it survives
+  `replicate`/`randomize`/`project` like `point_types`. `validate_design_dict` checks it is a
+  list of integers the same length as `runs`.
+- `hard_to_change: true` appears on a `continuous`/`categorical` factor when it is a whole-plot
+  (hard-to-change) factor in a split-plot design. It too is **emitted only when `true`** (so
+  pre-split-plot documents are unchanged) and reads back as `False` when absent.
 - `meta["generator"]` records the generating *request* as `{"name", "parameters"}` —
   the call that regenerates the design (e.g. the defining relation strings of a
   fractional factorial, or `alpha="rotatable"` for a CCD). Values *resolved* from the

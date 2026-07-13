@@ -383,3 +383,31 @@ def test_json_safe_output_survives_json_dumps():
     payload = {"a": np.float64(1.5), "b": [np.nan, np.int64(2)]}
     dumped = json.loads(json.dumps(json_safe(payload)))
     assert dumped == {"a": 1.5, "b": [None, 2]}
+
+
+# --- whole_plots + hard_to_change serialization (Phase 5b) ----------------------------------
+
+
+def test_whole_plots_round_trip_and_omitted_when_none():
+    factors = FactorSet(
+        [ContinuousFactor("oven", 200, 400, hard_to_change=True), ContinuousFactor("time", 5, 15)]
+    )
+    runs = pd.DataFrame({"oven": [200, 200, 300, 300], "time": [5, 15, 5, 15]})
+    d = Design(runs, factors, whole_plots=(0, 0, 1, 1))
+    payload = d.to_dict()
+    assert payload["whole_plots"] == [0, 0, 1, 1]
+    assert payload["factors"][0]["hard_to_change"] is True
+    validate_design_dict(payload)
+    restored = Design.from_dict(json.loads(json.dumps(payload)))
+    assert restored.whole_plots == (0, 0, 1, 1)
+    assert restored.factors["oven"].hard_to_change is True
+    # a plain design emits no whole_plots key
+    assert "whole_plots" not in Design(runs, factors).to_dict()
+
+
+def test_validate_rejects_misaligned_whole_plots():
+    factors = FactorSet([ContinuousFactor("x", 0, 1)])
+    payload = Design(pd.DataFrame({"x": [0, 1]}), factors).to_dict()
+    payload["whole_plots"] = [0, 0, 0]
+    with pytest.raises(ValidationError, match="whole_plots"):
+        validate_design_dict(payload)

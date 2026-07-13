@@ -213,3 +213,166 @@ def test_suggest_fake_factors_parity_and_constructibility():
     # k=21 (odd): fake counts must be odd, and order 22 does not exist, so the first is 3
     assert all(nf % 2 == 1 for nf in _suggest_fake_factors(21))
     assert _suggest_fake_factors(21)[0] == 3
+
+
+# --- Categorical DSD extension (Jones & Nachtsheim 2013, DSD-augment) ---------------------
+
+# A frozen all-continuous k=4 DSD (coded), asserted bit-identical so the categorical extension
+# never perturbs the continuous path.
+_FROZEN_CONTINUOUS_K4 = np.array(
+    [
+        [0.0, 1.0, 1.0, 1.0],
+        [1.0, 0.0, -1.0, 1.0],
+        [1.0, 1.0, 0.0, -1.0],
+        [1.0, -1.0, 1.0, 0.0],
+        [0.0, -1.0, -1.0, -1.0],
+        [-1.0, 0.0, 1.0, -1.0],
+        [-1.0, -1.0, 0.0, 1.0],
+        [-1.0, 1.0, -1.0, 0.0],
+        [0.0, 0.0, 0.0, 0.0],
+    ]
+)
+
+
+def _mixed(m, c, low=0.0, high=10.0):
+    """m continuous + c two-level categorical factors, in that order."""
+    return [
+        *[ContinuousFactor(f"x{i}", low=low, high=high) for i in range(m)],
+        *[CategoricalFactor(f"c{j}", ("L", "H")) for j in range(c)],
+    ]
+
+
+def _numeric_coded(design):
+    """Numeric coded coordinates for every factor (categoricals -> +/-1), as an array."""
+    from doe.analysis.model import coded_design_points
+
+    return coded_design_points(design)
+
+
+def test_continuous_path_bit_identical_to_frozen():
+    # the all-continuous branch must be untouched by the categorical extension
+    design = definitive_screening(_factors(4))
+    assert np.allclose(_numeric_coded(design), _FROZEN_CONTINUOUS_K4)
+    assert set(design.point_types) == {"dsd", "center"}
+
+
+@pytest.mark.parametrize(
+    "m,c,expected",
+    # Table 4 (Jones & Nachtsheim 2013) n_DSD column, via conference-matrix order padding.
+    [(4, 1, 14), (4, 2, 14), (4, 3, 18), (4, 4, 18), (5, 1, 14), (6, 1, 18)],
+)
+def test_categorical_dsd_run_counts_match_table_4(m, c, expected):
+    design = definitive_screening(_mixed(m, c))
+    assert design.n_runs == expected
+    # n = 2*order + 2 (structural fold-over + one pseudo-center pair)
+    assert design.point_types.count("pseudo-center") == 2
+    assert design.point_types.count("dsd") == expected - 2
+
+
+def test_categorical_dsd_information_matrix_matches_paper_eq2():
+    # m=4, c=2 first-order XᵀX: diag (14,10,10,10,10,14,14), off-diagonals in {0, +/-2}
+    # (Jones & Nachtsheim 2013, eq. 2). The determinant is the exhaustive-search maximum.
+    design = definitive_screening(_mixed(4, 2))
+    mm = build_model_matrix(design, order=1, interactions=False)
+    xtx = mm.X.T @ mm.X
+    assert np.allclose(np.diag(xtx), [14, 10, 10, 10, 10, 14, 14])
+    off = xtx - np.diag(np.diag(xtx))
+    assert set(np.unique(np.round(off, 9))) <= {-2.0, 0.0, 2.0}
+
+
+def test_categorical_dsd_is_definitive_alias_matrix_main_rows_zero():
+    # The defining property: for the first-order model, the alias matrix
+    # (X1ᵀX1)⁻¹ X1ᵀ X2 against every quadratic and two-factor-interaction column has all-zero
+    # main-effect rows -- main effects stay unbiased by any active second-order effect (Table 3).
+    design = definitive_screening(_mixed(4, 2))
+    factor_names = set(design.factors.names)
+    mm = build_model_matrix(design, order=2, interactions=True)
+    names = mm.term_names
+
+    def is_main(name):
+        if ":" in name or name.endswith("^2"):
+            return False
+        return name in factor_names or name.split("[")[0] in factor_names
+
+    main = [i for i, n in enumerate(names) if is_main(n)]
+    second = [i for i, n in enumerate(names) if ":" in n or n.endswith("^2")]
+    x1 = np.column_stack([np.ones(mm.X.shape[0]), *[mm.X[:, i] for i in main]])
+    x2 = mm.X[:, second]
+    alias = np.linalg.solve(x1.T @ x1, x1.T @ x2)
+    # rows 1: are the main-effect rows (row 0 is the intercept, which *is* aliased -- Table 3)
+    assert np.allclose(alias[1:], 0.0, atol=1e-9)
+    assert np.abs(alias[0]).max() > 1e-6  # intercept aliasing is present and surfaced
+
+
+def test_categorical_dsd_column_structure():
+    # categorical columns are zero-free +/-1; each continuous column has exactly two structural
+    # zeros (its fold-over diagonal pair); the whole design is fold-over pairs.
+    design = definitive_screening(_mixed(4, 2))
+    coded = _numeric_coded(design)
+    names = design.factors.names
+    n1 = design.point_types.count("dsd")
+    for j, name in enumerate(names):
+        col = coded[:, j]
+        if name.startswith("c"):  # categorical
+            assert np.all(np.abs(col) == 1.0)
+        else:  # continuous: two zeros among the structural rows
+            assert np.count_nonzero(col[:n1] == 0.0) == 2
+    # fold-over: the multiset of rows equals the multiset of negated rows
+    rows = sorted(map(tuple, np.round(coded + 0.0, 6).tolist()))
+    neg = sorted(map(tuple, np.round(-coded + 0.0, 6).tolist()))
+    assert rows == neg
+
+
+def test_categorical_dsd_pseudo_center_survives_round_trips():
+    from doe.design import Design
+
+    design = definitive_screening(_mixed(4, 2))
+    assert "pseudo-center" in design.point_types
+    assert "center" not in design.point_types  # not replicates -> not "center"
+
+    # replicate / randomize / project / to_dict-from_dict all carry the tag
+    assert design.replicate(2).point_types.count("pseudo-center") == 4
+    assert set(design.randomize(seed=0).point_types) == set(design.point_types)
+    projected = design.project(["x0", "x1", "c0"])
+    assert "pseudo-center" in projected.point_types
+    restored = Design.from_dict(design.to_dict())
+    assert restored.point_types == design.point_types
+
+
+def test_categorical_dsd_recovers_injected_response():
+    # inject continuous mains + one quadratic + one categorical main; recover via the documented
+    # fit-reduced-model flow (fit only the active terms, where residual dof is positive).
+    from doe.analysis.fit import fit_ols
+
+    design = definitive_screening(_mixed(3, 1))
+    coded = _numeric_coded(design)
+    x0, x1, cat = coded[:, 0], coded[:, 1], coded[:, 3]
+    y = 20 + 3 * x0 - 2 * x1 + 1.5 * (x0**2) + 4 * cat
+    measured = design.with_response("y", y)
+
+    # reduced quadratic in the active continuous factors + the categorical main effect
+    fit = fit_ols(measured, "y", order=2, interactions=False)
+    summary = fit.summary()
+    assert summary.loc["x0", "coefficient"] == pytest.approx(3.0, abs=1e-6)
+    assert summary.loc["x1", "coefficient"] == pytest.approx(-2.0, abs=1e-6)
+    assert summary.loc["x0^2", "coefficient"] == pytest.approx(1.5, abs=1e-6)
+    assert summary.loc["c0[H]", "coefficient"] == pytest.approx(4.0, abs=1e-6)
+
+
+def test_categorical_dsd_rejects_multilevel_but_accepts_two_level():
+    # two-level categorical is fine; a three-level one still routes to d_optimal
+    definitive_screening(_mixed(3, 1))  # no raise
+    with pytest.raises(ValueError, match="two-level|d_optimal"):
+        definitive_screening([*_factors(3), CategoricalFactor("cat", ("x", "y", "z"))])
+
+
+def test_categorical_dsd_too_many_categoricals_raises():
+    with pytest.raises(ValueError, match="d_optimal"):
+        definitive_screening(_mixed(2, 11))
+
+
+def test_categorical_dsd_extra_center_runs_add_pairs():
+    design = definitive_screening(_mixed(4, 2), extra_center_runs=2)
+    # base pseudo-center pair + 2 replicated pairs = 6 pseudo-center runs
+    assert design.point_types.count("pseudo-center") == 6
+    assert design.meta["categorical_signs"]["z"]  # signs recorded

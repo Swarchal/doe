@@ -351,3 +351,82 @@ def test_project_rejects_unknown_factor():
 def test_project_rejects_duplicate_names():
     with pytest.raises(ValueError, match="duplicate factor names"):
         _factorial_3f().project(["a", "a"])
+
+
+# --- whole-plot structure (Phase 5b) --------------------------------------------------------
+
+import pandas as pd  # noqa: E402
+
+from doe.design import Design  # noqa: E402
+from doe.factors import FactorSet  # noqa: E402
+
+
+def _wp_design():
+    # 3 whole plots of 2 sub-plot runs each; hard-to-change "oven" constant within a plot
+    factors = FactorSet(
+        [
+            ContinuousFactor("oven", 200, 400, hard_to_change=True),
+            ContinuousFactor("time", 5, 15),
+        ]
+    )
+    runs = pd.DataFrame(
+        {
+            "oven": [200, 200, 300, 300, 400, 400],
+            "time": [5, 15, 5, 15, 5, 15],
+        }
+    )
+    return Design(runs, factors, whole_plots=(0, 0, 1, 1, 2, 2))
+
+
+def test_whole_plots_length_validated():
+    factors = FactorSet([ContinuousFactor("x", 0, 1)])
+    with pytest.raises(ValueError, match="whole_plots"):
+        Design(pd.DataFrame({"x": [0, 1]}), factors, whole_plots=(0, 0, 0))
+
+
+def test_n_whole_plots_and_indices():
+    d = _wp_design()
+    assert d.n_whole_plots == 3
+    assert d.whole_plot_indices(1).tolist() == [2, 3]
+
+
+def test_whole_plots_carry_through_project_and_response():
+    d = _wp_design().with_response("y", [1, 2, 3, 4, 5, 6])
+    assert d.whole_plots == (0, 0, 1, 1, 2, 2)
+    projected = d.project(["time"])
+    assert projected.whole_plots == (0, 0, 1, 1, 2, 2)
+
+
+def test_replicate_remaps_whole_plot_ids_to_new_plots():
+    d = _wp_design()
+    rep = d.replicate(2)  # tile: second pass is fresh plots
+    assert rep.whole_plots == (0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5)
+    assert rep.n_whole_plots == 6
+
+
+def test_randomize_is_plot_aware_never_splits_and_relabels():
+    d = _wp_design()
+    r = d.randomize(seed=3)
+    wp = list(r.whole_plots)
+    # each plot's runs are contiguous (never split)
+    from itertools import groupby
+
+    run_lengths = [len(list(g)) for _, g in groupby(wp)]
+    assert run_lengths == [2, 2, 2]
+    # ids relabelled to execution order 0,1,2
+    assert wp == [0, 0, 1, 1, 2, 2]
+    # within each executed plot, the hard-to-change factor is constant
+    for plot in set(wp):
+        idx = r.whole_plot_indices(plot)
+        assert r.runs["oven"].to_numpy()[idx].std() == 0.0
+    # reproducible
+    assert d.randomize(seed=3).runs.equals(r.runs)
+
+
+def test_randomize_within_keeps_groups_ordered():
+    factors = FactorSet([ContinuousFactor("x", 0, 1)])
+    runs = pd.DataFrame({"x": [0, 1, 0, 1], "block": ["B1", "B1", "B2", "B2"]})
+    d = Design(runs, factors)
+    r = d.randomize(seed=1, within="block")
+    # blocks stay contiguous and in original order
+    assert r.runs["block"].tolist() == ["B1", "B1", "B2", "B2"]

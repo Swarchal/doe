@@ -27,7 +27,7 @@ from .analysis.diagnostics import (
     maximin_distance,
     vif,
 )
-from .analysis.fit import MODEL_SPECS, FitResult, SaturatedFitWarning, fit_ols
+from .analysis.fit import MODEL_SPECS, FitResult, SaturatedFitWarning, fit_gls, fit_ols
 from .analysis.optimize import (
     DesirabilityResult,
     Optimum,
@@ -45,6 +45,11 @@ from .factors import (
     FactorSet,
     MixtureFactor,
     factor_from_dict,
+)
+from .generators.blocking import (
+    blocked_factorial,
+    latin_square,
+    randomized_complete_block,
 )
 from .generators.factorial import (
     fractional_factorial,
@@ -68,6 +73,7 @@ from .generators.optimal import (
 from .generators.rsm import box_behnken, central_composite
 from .generators.screening import definitive_screening
 from .generators.spacefilling import halton, latin_hypercube, sobol
+from .generators.splitplot import split_plot
 from .interactive import to_html
 from .serialization import ValidationError, json_safe, validate_design_dict
 
@@ -93,6 +99,7 @@ __all__ = [
     "anova_records",
     "anova_table",
     "augment",
+    "blocked_factorial",
     "box_behnken",
     "candidate_grid",
     "central_composite",
@@ -106,6 +113,7 @@ __all__ = [
     "efficiency",
     "extreme_vertices",
     "factor_from_dict",
+    "fit_gls",
     "fit_ols",
     "fractional_factorial",
     "full_factorial",
@@ -115,6 +123,7 @@ __all__ = [
     "json_safe",
     "lack_of_fit",
     "latin_hypercube",
+    "latin_square",
     "leverage",
     "log_det_information",
     "maximin_distance",
@@ -123,9 +132,11 @@ __all__ = [
     "plackett_burman",
     "predicted_r2",
     "press",
+    "randomized_complete_block",
     "simplex_centroid",
     "simplex_lattice",
     "sobol",
+    "split_plot",
     "stationary_point",
     "to_html",
     "validate_design_dict",

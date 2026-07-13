@@ -1795,6 +1795,153 @@ a definitive screening design collapses the two-stage screen-then-surface workfl
 curvature — all from the same runs. It is analysed with the exact machinery you already know; only
 the design is new.
 
+**Adding a categorical factor.** A pure DSD needs quantitative factors (a categorical has no
+midpoint). But many real screens mix in a two-level qualitative factor — a reagent vendor, an
+instrument, a protocol variant. The Jones–Nachtsheim (2013) _DSD-augment_ construction adds them
+while keeping the property that names the class: every main effect stays unbiased by any
+second-order effect. Just pass the categorical alongside the continuous factors:
+
+```python
+from doe import CategoricalFactor
+
+dsd_cat = definitive_screening([
+    ContinuousFactor("dna_ng", 100, 500, units="ng"),
+    ContinuousFactor("lipid_uL", 0.5, 2.5, units="uL"),
+    ContinuousFactor("incubation_h", 24, 72, units="h"),
+    CategoricalFactor("vendor", ("acme", "zenith")),
+])
+dsd_cat.n_runs                    # 10   (= 2*(m + c) + 2)
+dsd_cat.point_types[-2:]          # ('pseudo-center', 'pseudo-center')
+```
+
+Two things change from the continuous case. The categorical column can't take a `0` level, so
+its zero pair is replaced by an optimized `±1` pair, and the single all-zero center run becomes a
+**pseudo-center pair** (continuous at 0, the categorical at each of its two levels) — hence
+`2(m + c) + 2` runs and the `"pseudo-center"` tag (these two runs differ in the categorical
+coordinate, so they are _not_ replicates and don't feed `lack_of_fit`). The definitive property
+still holds exactly — the whole design is fold-over pairs, so the alias matrix's main-effect rows
+against every quadratic and two-factor-interaction column are zero:
+
+```python
+# max |alias| over the main-effect rows of (X1ᵀX1)⁻¹X1ᵀX2  ->  0.00e+00
+```
+
+`>2`-level categoricals aren't handled by this construction — reach for `d_optimal` (Vignette 18)
+there.
+
+---
+
+### Vignette 22 — Factors you can't reset every run: split-plot designs
+
+Every design so far has assumed you can randomize freely — set each factor independently for each
+run. Reality often refuses: an **oven temperature**, a furnace atmosphere, a reagent lot are
+_hard to change_. Resetting one per run is slow or expensive, so in practice you fix it, run a
+batch of easy-to-change conditions inside that setting, then reset it. That batch is a **whole
+plot**, and the resulting **split-plot** design has _two_ error strata: variation _between_ whole
+plots (large) and variation _within_ them (small).
+
+Declare the hard-to-change factor and let `split_plot` build the structure — a design on the
+whole-plot factor(s) crossed with the full sub-plot design run inside each plot:
+
+```python
+from doe import ContinuousFactor, split_plot, fit_gls, fit_ols
+
+sp_factors = [
+    ContinuousFactor("oven_temp", 180, 220, units="C", hard_to_change=True),  # whole-plot
+    ContinuousFactor("bake_min", 20, 40, units="min"),                        # sub-plot
+    ContinuousFactor("coating", 1, 3, units="layers"),                        # sub-plot
+]
+sp = split_plot(sp_factors, n_whole_plot_reps=3)
+sp.n_runs, sp.n_whole_plots       # 24, 6
+```
+
+`oven_temp` is held constant across each whole plot's four sub-plot runs; `Design.randomize` (and
+`split_plot(..., seed=)`) is plot-aware — it shuffles whole-plot order and the runs _within_ each
+plot, but never splits a plot.
+
+**The trap.** OLS treats all 24 runs as independent, pooling the two strata into one error. That
+_understates_ the whole-plot standard error — you'd call the oven effect more precise than it is.
+The correct fit is GLS with the two variance components estimated by REML (`fit_gls`), which
+requires only `design.whole_plots` to be set:
+
+```python
+gls = fit_gls(sp, "y")
+gls.sigma2_wp, gls.mse            # 21.65 (whole-plot σ²_wp), 0.73 (sub-plot σ²)
+
+# standard errors — OLS understates the whole-plot (oven_temp) SE:
+#          term     coef   SE (GLS)   SE (OLS)
+#     oven_temp     4.69      1.907      0.938      <- whole-plot: OLS far too small
+#      bake_min     2.52      0.175      0.938      <- sub-plot: OLS far too large
+#       coating     1.70      0.175      0.938
+```
+
+There is the whole lesson in two columns. For the hard-to-change `oven_temp`, OLS reports
+`0.938` against the correct `1.907` — half the truth, an anticonservative error that manufactures
+false significance. For the easy-to-change sub-plot factors it is _too large_ (they are estimated
+within-plot, more precisely than the pooled error suggests). GLS assigns each its right stratum.
+
+![Grouped bar chart of per-term standard errors, fit_gls versus fit_ols. For oven_temp the GLS bar is about twice the OLS bar; for the sub-plot terms (bake_min, coating, and the interactions) the OLS bar is much taller than the small GLS bar.](img/v22_splitplot_se.png)
+
+`fit_gls` returns the same `FitResult` type as `fit_ols`, so `summary`, `conf_int`, and the plots
+all read it unchanged — it just carries the variance components and the two-stratum degrees of
+freedom (whole-plot terms tested against whole-plot df, sub-plot terms against the sub-plot
+residual). **Takeaway.** When a factor can't be reset every run, declare it `hard_to_change`,
+build with `split_plot`, and fit with `fit_gls` — not `fit_ols`, which hides the whole-plot
+uncertainty.
+
+---
+
+### Vignette 23 — Removing a nuisance: blocking a factorial
+
+Sometimes a nuisance you don't care about — the day, the operator, the raw-material batch — still
+moves the response. **Blocking** groups the runs so the nuisance is constant within a block and
+the treatment comparisons are made _within_ blocks, sweeping the nuisance out of the effect
+estimates. In this library a block is carried as a reserved categorical column, so the existing
+model matrix absorbs it for free — no special analysis.
+
+Take a `2³` process study you must split over **two days**. `blocked_factorial` assigns the eight
+runs to two blocks by _confounding_ a chosen interaction with the day. Confound the (assumed
+negligible) three-factor interaction `ABC`, so no main effect or two-factor interaction is lost:
+
+```python
+from doe import blocked_factorial
+
+blk = blocked_factorial(
+    [ContinuousFactor("temp", 40, 80), ContinuousFactor("time", 5, 15),
+     ContinuousFactor("conc", 1, 3)],
+    block_generators=["ABC"],
+)
+blk.meta["confounded_with_blocks"]     # ['ABC']  (surfaced, not hidden)
+```
+
+The price is explicit and recorded: the `ABC` contrast is now numerically identical to the block,
+so it can't be estimated separately — but that's the interaction you were willing to sacrifice.
+Everything else is clean. Feed the design a day-shifted response (day 2 runs a few units higher)
+and fit with the block in the model; the block absorbs the shift and the main effects come out
+undistorted:
+
+```python
+res_blk = fit_ols(blk, "y", interactions=False)
+res_blk.summary().round(2)
+#            coefficient  effect  std_error       t    p
+# Intercept        52.34   52.34       0.07  752.14  0.0
+# temp              3.81    7.62       0.07   54.76  0.0
+# time             -2.32   -4.63       0.07  -33.28  0.0
+# conc              1.37    2.75       0.07   19.74  0.0
+# block[B2]         2.28    4.55       0.07   32.71  0.0
+```
+
+The `block[B2]` row _is_ the day-to-day shift, estimated and set aside; `temp`, `time`, and `conc`
+recover their injected effects. For the simpler case where every treatment is run once per block,
+`randomized_complete_block(4, n_blocks=3)` lays out 12 runs — each of the four treatments once in
+each of the three blocks, order randomized within block. `latin_square(k)` extends this to _two_
+crossed nuisance directions (rows and columns).
+
+**Takeaway.** A known nuisance source doesn't have to inflate your error or bias your effects:
+`blocked_factorial` (confound a spare interaction with the block) or `randomized_complete_block` /
+`latin_square` group it away, and because the block is just a categorical column the same
+`fit_ols` reads the result — the confounded effects are recorded in `meta`, never silently lost.
+
 ---
 
 ## Where to go next
@@ -1803,7 +1950,9 @@ the design is new.
 | --------------------------------------------- | ---------------------------------------------------- | ---- |
 | Quantify main effects & interactions          | `full_factorial` + `fit_ols` + `pareto_plot` / `interaction_plot` | I |
 | See which factors matter (cheap, many inputs) | `fractional_factorial` / `plackett_burman` + `half_normal_plot` | II |
-| Screen factors _and_ catch curvature in one design | `definitive_screening` + `half_normal_plot` + `project` + quadratic `fit_ols` | VII |
+| Screen factors _and_ catch curvature in one design | `definitive_screening` (+ two-level categoricals) + `half_normal_plot` + `project` + quadratic `fit_ols` | VII |
+| Handle a factor you can't reset every run     | `hard_to_change` + `split_plot` + `fit_gls` (not `fit_ols`) | VII |
+| Sweep out a known nuisance (day, batch, operator) | `blocked_factorial` / `randomized_complete_block` / `latin_square` | VII |
 | Locate an optimum on a curved surface         | `central_composite` / `box_behnken` + `contour_plot` | III |
 | Test whether effects are real, not just big   | `FitResult.anova`, `FitResult.conf_int`              | IV |
 | Check the model is trustworthy                | `residuals_vs_fitted`, `normal_qq`, `predicted_vs_actual`, `FitResult.lack_of_fit` | IV |

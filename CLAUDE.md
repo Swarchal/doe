@@ -22,9 +22,15 @@ Phase 4a (space-filling generators — `latin_hypercube`, `sobol`, `halton`, thi
 type, `simplex_lattice`/`simplex_centroid`/`extreme_vertices` generators plus
 `mixture_candidates` feeding the Phase 3 optimal engine, Scheffé no-intercept blending models in
 `build_model_matrix`/`fit_ols`, and the `ternary_contour` plot) is implemented, completing
-Phase 4. Phase 5 (screening & restricted randomization — definitive screening designs,
-split-plot/hard-to-change factors, classical/blocking) is not yet started; see
-`docs/PLAN.md`/`docs/PHASE4.md` §7 for the scoped pool. `build_model_matrix` expands categorical
+Phase 4. Phase 5 (screening & restricted randomization) is implemented, completing the classical
+DoE surface: **5a** definitive screening designs (`definitive_screening`, conference-matrix DSDs
+plus the Jones–Nachtsheim 2013 two-level categorical DSD-augment extension); **5b** split-plot /
+hard-to-change factors (the `hard_to_change` factor flag, `Design.whole_plots` with plot-aware
+`randomize`, the `split_plot` generator, and `fit_gls` — REML two-stratum variance components in
+`analysis/variance.py` recovering the whole-plot standard errors OLS understates); **5c**
+classical blocking (`randomized_complete_block`, `latin_square`, `blocked_factorial`, the block
+carried as a reserved categorical column). See `docs/PHASE5.md` for the build plan and as-built
+notes. `build_model_matrix` expands categorical
 factors via deviation (effect) coding, so OLS analysis handles mixed continuous/categorical
 designs. See `docs/PLAN.md` for the full roadmap and
 `docs/PHASE2.md`/`docs/PHASE3.md`/`docs/PHASE4.md` for the detailed build plans.
@@ -114,6 +120,27 @@ consumes one.
   so it feeds the Phase 3 `coordinate_exchange` engine — the engine exchanges whole rows, so
   sum-to-1 is preserved; `d_optimal(..., region=mixture_candidates(...))` gives odd-budget
   D-optimal blends). All-mixture factor sets only; `point_types` tags vertices/centroids.
+- `generators/screening.py` (Phase 5a) — `definitive_screening`: Jones–Nachtsheim conference-matrix
+  DSDs (`[C; −C; 0]`, `2k+1` runs, main effects orthogonal to all second-order terms; conference
+  matrices *constructed* via Paley border + skew doubling over `GF(p^m)`, covering every even order
+  2–32 except the nonexistent 22, with fake-factor padding otherwise). Two-level categoricals go
+  through the Jones–Nachtsheim (2013) DSD-augment path (`_dsd_augment_categorical`): last `c`
+  columns become the categoricals, their zero pairs → optimized `±z_j`, plus a pseudo-center pair
+  (`2(m+c)+2` runs); `z`/`b` signs maximize `det(X₁ᵀX₁)` over `2^(2c)`, keeping the definitive
+  property. The all-continuous path is bit-identical to before.
+- `generators/splitplot.py` (Phase 5b) — `split_plot`: crosses a whole-plot design (the
+  `hard_to_change` factors) with a sub-plot design run inside each plot, setting `Design.whole_plots`
+  and carrying the sub-plot `point_types`; component designs are `"full"` or any ready-made `Design`
+  (so a split-plot CCD/fraction falls out by composition). `seed=` returns it plot-aware-randomized.
+- `generators/blocking.py` (Phase 5c) — `randomized_complete_block`, `latin_square`,
+  `blocked_factorial`. The block is a reserved `CategoricalFactor("block", ("B1", …))`, so the
+  existing deviation coding fits it with no analysis change; `blocked_factorial` confounds chosen
+  contrasts with blocks and records the full confounded set (generators + generalized interactions)
+  in `meta["confounded_with_blocks"]`. Within-block order via `Design.randomize(within="block")`.
+- `analysis/variance.py` (Phase 5b) — headless REML for the two-stratum split-plot model
+  `V = σ²(I + η ZZᵀ)`: `v0_inverse` builds the block-diagonal `V₀⁻¹` (Sherman–Morrison per plot),
+  `reml_variance_components` profiles the REML log-likelihood over `log η` (closed-form `σ̂²`),
+  returning `(σ²_wp, σ², reml_loglik)`. Feeds `fit_gls`.
 - `analysis/model.py` — `build_model_matrix` expands a `Design` into intercept + main-effect
   + interaction (+ optional quadratic) columns in coded units. Squared terms are only emitted
   for continuous factors that actually take values off `{-1, +1}` (a pure ±1 column squares to
@@ -130,7 +157,12 @@ consumes one.
   (`model="scheffe-linear"`/`"scheffe-quadratic"`, which additionally *require* a mixture design):
   no intercept, R² stays *centered* (valid — the constant is in the Scheffé column space, so this
   avoids the inflated uncorrected-R² gotcha), and `effects` is all-NaN (the ±1 swing is
-  meaningless on proportions).
+  meaningless on proportions). `fit_gls` (Phase 5b) is the split-plot GLS front door: it *requires*
+  `design.whole_plots`, estimates the variance ratio by REML (`analysis/variance.py`), then returns
+  the **same** `FitResult` with `β̂ = (XᵀV⁻¹X)⁻¹XᵀV⁻¹y` and new optional fields
+  `sigma2_wp`/`n_whole_plots`/`dof_terms` (two-stratum containment df: whole-plot terms vs
+  `n_plots − #WP-terms`, others vs sub-plot residual). `fit_ols` and `FitResult.to_dict` are
+  untouched.
 - `analysis/anova.py` — `anova_table` (sequential/Type I SS via QR), `lack_of_fit` (needs ≥2
   center points for pure error), and predictive metrics `press`/`predicted_r2`/`adjusted_r2`.
   For a Scheffé (no-intercept) fit the table reports the `k` component columns as one

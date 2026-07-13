@@ -25,6 +25,7 @@ from doe import (
     MixtureFactor,
     ResponseGoal,
     augment,
+    blocked_factorial,
     box_behnken,
     candidate_grid,
     central_composite,
@@ -35,6 +36,7 @@ from doe import (
     discrepancy,
     efficiency,
     extreme_vertices,
+    fit_gls,
     fit_ols,
     fractional_factorial,
     full_factorial,
@@ -45,13 +47,16 @@ from doe import (
     mixture_candidates,
     optimum,
     plackett_burman,
+    randomized_complete_block,
     simplex_centroid,
     simplex_lattice,
     sobol,
+    split_plot,
     stationary_point,
     to_html,
     vif,
 )
+from doe.analysis.model import build_model_matrix, coded_design_points
 from doe.plotting import (
     alias_matrix,
     contour_plot,
@@ -1086,5 +1091,156 @@ save(ax, "v21_half_normal.png")
 ax = contour_plot(res_quad, "incubation_h", "dna_ng")
 ax.set_title("Reduced quadratic from the DSD: signal peaks at mid incubation")
 save(ax, "v21_dsd_contour.png")
+
+# Vignette 21b: DSDs also take two-level CATEGORICAL factors (Jones-Nachtsheim 2013).
+# Add a categorical "reagent vendor" to the quantitative factors: the DSD-augment
+# construction keeps every main effect unbiased by any second-order effect (the
+# definitive property), at the cost of a pseudo-center pair instead of one center run.
+banner("Vignette 21b: DSD with a two-level categorical factor")
+dsd_cat_factors = [
+    ContinuousFactor("dna_ng", 100, 500, units="ng"),
+    ContinuousFactor("lipid_uL", 0.5, 2.5, units="uL"),
+    ContinuousFactor("incubation_h", 24, 72, units="h"),
+    CategoricalFactor("vendor", ("acme", "zenith")),
+]
+dsd_cat = definitive_screening(dsd_cat_factors)
+print(f"dsd_cat.n_runs = {dsd_cat.n_runs}  (2*(m+c)+2 = 2*4+2)")
+print("point_types:", dsd_cat.point_types)
+print("categorical signs (z, b):", dsd_cat.meta["categorical_signs"])
+print("\ndsd_cat.runs:")
+print(dsd_cat.runs.to_string())
+
+# Definitive property, numerically: alias matrix main-effect rows against every
+# second-order term are (essentially) zero -- exactly as in the continuous DSD.
+mm_cat = build_model_matrix(dsd_cat, order=2, interactions=True)
+fnames = set(dsd_cat.factors.names)
+
+
+def _is_main(name: str) -> bool:
+    if ":" in name or name.endswith("^2"):
+        return False
+    return name in fnames or name.split("[")[0] in fnames
+
+
+main_i = [i for i, n in enumerate(mm_cat.term_names) if _is_main(n)]
+second_i = [i for i, n in enumerate(mm_cat.term_names) if ":" in n or n.endswith("^2")]
+X1c = np.column_stack([np.ones(mm_cat.X.shape[0]), *[mm_cat.X[:, i] for i in main_i]])
+X2c = mm_cat.X[:, second_i]
+alias_c = np.linalg.solve(X1c.T @ X1c, X1c.T @ X2c)
+print(f"\nmax |alias| over main-effect rows: {np.abs(alias_c[1:]).max():.2e}  (~0: definitive)")
+
+
+# --------------------------------------------------------------------------- #
+# Vignette 22: split-plot designs -- hard-to-change factors and the OLS trap
+# --------------------------------------------------------------------------- #
+banner("Vignette 22: split-plot designs")
+
+# An oven temperature is hard to change: you cannot re-set it every run. Declare it
+# hard_to_change and split_plot holds it constant across a whole plot while randomizing
+# the easy-to-change factors (bake time, coating) inside each plot.
+sp_factors = [
+    ContinuousFactor("oven_temp", 180, 220, units="C", hard_to_change=True),
+    ContinuousFactor("bake_min", 20, 40, units="min"),
+    ContinuousFactor("coating", 1, 3, units="layers"),
+]
+sp = split_plot(sp_factors, n_whole_plot_reps=3)
+print(f"sp.n_runs = {sp.n_runs}, sp.n_whole_plots = {sp.n_whole_plots}")
+print("whole_plots:", sp.whole_plots)
+print("\noven_temp is constant within each plot; bake/coating vary inside it:")
+for p in range(sp.n_whole_plots):
+    idx = sp.whole_plot_indices(p)
+    temps = sp.runs["oven_temp"].to_numpy()[idx]
+    print(f"  plot {p}: oven_temp={temps[0]:.0f}  ({len(idx)} sub-plot runs)")
+
+# Inject a two-stratum response: a real whole-plot (oven) effect plus whole-plot noise
+# that OLS will mistake for cheap replication.
+codedsp = sp.coded().to_numpy(dtype=float)
+rng = np.random.default_rng(22)
+wp_noise = rng.normal(0, 4.0, size=sp.n_whole_plots)  # whole-plot error (sigma_wp = 4)
+y_sp = (
+    70
+    + 6 * codedsp[:, 0]  # oven_temp (whole-plot)
+    + 3 * codedsp[:, 1]  # bake_min (sub-plot)
+    + 2 * codedsp[:, 2]  # coating (sub-plot)
+    + wp_noise[np.asarray(sp.whole_plots)]
+    + rng.normal(0, 1.0, size=sp.n_runs)  # sub-plot error (sigma = 1)
+)
+sp = sp.with_response("y", y_sp)
+
+gls = fit_gls(sp, "y")
+ols = fit_ols(sp, "y")
+print(f"\nREML variance components: sigma2_wp = {gls.sigma2_wp:.3f}, sigma2 = {gls.mse:.3f}")
+print(f"whole plots = {gls.n_whole_plots}")
+print("\nstandard errors -- OLS understates the whole-plot (oven_temp) SE (the trap):")
+print(f"{'term':>12s}  {'coef':>7s}  {'SE (GLS)':>9s}  {'SE (OLS)':>9s}")
+for term in gls.term_names:
+    sg = gls.summary().loc[term, "std_error"]
+    so = ols.summary().loc[term, "std_error"]
+    print(f"{term:>12s}  {gls.summary().loc[term, 'coefficient']:>7.2f}  {sg:>9.3f}  {so:>9.3f}")
+
+# Figure: GLS vs OLS standard errors, one bar pair per term. The whole-plot factor
+# (oven_temp) is where OLS is anticonservatively small.
+fig, ax = plt.subplots(figsize=(7.0, 4.2))
+terms = [t for t in gls.term_names if t != "Intercept"]
+xpos = np.arange(len(terms))
+se_g = [gls.summary().loc[t, "std_error"] for t in terms]
+se_o = [ols.summary().loc[t, "std_error"] for t in terms]
+ax.bar(xpos - 0.2, se_g, 0.4, label="fit_gls (REML)", color="#2c7fb8")
+ax.bar(xpos + 0.2, se_o, 0.4, label="fit_ols (wrong)", color="#d95f0e")
+ax.set_xticks(xpos)
+ax.set_xticklabels(terms, rotation=30, ha="right", fontsize=9)
+ax.set_ylabel("standard error")
+ax.set_title("Split-plot: OLS understates the whole-plot (oven_temp) standard error")
+ax.legend()
+save(ax, "v22_splitplot_se.png")
+
+
+# --------------------------------------------------------------------------- #
+# Vignette 23: blocking a factorial -- absorbing a nuisance as a categorical
+# --------------------------------------------------------------------------- #
+banner("Vignette 23: blocking a factorial")
+
+# A 2^3 process study run over 2 days. Confound the (assumed negligible) three-factor
+# interaction ABC with the day-to-day block, so no main effect or two-factor
+# interaction is lost to the nuisance. The block is carried as a categorical column the
+# model matrix absorbs for free.
+blk_factors = [
+    ContinuousFactor("temp", 40, 80),
+    ContinuousFactor("time", 5, 15),
+    ContinuousFactor("conc", 1, 3),
+]
+blk = blocked_factorial(blk_factors, block_generators=["ABC"], seed=23)
+print(f"blk.n_runs = {blk.n_runs}, blocks = {sorted(set(blk.runs['block']))}")
+print("confounded with blocks:", blk.meta["confounded_with_blocks"])
+print("\nblk.runs (blocked, within-block randomized):")
+print(blk.runs.to_string())
+
+# The block column IS the ABC contrast: they are perfectly confounded.
+pts_blk = build_model_matrix(blk, order=1, interactions=True)
+cpts = coded_design_points(blk)
+abc = cpts[:, 0] * cpts[:, 1] * cpts[:, 2]
+block_col = pts_blk.X[:, pts_blk.term_names.index("block[B2]")]
+confounded = np.allclose(block_col, abc) or np.allclose(block_col, -abc)
+print(f"\nblock column == +/- ABC contrast: {confounded}")
+
+# A day-shifted response: block 2 runs a few units higher. Fitting with the block absorbs
+# the shift, so the main effects come out clean.
+rng_blk = np.random.default_rng(230)
+day_shift = np.where(np.array(blk.runs["block"]) == "B2", 5.0, 0.0)
+y_blk = np.round(
+    50 + 4 * cpts[:, 0] - 2 * cpts[:, 1] + 1.5 * cpts[:, 2] + day_shift
+    + rng_blk.normal(0, 0.5, size=blk.n_runs),
+    2,
+)
+blk = blk.with_response("y", y_blk)
+res_blk = fit_ols(blk, "y", interactions=False)
+print("\nfit with the block absorbed -- main effects recovered cleanly:")
+print(res_blk.summary().round(2))
+
+# A randomized complete block is the other classic: every treatment once per block.
+rcb = randomized_complete_block(4, n_blocks=3, seed=23)
+print(f"\nrandomized_complete_block: {rcb.n_runs} runs, blocks {sorted(set(rcb.runs['block']))}")
+for b in sorted(set(rcb.runs["block"])):
+    print(f"  {b}: {sorted(rcb.runs.loc[rcb.runs['block'] == b, 'treatment'])}")
 
 print("\nDONE")

@@ -35,6 +35,10 @@ class ContinuousFactor:
     low: float
     high: float
     units: str | None = None
+    #: When ``True`` the factor is *hard to change* -- it cannot be reset every run, so a
+    #: split-plot design holds it constant within a whole plot (see
+    #: :func:`doe.generators.splitplot.split_plot`). Ignored by the fully-randomized generators.
+    hard_to_change: bool = False
 
     def __post_init__(self) -> None:
         if self.high <= self.low:
@@ -67,14 +71,21 @@ class ContinuousFactor:
         return np.asarray(coded, dtype=float) * self.half_range + self.center
 
     def to_dict(self) -> dict[str, Any]:
-        """JSON-ready representation, tagged with ``"type"`` for dispatch on load."""
-        return {
+        """JSON-ready representation, tagged with ``"type"`` for dispatch on load.
+
+        ``hard_to_change`` is emitted only when ``True`` so existing serialized designs stay
+        byte-for-byte stable.
+        """
+        data: dict[str, Any] = {
             "type": "continuous",
             "name": self.name,
             "low": json_safe(self.low),
             "high": json_safe(self.high),
             "units": self.units,
         }
+        if self.hard_to_change:
+            data["hard_to_change"] = True
+        return data
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> ContinuousFactor:
@@ -83,6 +94,7 @@ class ContinuousFactor:
             low=float(data["low"]),
             high=float(data["high"]),
             units=data.get("units"),
+            hard_to_change=bool(data.get("hard_to_change", False)),
         )
 
 
@@ -105,6 +117,9 @@ class CategoricalFactor:
     name: str
     levels: tuple[object, ...]
     units: str | None = None
+    #: See :attr:`ContinuousFactor.hard_to_change` -- a hard-to-change categorical factor is a
+    #: whole-plot factor in a split-plot design.
+    hard_to_change: bool = False
 
     def __post_init__(self) -> None:
         # a factor must vary to have an effect; a single level carries no information
@@ -112,13 +127,19 @@ class CategoricalFactor:
             raise ValueError(f"factor {self.name!r}: needs at least 2 levels")
 
     def to_dict(self) -> dict[str, Any]:
-        """JSON-ready representation; levels are stored as natural values, not encoded."""
-        return {
+        """JSON-ready representation; levels are stored as natural values, not encoded.
+
+        ``hard_to_change`` is emitted only when ``True`` (existing documents stay stable).
+        """
+        data: dict[str, Any] = {
             "type": "categorical",
             "name": self.name,
             "levels": [json_safe(level) for level in self.levels],
             "units": self.units,
         }
+        if self.hard_to_change:
+            data["hard_to_change"] = True
+        return data
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> CategoricalFactor:
@@ -126,6 +147,7 @@ class CategoricalFactor:
             name=str(data["name"]),
             levels=tuple(data["levels"]),
             units=data.get("units"),
+            hard_to_change=bool(data.get("hard_to_change", False)),
         )
 
 
@@ -265,6 +287,16 @@ class FactorSet:
     def is_mixture(self) -> bool:
         """``True`` if every factor is a :class:`MixtureFactor` (all-mixture designs only)."""
         return bool(self._factors) and all(isinstance(f, MixtureFactor) for f in self._factors)
+
+    @property
+    def whole_plot_factors(self) -> list[Factor]:
+        """The hard-to-change factors -- the whole-plot stratum of a split-plot design."""
+        return [f for f in self._factors if getattr(f, "hard_to_change", False)]
+
+    @property
+    def sub_plot_factors(self) -> list[Factor]:
+        """The easy-to-change factors -- the sub-plot stratum (everything not hard-to-change)."""
+        return [f for f in self._factors if not getattr(f, "hard_to_change", False)]
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the ordered factor list; order fixes model-matrix column order."""

@@ -130,6 +130,9 @@ def validate_design_dict(data: Mapping[str, Any], *, check_ranges: bool = False)
                 continuous_bounds[name] = (float(low), float(high))
         else:
             errors.append(f"factor {name!r}: unknown type {kind!r}")
+        htc = fd.get("hard_to_change")
+        if htc is not None and not isinstance(htc, bool):
+            errors.append(f"factor {name!r}: 'hard_to_change' must be a boolean")
         if name is not None:
             factor_names.append(name)
 
@@ -171,6 +174,18 @@ def validate_design_dict(data: Mapping[str, Any], *, check_ranges: bool = False)
                 f"'point_types' has {len(point_types)} entries but there are "
                 f"{len(run_records)} runs"
             )
+
+    whole_plots = data.get("whole_plots")
+    if whole_plots is not None:
+        if not _is_list(whole_plots):
+            errors.append("'whole_plots' must be a list or null")
+        elif len(whole_plots) != len(run_records):
+            errors.append(
+                f"'whole_plots' has {len(whole_plots)} entries but there are "
+                f"{len(run_records)} runs"
+            )
+        elif not all(isinstance(p, int) and not isinstance(p, bool) for p in whole_plots):
+            errors.append("'whole_plots' entries must be integers")
 
     meta = data.get("meta")
     if meta is not None and not isinstance(meta, Mapping):
