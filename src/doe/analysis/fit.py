@@ -5,7 +5,7 @@ from __future__ import annotations
 import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 import numpy as np
 import pandas as pd
@@ -13,6 +13,7 @@ from scipy import stats
 
 from ..design import Design
 from ..factors import FactorSet
+from ..serialization import json_safe
 from .model import build_model_matrix
 
 if TYPE_CHECKING:
@@ -21,8 +22,21 @@ if TYPE_CHECKING:
 
 ModelSpec = Literal["linear", "quadratic", "scheffe-linear", "scheffe-quadratic"]
 
-#: Convenience model names -> ``(order, interactions)``.
-_MODEL_SPECS: dict[str, tuple[int, bool]] = {
+
+class SaturatedFitWarning(UserWarning):
+    """Raised by :func:`fit_ols` when a model spends every run on a parameter.
+
+    A saturated fit (``dof_resid == 0``) has no degrees of freedom left to estimate
+    noise, so standard errors/t/p-values are undefined (NaN). A distinct category --
+    rather than a bare ``UserWarning`` -- lets callers (the web service, in particular)
+    map the condition to a stable string (``"saturated_model"``) by ``category``, not by
+    matching the message text.
+    """
+
+#: Convenience model names -> ``(order, interactions)``. Public because it is also the
+#: web service's wire vocabulary for ``model`` (``docs/WEBSERVICE_API.md``); the service
+#: resolves against this table rather than restating it.
+MODEL_SPECS: dict[str, tuple[int, bool]] = {
     "linear": (1, True),
     "quadratic": (2, True),
     "scheffe-linear": (1, False),
@@ -311,6 +325,62 @@ class FitResult:
 
         return optimum(self, maximize=maximize, bounds=bounds)
 
+    def to_dict(self, *, confidence: float = 0.95) -> dict[str, Any]:
+        """Serialize to the ``POST /v1/analysis/fit`` response body (minus ``warnings``).
+
+        ``terms`` is one record per model term (``term``, ``coefficient``, ``effect``,
+        ``std_error``, ``t``, ``p``, ``ci_low``, ``ci_high``), built from :meth:`summary`
+        and :meth:`conf_int` -- no statistic is recomputed here. A saturated fit's NaN
+        inference columns, and a Scheffé (mixture) fit's all-NaN ``effect`` column, come
+        through :func:`~doe.serialization.json_safe` as ``null``, matching the
+        ``docs/WEBSERVICE_API.md`` contract. ``model`` echoes the resolved
+        ``(order, interactions)`` spec this fit used.
+
+        Examples:
+            >>> from doe import ContinuousFactor, FactorSet, fit_ols, full_factorial
+            >>> factors = FactorSet([
+            ...     ContinuousFactor("temperature", 40, 80),
+            ...     ContinuousFactor("time", 5, 15),
+            ... ])
+            >>> design = full_factorial(factors)
+            >>> coded = design.coded()
+            >>> response = 10 + 2 * coded["temperature"] - coded["time"]
+            >>> fit = fit_ols(design, response, interactions=False)
+            >>> payload = fit.to_dict()
+            >>> payload["terms"][1]["term"], round(payload["terms"][1]["effect"], 6)
+            ('temperature', 4.0)
+        """
+        summary = self.summary()
+        ci = self.conf_int(confidence)
+        terms = [
+            {
+                "term": term,
+                "coefficient": summary.loc[term, "coefficient"],
+                "effect": summary.loc[term, "effect"],
+                "std_error": summary.loc[term, "std_error"],
+                "t": summary.loc[term, "t"],
+                "p": summary.loc[term, "p"],
+                "ci_low": ci.loc[term, "lower"],
+                "ci_high": ci.loc[term, "upper"],
+            }
+            for term in self.term_names
+        ]
+        return cast(
+            "dict[str, Any]",
+            json_safe(
+                {
+                    "terms": terms,
+                    "r_squared": self.r_squared,
+                    "adjusted_r2": self.adjusted_r2(),
+                    "dof_resid": self.dof_resid,
+                    "mse": self.mse,
+                    "fitted": self.fitted,
+                    "residuals": self.residuals,
+                    "model": {"order": self.order, "interactions": self.interactions},
+                }
+            ),
+        )
+
 
 def _points_to_frame(
     points: Mapping[str, object] | pd.DataFrame | Design, names: list[str]
@@ -409,13 +479,13 @@ def fit_ols(
         [12.0, 18.0]
     """
     if model is not None:
-        if model not in _MODEL_SPECS:
-            raise ValueError(f"unknown model {model!r}; expected one of {sorted(_MODEL_SPECS)}")
+        if model not in MODEL_SPECS:
+            raise ValueError(f"unknown model {model!r}; expected one of {sorted(MODEL_SPECS)}")
         if model.startswith("scheffe") and not design.factors.is_mixture:
             raise ValueError(
                 f"model {model!r} requires an all-mixture design (every factor a MixtureFactor)"
             )
-        order, interactions = _MODEL_SPECS[model]
+        order, interactions = MODEL_SPECS[model]
 
     response_name: str | None = None
     if isinstance(response, str):
@@ -466,6 +536,7 @@ def fit_ols(
         # design is usually read with a half-normal plot instead -- see plotting.half_normal_plot.)
         warnings.warn(
             "model is saturated (residual dof = 0); standard errors are undefined",
+            SaturatedFitWarning,
             stacklevel=2,
         )
         mse = float("nan")

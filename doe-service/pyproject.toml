@@ -9,6 +9,7 @@ authors = [{ name = "Scott Warchal", email = "scott.warchal@gmail.com" }]
 dependencies = [
     "doe",
     "fastapi>=0.110",
+    "pydantic>=2.7",
 ]
 
 [project.optional-dependencies]

@@ -1,0 +1,169 @@
+{
+  "method": "POST",
+  "path": "/v1/designs/optimal",
+  "status": 200,
+  "request": {
+    "factors": [
+      {
+        "type": "continuous",
+        "name": "temp",
+        "low": 20,
+        "high": 80
+      },
+      {
+        "type": "continuous",
+        "name": "time",
+        "low": 0,
+        "high": 10
+      }
+    ],
+    "n_runs": 15,
+    "model": "quadratic",
+    "criterion": "D",
+    "n_restarts": 20,
+    "max_iter": 100,
+    "seed": 42,
+    "region": [
+      [
+        -1.0,
+        -1.0
+      ],
+      [
+        -1.0,
+        0.0
+      ],
+      [
+        -1.0,
+        1.0
+      ],
+      [
+        0.0,
+        -1.0
+      ],
+      [
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0
+      ],
+      [
+        1.0,
+        -1.0
+      ],
+      [
+        1.0,
+        0.0
+      ],
+      [
+        1.0,
+        1.0
+      ]
+    ]
+  },
+  "response": {
+    "design": {
+      "schema_version": "1.0",
+      "name": "d_optimal_quadratic",
+      "factors": [
+        {
+          "type": "continuous",
+          "name": "temp",
+          "low": 20.0,
+          "high": 80.0,
+          "units": null
+        },
+        {
+          "type": "continuous",
+          "name": "time",
+          "low": 0.0,
+          "high": 10.0,
+          "units": null
+        }
+      ],
+      "runs": [
+        {
+          "temp": 20.0,
+          "time": 10.0
+        },
+        {
+          "temp": 80.0,
+          "time": 10.0
+        },
+        {
+          "temp": 20.0,
+          "time": 10.0
+        },
+        {
+          "temp": 50.0,
+          "time": 10.0
+        },
+        {
+          "temp": 50.0,
+          "time": 0.0
+        },
+        {
+          "temp": 80.0,
+          "time": 5.0
+        },
+        {
+          "temp": 20.0,
+          "time": 0.0
+        },
+        {
+          "temp": 50.0,
+          "time": 5.0
+        },
+        {
+          "temp": 20.0,
+          "time": 5.0
+        },
+        {
+          "temp": 20.0,
+          "time": 0.0
+        },
+        {
+          "temp": 50.0,
+          "time": 5.0
+        },
+        {
+          "temp": 80.0,
+          "time": 10.0
+        },
+        {
+          "temp": 20.0,
+          "time": 5.0
+        },
+        {
+          "temp": 80.0,
+          "time": 0.0
+        },
+        {
+          "temp": 80.0,
+          "time": 0.0
+        }
+      ],
+      "point_types": null,
+      "meta": {
+        "criterion": "D",
+        "score": 11.697910139183666,
+        "d_efficiency": 0.46841598958482156,
+        "n_restarts": 20,
+        "seed": 42,
+        "model": "quadratic",
+        "order": 2,
+        "interactions": true,
+        "converged": true
+      }
+    },
+    "search": {
+      "criterion": "D",
+      "score": 11.697910139183666,
+      "d_efficiency": 0.46841598958482156,
+      "n_restarts": 20,
+      "converged": true
+    },
+    "warnings": []
+  }
+}

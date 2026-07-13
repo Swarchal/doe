@@ -24,7 +24,7 @@ from doe.factors import (
 )
 from doe.generators.factorial import fractional_factorial, full_factorial
 from doe.generators.rsm import central_composite
-from doe.serialization import ValidationError, validate_design_dict
+from doe.serialization import ValidationError, json_safe, validate_design_dict
 
 # --------------------------------------------------------------------------- #
 # Factors
@@ -330,3 +330,56 @@ def test_response_goal_from_dict_rejects_unknown_goal():
     result = _quadratic_fit()
     with pytest.raises(ValueError, match="unknown goal"):
         ResponseGoal.from_dict({"goal": "bogus", "low": 0.0, "high": 1.0}, result)
+
+
+# --------------------------------------------------------------------------- #
+# json_safe -- the shared "JSON has no NaN" coercion every to_dict routes through
+# --------------------------------------------------------------------------- #
+
+
+def test_json_safe_coerces_numpy_scalars():
+    assert json_safe(np.float64(1.5)) == 1.5
+    assert isinstance(json_safe(np.float64(1.5)), float)
+    assert json_safe(np.int64(3)) == 3
+    assert isinstance(json_safe(np.int64(3)), int)
+    assert json_safe(np.bool_(True)) is True
+
+
+def test_json_safe_coerces_numpy_arrays_to_nested_lists():
+    assert json_safe(np.array([1, 2, 3])) == [1, 2, 3]
+    assert json_safe(np.array([[1.0, 2.0], [3.0, 4.0]])) == [[1.0, 2.0], [3.0, 4.0]]
+
+
+def test_json_safe_maps_non_finite_floats_to_none():
+    assert json_safe(float("nan")) is None
+    assert json_safe(float("inf")) is None
+    assert json_safe(float("-inf")) is None
+    assert json_safe(np.nan) is None
+    assert json_safe(np.float64("inf")) is None
+    assert json_safe(1.0) == 1.0
+
+
+def test_json_safe_walks_nested_mappings_and_sequences():
+    payload = {
+        "a": np.nan,
+        "b": [np.int64(2), float("inf"), {"c": np.array([1.0, np.nan])}],
+        "d": (np.bool_(False), "text"),
+    }
+    assert json_safe(payload) == {
+        "a": None,
+        "b": [2, None, {"c": [1.0, None]}],
+        "d": [False, "text"],
+    }
+
+
+def test_json_safe_passes_through_ordinary_values():
+    assert json_safe("text") == "text"
+    assert json_safe(True) is True
+    assert json_safe(None) is None
+    assert json_safe(42) == 42
+
+
+def test_json_safe_output_survives_json_dumps():
+    payload = {"a": np.float64(1.5), "b": [np.nan, np.int64(2)]}
+    dumped = json.loads(json.dumps(json_safe(payload)))
+    assert dumped == {"a": 1.5, "b": [None, 2]}

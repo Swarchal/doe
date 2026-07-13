@@ -1,0 +1,194 @@
+{
+  "method": "POST",
+  "path": "/v1/optimize/desirability",
+  "status": 200,
+  "request": {
+    "design": {
+      "schema_version": "1.0",
+      "name": "central_composite_k2",
+      "factors": [
+        {
+          "type": "continuous",
+          "name": "temp",
+          "low": 20,
+          "high": 80,
+          "units": "C"
+        },
+        {
+          "type": "continuous",
+          "name": "time",
+          "low": 0,
+          "high": 10,
+          "units": null
+        }
+      ],
+      "runs": [
+        {
+          "temp": 20.0,
+          "time": 0.0,
+          "yield_pct": 52.0,
+          "impurity_pct": 0.7,
+          "cost": 9.0
+        },
+        {
+          "temp": 20.0,
+          "time": 10.0,
+          "yield_pct": 62.0,
+          "impurity_pct": 1.9000000000000001,
+          "cost": 8.0
+        },
+        {
+          "temp": 80.0,
+          "time": 0.0,
+          "yield_pct": 68.0,
+          "impurity_pct": 2.6999999999999997,
+          "cost": 12.0
+        },
+        {
+          "temp": 80.0,
+          "time": 10.0,
+          "yield_pct": 78.0,
+          "impurity_pct": 3.9,
+          "cost": 11.0
+        },
+        {
+          "temp": 20.0,
+          "time": 5.0,
+          "yield_pct": 59.0,
+          "impurity_pct": 1.3,
+          "cost": 8.5
+        },
+        {
+          "temp": 80.0,
+          "time": 5.0,
+          "yield_pct": 75.0,
+          "impurity_pct": 3.3,
+          "cost": 11.5
+        },
+        {
+          "temp": 50.0,
+          "time": 0.0,
+          "yield_pct": 63.0,
+          "impurity_pct": 1.4,
+          "cost": 10.5
+        },
+        {
+          "temp": 50.0,
+          "time": 10.0,
+          "yield_pct": 73.0,
+          "impurity_pct": 2.6,
+          "cost": 9.5
+        },
+        {
+          "temp": 50.0,
+          "time": 5.0,
+          "yield_pct": 70.0,
+          "impurity_pct": 2.0,
+          "cost": 10.0
+        },
+        {
+          "temp": 50.0,
+          "time": 5.0,
+          "yield_pct": 70.0,
+          "impurity_pct": 2.0,
+          "cost": 10.0
+        },
+        {
+          "temp": 50.0,
+          "time": 5.0,
+          "yield_pct": 70.0,
+          "impurity_pct": 2.0,
+          "cost": 10.0
+        },
+        {
+          "temp": 50.0,
+          "time": 5.0,
+          "yield_pct": 70.0,
+          "impurity_pct": 2.0,
+          "cost": 10.0
+        },
+        {
+          "temp": 50.0,
+          "time": 5.0,
+          "yield_pct": 70.0,
+          "impurity_pct": 2.0,
+          "cost": 10.0
+        }
+      ],
+      "point_types": [
+        "factorial",
+        "factorial",
+        "factorial",
+        "factorial",
+        "axial",
+        "axial",
+        "axial",
+        "axial",
+        "center",
+        "center",
+        "center",
+        "center",
+        "center"
+      ],
+      "meta": {
+        "generator": {
+          "name": "central_composite",
+          "parameters": {
+            "alpha": "faced",
+            "center": 5,
+            "fraction": null
+          }
+        },
+        "alpha": 1.0,
+        "axial_extrapolates": false
+      }
+    },
+    "goals": [
+      {
+        "response": "yield_pct",
+        "model": "quadratic",
+        "goal": "max",
+        "low": 60,
+        "high": 90,
+        "weight": 1.0
+      },
+      {
+        "response": "impurity_pct",
+        "model": "quadratic",
+        "goal": "min",
+        "low": 0.5,
+        "high": 3.0
+      },
+      {
+        "response": "cost",
+        "model": "linear",
+        "goal": "target",
+        "low": 8,
+        "target": 10,
+        "high": 12
+      }
+    ]
+  },
+  "response": {
+    "natural": {
+      "temp": 49.1716649105463,
+      "time": 4.585832455284189
+    },
+    "coded": [
+      -0.02761116964845672,
+      -0.08283350894316223
+    ],
+    "overall": 0.5120549818503818,
+    "responses": {
+      "yield_pct": 69.34893318762082,
+      "impurity_pct": 1.922917437992454,
+      "cost": 9.9999999999989
+    },
+    "individual": {
+      "yield_pct": 0.3116311062540272,
+      "impurity_pct": 0.4308330248030184,
+      "cost": 0.9999999999994502
+    },
+    "warnings": []
+  }
+}

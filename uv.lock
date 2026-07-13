@@ -414,6 +414,7 @@ source = { editable = "doe-service" }
 dependencies = [
     { name = "doe" },
     { name = "fastapi" },
+    { name = "pydantic" },
 ]
 
 [package.optional-dependencies]
@@ -430,6 +431,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.110" },
     { name = "httpx2", marker = "extra == 'dev'", specifier = ">=0.1" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
+    { name = "pydantic", specifier = ">=2.7" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "uvicorn", marker = "extra == 'dev'", specifier = ">=0.29" },
 ]

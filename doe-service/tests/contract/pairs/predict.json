@@ -1,0 +1,154 @@
+{
+  "method": "POST",
+  "path": "/v1/analysis/predict",
+  "status": 200,
+  "request": {
+    "design": {
+      "schema_version": "1.0",
+      "name": "central_composite_k2",
+      "factors": [
+        {
+          "type": "continuous",
+          "name": "temp",
+          "low": 20,
+          "high": 80,
+          "units": "C"
+        },
+        {
+          "type": "continuous",
+          "name": "time",
+          "low": 0,
+          "high": 10,
+          "units": null
+        }
+      ],
+      "runs": [
+        {
+          "std_order": 0,
+          "temp": 20.0,
+          "time": 0.0,
+          "yield": 62.26206325745263
+        },
+        {
+          "std_order": 7,
+          "temp": 50.0,
+          "time": 10.0,
+          "yield": 69.57217138506148
+        },
+        {
+          "std_order": 1,
+          "temp": 20.0,
+          "time": 10.0,
+          "yield": 62.93110209512028
+        },
+        {
+          "std_order": 6,
+          "temp": 50.0,
+          "time": 0.0,
+          "yield": 66.91873151303261
+        },
+        {
+          "std_order": 5,
+          "temp": 80.0,
+          "time": 5.0,
+          "yield": 69.19148842227847
+        },
+        {
+          "std_order": 2,
+          "temp": 80.0,
+          "time": 0.0,
+          "yield": 64.4123857544342
+        },
+        {
+          "std_order": 12,
+          "temp": 50.0,
+          "time": 5.0,
+          "yield": 69.90641520154294
+        },
+        {
+          "std_order": 4,
+          "temp": 20.0,
+          "time": 5.0,
+          "yield": 65.09115061033364
+        },
+        {
+          "std_order": 9,
+          "temp": 50.0,
+          "time": 5.0,
+          "yield": 69.9197019093387
+        },
+        {
+          "std_order": 8,
+          "temp": 50.0,
+          "time": 5.0,
+          "yield": 69.93222734165104
+        },
+        {
+          "std_order": 11,
+          "temp": 50.0,
+          "time": 5.0,
+          "yield": 70.21602034600274
+        },
+        {
+          "std_order": 10,
+          "temp": 50.0,
+          "time": 5.0,
+          "yield": 70.15441156173213
+        },
+        {
+          "std_order": 3,
+          "temp": 80.0,
+          "time": 10.0,
+          "yield": 69.48076161930975
+        }
+      ],
+      "point_types": [
+        "factorial",
+        "axial",
+        "factorial",
+        "axial",
+        "axial",
+        "factorial",
+        "center",
+        "axial",
+        "center",
+        "center",
+        "center",
+        "center",
+        "factorial"
+      ],
+      "meta": {
+        "generator": {
+          "name": "central_composite",
+          "parameters": {
+            "alpha": "faced",
+            "center": 5,
+            "fraction": null
+          }
+        },
+        "alpha": 1.0,
+        "axial_extrapolates": false,
+        "randomized": true,
+        "random_seed": 20260710
+      }
+    },
+    "response": "yield",
+    "model": "quadratic",
+    "points": [
+      {
+        "temp": 55.0,
+        "time": 4.2
+      },
+      {
+        "temp": 20.0,
+        "time": 10.0
+      }
+    ]
+  },
+  "response": {
+    "predictions": [
+      70.06864843973118,
+      63.038460205546464
+    ]
+  }
+}

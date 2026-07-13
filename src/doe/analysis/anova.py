@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
 from scipy import stats
 
 from ..design import Design
+from ..serialization import json_safe
 from .fit import FitResult
 
 
@@ -33,6 +35,28 @@ class LackOfFit:
     df_pe: int
     f_stat: float
     p_value: float
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to the ``lack_of_fit`` object of the ``POST /v1/analysis/anova`` body.
+
+        A flat field dump; ``f_stat``/``p_value`` are renamed to the wire's ``f``/``p``
+        (matching ``anova_records``' column names) and passed through
+        :func:`~doe.serialization.json_safe` (an ``f_stat`` of ``inf``, from zero pure
+        error, serializes as ``null`` like any other non-finite statistic).
+        """
+        return cast(
+            "dict[str, Any]",
+            json_safe(
+                {
+                    "ss_lof": self.ss_lof,
+                    "df_lof": self.df_lof,
+                    "ss_pe": self.ss_pe,
+                    "df_pe": self.df_pe,
+                    "f": self.f_stat,
+                    "p": self.p_value,
+                }
+            ),
+        )
 
 
 def _leverages(x: np.ndarray) -> np.ndarray:
@@ -126,6 +150,33 @@ def anova_table(result: FitResult, design: Design, response: np.ndarray) -> pd.D
     rows["p"].append(float("nan"))
 
     return pd.DataFrame(rows, index=index)
+
+
+def anova_records(result: FitResult) -> list[dict[str, Any]]:
+    """Serialize :meth:`FitResult.anova` to the ``rows`` array of ``POST /v1/analysis/anova``.
+
+    One record per :func:`anova_table` row (``Residual``/``Total`` included), the index
+    becoming the ``term`` field and the columns renamed for the wire (``SS/df/MS/F/p`` ->
+    ``ss/df/ms/f/p``). The ``Residual``/``Total`` rows' undefined ``F``/``p`` (already NaN
+    in ``anova_table``) come through :func:`~doe.serialization.json_safe` as ``null``.
+
+    Needs a :class:`FitResult` produced by :func:`fit_ols` (which stashes the originating
+    design and response that :meth:`~doe.analysis.fit.FitResult.anova` re-derives the
+    table from).
+    """
+    table = result.anova()
+    records = [
+        {
+            "term": term,
+            "ss": row["SS"],
+            "df": row["df"],
+            "ms": row["MS"],
+            "f": row["F"],
+            "p": row["p"],
+        }
+        for term, row in table.iterrows()
+    ]
+    return cast("list[dict[str, Any]]", json_safe(records))
 
 
 def _pure_error(design: Design, y: np.ndarray) -> tuple[float, int]:

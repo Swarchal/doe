@@ -9,7 +9,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from .factors import ContinuousFactor, FactorSet, _jsonable
+from ._json import json_safe
+from .factors import ContinuousFactor, FactorSet
 
 #: Bumped when the serialized design shape changes incompatibly.
 SCHEMA_VERSION = "1.0"
@@ -341,7 +342,7 @@ class Design:
             [-1.0, 1.0]
         """
         runs = [
-            {key: _jsonable(value) for key, value in record.items()}
+            {key: json_safe(value) for key, value in record.items()}
             for record in self.runs.to_dict(orient="records")
         ]
         return {
@@ -350,7 +351,7 @@ class Design:
             **self.factors.to_dict(),
             "runs": runs,
             "point_types": list(self.point_types) if self.point_types is not None else None,
-            "meta": {key: _jsonable(value) for key, value in self.meta.items()},
+            "meta": {key: json_safe(value) for key, value in self.meta.items()},
         }
 
     @classmethod

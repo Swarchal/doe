@@ -1,0 +1,168 @@
+{
+  "method": "POST",
+  "path": "/v1/designs/augment",
+  "status": 200,
+  "request": {
+    "design": {
+      "schema_version": "1.0",
+      "name": "full_factorial_2x2",
+      "factors": [
+        {
+          "type": "continuous",
+          "name": "temp",
+          "low": 20.0,
+          "high": 80.0,
+          "units": null
+        },
+        {
+          "type": "continuous",
+          "name": "time",
+          "low": 0.0,
+          "high": 10.0,
+          "units": null
+        }
+      ],
+      "runs": [
+        {
+          "temp": 20.0,
+          "time": 0.0
+        },
+        {
+          "temp": 20.0,
+          "time": 10.0
+        },
+        {
+          "temp": 80.0,
+          "time": 0.0
+        },
+        {
+          "temp": 80.0,
+          "time": 10.0
+        }
+      ],
+      "point_types": null,
+      "meta": {
+        "generator": {
+          "name": "full_factorial",
+          "parameters": {
+            "levels": [
+              2,
+              2
+            ]
+          }
+        }
+      }
+    },
+    "n_runs": 8,
+    "model": "quadratic",
+    "criterion": "D",
+    "seed": 7
+  },
+  "response": {
+    "design": {
+      "schema_version": "1.0",
+      "name": "augmented_d_optimal_quadratic",
+      "factors": [
+        {
+          "type": "continuous",
+          "name": "temp",
+          "low": 20.0,
+          "high": 80.0,
+          "units": null
+        },
+        {
+          "type": "continuous",
+          "name": "time",
+          "low": 0.0,
+          "high": 10.0,
+          "units": null
+        }
+      ],
+      "runs": [
+        {
+          "temp": 20.0,
+          "time": 0.0
+        },
+        {
+          "temp": 20.0,
+          "time": 10.0
+        },
+        {
+          "temp": 80.0,
+          "time": 0.0
+        },
+        {
+          "temp": 80.0,
+          "time": 10.0
+        },
+        {
+          "temp": 80.0,
+          "time": 0.0
+        },
+        {
+          "temp": 80.0,
+          "time": 5.0
+        },
+        {
+          "temp": 80.0,
+          "time": 10.0
+        },
+        {
+          "temp": 50.0,
+          "time": 5.0
+        },
+        {
+          "temp": 50.0,
+          "time": 10.0
+        },
+        {
+          "temp": 20.0,
+          "time": 10.0
+        },
+        {
+          "temp": 50.0,
+          "time": 0.0
+        },
+        {
+          "temp": 20.0,
+          "time": 5.0
+        }
+      ],
+      "point_types": [
+        "existing",
+        "existing",
+        "existing",
+        "existing",
+        "augment",
+        "augment",
+        "augment",
+        "augment",
+        "augment",
+        "augment",
+        "augment",
+        "augment"
+      ],
+      "meta": {
+        "criterion": "D",
+        "score": 10.319562839756308,
+        "d_efficiency": 0.4653434658439953,
+        "n_restarts": 20,
+        "seed": 7,
+        "model": "quadratic",
+        "order": 2,
+        "interactions": true,
+        "converged": true,
+        "n_existing": 4,
+        "n_augmented": 8
+      }
+    },
+    "search": {
+      "criterion": "D",
+      "score": 10.319562839756308,
+      "d_efficiency": 0.4653434658439953,
+      "n_restarts": 20,
+      "converged": true
+    },
+    "warnings": []
+  }
+}

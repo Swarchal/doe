@@ -9,6 +9,7 @@ from __future__ import annotations
 from .analysis.anova import (
     LackOfFit,
     adjusted_r2,
+    anova_records,
     anova_table,
     lack_of_fit,
     predicted_r2,
@@ -26,7 +27,7 @@ from .analysis.diagnostics import (
     maximin_distance,
     vif,
 )
-from .analysis.fit import FitResult, fit_ols
+from .analysis.fit import MODEL_SPECS, FitResult, SaturatedFitWarning, fit_ols
 from .analysis.optimize import (
     DesirabilityResult,
     Optimum,
@@ -68,7 +69,7 @@ from .generators.rsm import box_behnken, central_composite
 from .generators.screening import definitive_screening
 from .generators.spacefilling import halton, latin_hypercube, sobol
 from .interactive import to_html
-from .serialization import ValidationError, validate_design_dict
+from .serialization import ValidationError, json_safe, validate_design_dict
 
 __all__ = [
     "CategoricalFactor",
@@ -84,9 +85,12 @@ __all__ = [
     "Optimum",
     "OptimalDesign",
     "ResponseGoal",
+    "MODEL_SPECS",
+    "SaturatedFitWarning",
     "StationaryPoint",
     "ValidationError",
     "adjusted_r2",
+    "anova_records",
     "anova_table",
     "augment",
     "box_behnken",
@@ -108,6 +112,7 @@ __all__ = [
     "halton",
     "i_optimal",
     "information_matrix",
+    "json_safe",
     "lack_of_fit",
     "latin_hypercube",
     "leverage",

@@ -22,13 +22,14 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 import pandas as pd
 from scipy import optimize as sciopt
 
 from ..factors import ContinuousFactor, FactorSet
+from ..serialization import json_safe
 from .fit import FitResult
 
 Goal = Literal["max", "min", "target"]
@@ -212,6 +213,30 @@ class StationaryPoint:
         """
         return _to_frame(self.natural, [(self.response_name or "predicted", self.response)])
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to the ``POST /v1/optimize/stationary-point`` response (minus ``warnings``).
+
+        Includes ``eigenvectors`` (the canonical directions) alongside ``eigenvalues`` --
+        abridged out of the spec's worked example, but a deliberate inclusion (see
+        ``docs/WEBSERVICE_BUILD.md`` "Resolved decisions"): the canonical directions are
+        the useful half of a ridge analysis, and omitting them would force a second
+        endpoint later.
+        """
+        return cast(
+            "dict[str, Any]",
+            json_safe(
+                {
+                    "kind": self.kind,
+                    "natural": self.natural,
+                    "coded": self.coded,
+                    "response": self.response,
+                    "eigenvalues": self.eigenvalues,
+                    "eigenvectors": self.eigenvectors,
+                    "response_name": self.response_name,
+                }
+            ),
+        )
+
 
 def stationary_point(result: FitResult) -> StationaryPoint:
     """Stationary point ``x_s = -1/2 B^-1 b`` of a fitted second-order model.
@@ -295,6 +320,22 @@ class Optimum:
             ['temperature', 'time', 'yield_pct']
         """
         return _to_frame(self.natural, [(self.response_name or "predicted", self.response)])
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to the ``POST /v1/optimize/optimum`` response body (minus ``warnings``)."""
+        return cast(
+            "dict[str, Any]",
+            json_safe(
+                {
+                    "natural": self.natural,
+                    "coded": self.coded,
+                    "response": self.response,
+                    "maximize": self.maximize,
+                    "at_bound": self.at_bound,
+                    "response_name": self.response_name,
+                }
+            ),
+        )
 
 
 def _multistart_minimize(
@@ -510,6 +551,26 @@ class DesirabilityResult:
         tail = list(zip(self.responses.index, self.responses.to_numpy(), strict=True))
         tail.append(("overall_D", self.overall))
         return _to_frame(self.natural, tail)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to the ``POST /v1/optimize/desirability`` response body (minus ``warnings``).
+
+        ``responses``/``individual`` (labelled :class:`pandas.Series`) become plain
+        ``{label: value}`` dicts, keyed the same way as :attr:`responses`/:attr:`individual`
+        (a fit's ``response_name``, or a positional ``response_N`` fallback).
+        """
+        return cast(
+            "dict[str, Any]",
+            json_safe(
+                {
+                    "natural": self.natural,
+                    "coded": self.coded,
+                    "overall": self.overall,
+                    "responses": self.responses.to_dict(),
+                    "individual": self.individual.to_dict(),
+                }
+            ),
+        )
 
 
 def desirability(

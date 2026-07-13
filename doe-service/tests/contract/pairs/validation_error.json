@@ -1,0 +1,86 @@
+{
+  "method": "POST",
+  "path": "/v1/designs/randomize",
+  "status": 422,
+  "request": {
+    "design": {
+      "schema_version": "1.0",
+      "factors": [
+        {
+          "type": "continuous",
+          "name": "temp",
+          "low": 20,
+          "high": 80
+        },
+        {
+          "type": "continuous",
+          "name": "time",
+          "low": 0,
+          "high": 10
+        }
+      ],
+      "runs": [
+        {
+          "temp": 20.0,
+          "time": 1.0
+        },
+        {
+          "temp": 21.0,
+          "time": 2.0
+        },
+        {
+          "temp": 22.0,
+          "time": 3.0
+        },
+        {
+          "temp": 23.0
+        },
+        {
+          "temp": 24.0,
+          "time": 5.0
+        },
+        {
+          "temp": 25.0,
+          "time": 6.0
+        },
+        {
+          "temp": 26.0,
+          "time": 7.0
+        },
+        {
+          "temp": 27.0,
+          "time": 8.0
+        },
+        {
+          "temp": 28.0,
+          "time": 9.0
+        },
+        {
+          "temp": 29.0,
+          "time": 10.0
+        }
+      ],
+      "point_types": [
+        "factorial",
+        "factorial",
+        "factorial",
+        "factorial",
+        "factorial",
+        "factorial",
+        "factorial",
+        "factorial",
+        "factorial"
+      ]
+    }
+  },
+  "response": {
+    "error": {
+      "code": "validation_error",
+      "message": "design document is invalid",
+      "errors": [
+        "run[3] missing value for factor 'time'",
+        "'point_types' has 9 entries but there are 10 runs"
+      ]
+    }
+  }
+}

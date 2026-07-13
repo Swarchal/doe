@@ -2,7 +2,15 @@
 
 A plan for exposing the DoE library as a backend to a web service — interacting with it
 via an API over HTTP. This weighs the architectural options and records the recommended
-path; nothing here is implemented yet.
+path.
+
+**Status:** phase 2 (the stateless `doe-service` FastAPI package) is implemented and
+complete — every route in [WEBSERVICE_API.md](WEBSERVICE_API.md) is live, backed by
+typed request/response models, with deployment-configurable parameter caps enforced
+across every endpoint and a golden request/response contract test per spec example
+(`docs/WEBSERVICE_BUILD.md`, all six milestones). Phase 1 (the library `to_dict`
+prep this depended on) is also done. Phases 3 (auth, rate limiting, the async-job
+pattern) and 4 (a stateful experiment layer) below remain deferred — see "Phased plan".
 
 The library was built with this in mind, and the head start is real: a versioned JSON
 design document (`Design.to_dict()`, [SERIALIZATION.md](SERIALIZATION.md)) that is the
@@ -225,20 +233,26 @@ different rates.
 
 ## Phased plan
 
-1. **Library prep (no HTTP yet).** `to_dict` for the analysis result types listed
-   above; land SERIALIZATION.md roadmap item 1 (stable `run_id`s), since both the
-   stateless response-attachment flow and any future stateful layer join on it.
-2. **Stateless FastAPI service** in the `doe-service` workspace package: the endpoint sketch above,
-   Pydantic models mirroring the design-dict schema, OpenAPI docs, parameter caps on
-   the optimizers.
-3. **Hardening.** Auth (API keys are enough initially), rate limits on the expensive
-   endpoints, the async job pattern if the parameter caps chafe.
+1. **Library prep (no HTTP yet). Done.** `to_dict` for the analysis result types listed
+   above (`docs/WEBSERVICE_BUILD.md` Milestone 0). SERIALIZATION.md roadmap item 1
+   (stable `run_id`s) is deferred, unchanged — see that doc's roadmap.
+2. **Stateless FastAPI service. Done.** The `doe-service` workspace package: every
+   endpoint in the sketch above, Pydantic request/response models mirroring the
+   design-dict schema, OpenAPI docs (with worked examples on the endpoints that carry
+   them cheaply), and parameter caps enforced on every endpoint — not just the
+   optimizers (`docs/WEBSERVICE_BUILD.md` Milestones 1–6). A golden request/response
+   contract test locks in every example in WEBSERVICE_API.md.
+3. **Hardening (partial; auth/rate-limiting still deferred).** The parameter caps and
+   a request body-size limit landed in Milestone 6 (422 `limit_exceeded` /
+   413 respectively). Auth (API keys are enough initially), rate limits on the
+   expensive endpoints, and the async job pattern (if the parameter caps chafe in
+   practice) remain open — see WEBSERVICE_API.md "Open questions".
 4. **Stateful layer (when a real UI or lab need exists).** Experiments as resources
    over a small database, storing the same JSON documents, readout attachment per
    SERIALIZATION.md roadmap item 2, calling the phase-2 compute unchanged. Optionally
    an MCP adapter over the same core.
 
 The one-sentence version: a stateless FastAPI service whose wire format is the
-`Design.to_dict()` schema the library already ships, with the main prerequisite being
-`to_dict` coverage for the analysis result types — and persistence deliberately
-deferred until there is a concrete consumer for it.
+`Design.to_dict()` schema the library already ships — phases 1 and 2 (library prep,
+full v1 API) are complete; persistence remains deliberately deferred until there is a
+concrete consumer for it.

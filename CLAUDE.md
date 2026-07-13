@@ -43,11 +43,14 @@ uv run --extra docs sphinx-build -b html docs docs/_build/html   # build the HTM
 ```
 
 The repo is a **uv workspace**: the root package is the `doe` library, and
-`doe-service/` is a workspace member holding the (skeleton) stateless FastAPI HTTP
-service over it (`doe_service` imports `doe`, never the reverse — `doe` stays
-scipy-stack-only). See `docs/WEBSERVICE.md` (architecture + packaging decision) and
-`docs/WEBSERVICE_API.md` (the v1 endpoint contract). Service checks run from its
-directory:
+`doe-service/` is a workspace member holding a stateless FastAPI HTTP service over it
+(`doe_service` imports `doe`, never the reverse — `doe` stays scipy-stack-only). The
+full v1 API is implemented — every route in `docs/WEBSERVICE_API.md`'s tables, with
+parameter caps enforced across every endpoint and a golden request/response contract
+test per spec example (`docs/WEBSERVICE_BUILD.md`, all six milestones done). See
+`docs/WEBSERVICE.md` (architecture + packaging decision), `docs/WEBSERVICE_API.md`
+(the v1 endpoint contract), and `docs/WEBSERVICE_BUILD.md` (the implementation build
+plan, kept as the historical build record). Service checks run from its directory:
 
 ```bash
 cd doe-service

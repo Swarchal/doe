@@ -1,0 +1,128 @@
+{
+  "method": "POST",
+  "path": "/v1/designs/central-composite",
+  "status": 200,
+  "request": {
+    "factors": [
+      {
+        "type": "continuous",
+        "name": "temp",
+        "low": 20,
+        "high": 80,
+        "units": "C"
+      },
+      {
+        "type": "continuous",
+        "name": "time",
+        "low": 0,
+        "high": 10
+      }
+    ],
+    "alpha": "rotatable",
+    "center": 5
+  },
+  "response": {
+    "design": {
+      "schema_version": "1.0",
+      "name": "central_composite_k2",
+      "factors": [
+        {
+          "type": "continuous",
+          "name": "temp",
+          "low": 20.0,
+          "high": 80.0,
+          "units": "C"
+        },
+        {
+          "type": "continuous",
+          "name": "time",
+          "low": 0.0,
+          "high": 10.0,
+          "units": null
+        }
+      ],
+      "runs": [
+        {
+          "temp": 20.0,
+          "time": 0.0
+        },
+        {
+          "temp": 20.0,
+          "time": 10.0
+        },
+        {
+          "temp": 80.0,
+          "time": 0.0
+        },
+        {
+          "temp": 80.0,
+          "time": 10.0
+        },
+        {
+          "temp": 7.573593128807147,
+          "time": 5.0
+        },
+        {
+          "temp": 92.42640687119285,
+          "time": 5.0
+        },
+        {
+          "temp": 50.0,
+          "time": -2.0710678118654755
+        },
+        {
+          "temp": 50.0,
+          "time": 12.071067811865476
+        },
+        {
+          "temp": 50.0,
+          "time": 5.0
+        },
+        {
+          "temp": 50.0,
+          "time": 5.0
+        },
+        {
+          "temp": 50.0,
+          "time": 5.0
+        },
+        {
+          "temp": 50.0,
+          "time": 5.0
+        },
+        {
+          "temp": 50.0,
+          "time": 5.0
+        }
+      ],
+      "point_types": [
+        "factorial",
+        "factorial",
+        "factorial",
+        "factorial",
+        "axial",
+        "axial",
+        "axial",
+        "axial",
+        "center",
+        "center",
+        "center",
+        "center",
+        "center"
+      ],
+      "meta": {
+        "generator": {
+          "name": "central_composite",
+          "parameters": {
+            "alpha": "rotatable",
+            "center": 5,
+            "fraction": null
+          }
+        },
+        "alpha": 1.4142135623730951,
+        "axial_extrapolates": true
+      }
+    },
+    "warnings": []
+  }
+}

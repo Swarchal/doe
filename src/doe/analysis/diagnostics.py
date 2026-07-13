@@ -14,7 +14,7 @@ from __future__ import annotations
 import itertools
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 import pandas as pd
@@ -23,6 +23,7 @@ from scipy.stats import qmc
 
 from ..design import Design
 from ..factors import CategoricalFactor, ContinuousFactor, FactorSet
+from ..serialization import json_safe
 from .model import coded_design_points, expand_coded_points
 
 # --------------------------------------------------------------------------- #
@@ -160,6 +161,12 @@ class Efficiency:
     a: float
     g: float
     i: float
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to the ``efficiency`` object of ``POST /v1/analysis/diagnostics``."""
+        return cast(
+            "dict[str, Any]", json_safe({"d": self.d, "a": self.a, "g": self.g, "i": self.i})
+        )
 
 
 def _default_region(k: int, *, levels: int = 3, max_grid: int = 4096) -> np.ndarray:

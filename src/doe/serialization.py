@@ -11,7 +11,12 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, TypeGuard
 
+from ._json import json_safe
 from .design import SCHEMA_VERSION
+
+#: ``json_safe`` is defined in the leaf module ``_json`` -- ``design`` imports it too, and
+#: ``serialization`` imports ``design`` -- but its public home is here.
+__all__ = ["SCHEMA_VERSION", "ValidationError", "json_safe", "validate_design_dict"]
 
 
 class ValidationError(ValueError):

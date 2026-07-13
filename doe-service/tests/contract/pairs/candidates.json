@@ -1,0 +1,63 @@
+{
+  "method": "POST",
+  "path": "/v1/designs/candidates",
+  "status": 200,
+  "request": {
+    "factors": [
+      {
+        "type": "continuous",
+        "name": "temp",
+        "low": 20,
+        "high": 80
+      },
+      {
+        "type": "continuous",
+        "name": "time",
+        "low": 0,
+        "high": 10
+      }
+    ],
+    "levels": 3
+  },
+  "response": {
+    "points": [
+      [
+        -1.0,
+        -1.0
+      ],
+      [
+        -1.0,
+        0.0
+      ],
+      [
+        -1.0,
+        1.0
+      ],
+      [
+        0.0,
+        -1.0
+      ],
+      [
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0
+      ],
+      [
+        1.0,
+        -1.0
+      ],
+      [
+        1.0,
+        0.0
+      ],
+      [
+        1.0,
+        1.0
+      ]
+    ],
+    "kind": "grid"
+  }
+}
