@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from doe_service.schemas.design import DesignRequest
+from doe_service.schemas.design import DesignDocument, DesignRequest
 from doe_service.schemas.factors import FactorSchema
 
 
@@ -128,6 +128,50 @@ class AugmentRequest(DesignRequest):
     max_iter: int = 100
     seed: int | None = None
     region: list[list[float]] | None = None
+
+
+class SplitPlotRequest(FactorsRequest):
+    """``doe.split_plot`` parameters (``docs/WEBSERVICE_API.md`` "Split-plot designs").
+
+    Factors flagged ``hard_to_change`` become the whole-plot stratum; the rest are the
+    sub-plot stratum. ``whole_plot_design`` / ``sub_plot_design`` are each ``"full"``
+    (the full factorial of that stratum's factors) or a ready-made design document on
+    exactly that stratum's factors.
+    """
+
+    whole_plot_design: Literal["full"] | DesignDocument = "full"
+    sub_plot_design: Literal["full"] | DesignDocument = "full"
+    n_whole_plot_reps: int = 1
+    seed: int | None = None
+
+
+class RandomizedCompleteBlockRequest(BaseModel):
+    """``doe.randomized_complete_block`` parameters.
+
+    Treatments are either a factor list (whose full-factorial crossing is the treatment
+    set) or an integer ``n_treatments`` (an anonymous ``T1..Tt`` treatment factor);
+    exactly one is required.
+    """
+
+    factors: list[FactorSchema] | None = None
+    n_treatments: int | None = None
+    n_blocks: int
+    seed: int | None = None
+
+
+class LatinSquareRequest(BaseModel):
+    """``doe.latin_square`` parameters -- a ``treatments x treatments`` square."""
+
+    treatments: int
+    seed: int | None = None
+
+
+class BlockedFactorialRequest(FactorsRequest):
+    """``doe.blocked_factorial`` parameters -- a ``2^k`` factorial confounded into blocks
+    via the defining ``block_generators`` (e.g. ``["ABC"]``)."""
+
+    block_generators: list[str]
+    seed: int | None = None
 
 
 class CandidatesRequest(FactorsRequest):

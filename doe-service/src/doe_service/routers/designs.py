@@ -26,6 +26,7 @@ from doe import (
     ValidationError,
 )
 from doe import augment as _augment
+from doe import blocked_factorial as _blocked_factorial
 from doe import box_behnken as _box_behnken
 from doe import candidate_grid as _candidate_grid
 from doe import central_composite as _central_composite
@@ -36,11 +37,14 @@ from doe import fractional_factorial as _fractional_factorial
 from doe import full_factorial as _full_factorial
 from doe import halton as _halton
 from doe import latin_hypercube as _latin_hypercube
+from doe import latin_square as _latin_square
 from doe import mixture_candidates as _mixture_candidates
 from doe import plackett_burman as _plackett_burman
+from doe import randomized_complete_block as _randomized_complete_block
 from doe import simplex_centroid as _simplex_centroid
 from doe import simplex_lattice as _simplex_lattice
 from doe import sobol as _sobol
+from doe import split_plot as _split_plot
 from doe import validate_design_dict as _validate_design_dict
 from doe_service.convert import (
     call_library,
@@ -63,6 +67,7 @@ from doe_service.schemas.design import (
 from doe_service.schemas.factors import factor_schema_to_factor
 from doe_service.schemas.generation import (
     AugmentRequest,
+    BlockedFactorialRequest,
     BoxBehnkenRequest,
     CandidatesRequest,
     CentralCompositeRequest,
@@ -71,11 +76,14 @@ from doe_service.schemas.generation import (
     FactorsRequest,
     FractionalFactorialRequest,
     FullFactorialRequest,
+    LatinSquareRequest,
     OptimalRequest,
     PlackettBurmanRequest,
+    RandomizedCompleteBlockRequest,
     SimplexCentroidRequest,
     SimplexLatticeRequest,
     SpaceFillingRequest,
+    SplitPlotRequest,
 )
 from doe_service.schemas.operations import (
     ProjectRequest,
@@ -281,6 +289,86 @@ def extreme_vertices(body: ExtremeVerticesRequest) -> DesignResponse:
 
     def run() -> Design:
         return _extreme_vertices(_factors(body), include_centroid=body.include_centroid)
+
+    with captured_warnings() as warns:
+        design = call_library(run)
+    return _design_response(design, warns)
+
+
+@router.post("/split-plot")
+def split_plot(body: SplitPlotRequest) -> DesignResponse:
+    """Wraps ``doe.split_plot`` -- factors flagged ``hard_to_change`` form the whole-plot
+    stratum, the rest the sub-plot stratum. ``whole_plot_design``/``sub_plot_design`` are
+    ``"full"`` or a design document on exactly that stratum's factors (converted here the
+    same way any posted design is: validated + factor/run capped)."""
+
+    def run() -> Design:
+        factors = _factors(body)
+        whole = (
+            body.whole_plot_design
+            if isinstance(body.whole_plot_design, str)
+            else design_from_document(body.whole_plot_design.model_dump())
+        )
+        sub = (
+            body.sub_plot_design
+            if isinstance(body.sub_plot_design, str)
+            else design_from_document(body.sub_plot_design.model_dump())
+        )
+        return _split_plot(
+            factors,
+            whole_plot_design=whole,
+            sub_plot_design=sub,
+            n_whole_plot_reps=body.n_whole_plot_reps,
+            seed=body.seed,
+        )
+
+    with captured_warnings() as warns:
+        design = call_library(run)
+    return _design_response(design, warns)
+
+
+@router.post("/randomized-complete-block")
+def randomized_complete_block(body: RandomizedCompleteBlockRequest) -> DesignResponse:
+    """Wraps ``doe.randomized_complete_block``. Treatments are a factor list or an integer
+    ``n_treatments`` -- exactly one; supplying neither or both is a 422 ``infeasible``."""
+
+    def run() -> Design:
+        if (body.factors is None) == (body.n_treatments is None):
+            raise ValueError("provide exactly one of 'factors' or 'n_treatments'")
+        treatments: list[Factor] | int
+        if body.factors is not None:
+            treatments = [factor_schema_to_factor(f) for f in body.factors]
+            check_factor_count(treatments)
+        else:
+            treatments = cast(int, body.n_treatments)
+        return _randomized_complete_block(treatments, n_blocks=body.n_blocks, seed=body.seed)
+
+    with captured_warnings() as warns:
+        design = call_library(run)
+    return _design_response(design, warns)
+
+
+@router.post("/latin-square")
+def latin_square(body: LatinSquareRequest) -> DesignResponse:
+    """Wraps ``doe.latin_square`` -- a ``treatments x treatments`` square design."""
+
+    def run() -> Design:
+        return _latin_square(body.treatments, seed=body.seed)
+
+    with captured_warnings() as warns:
+        design = call_library(run)
+    return _design_response(design, warns)
+
+
+@router.post("/blocked-factorial")
+def blocked_factorial(body: BlockedFactorialRequest) -> DesignResponse:
+    """Wraps ``doe.blocked_factorial`` -- a ``2^k`` factorial confounded into blocks via
+    the defining ``block_generators``."""
+
+    def run() -> Design:
+        return _blocked_factorial(
+            _factors(body), block_generators=body.block_generators, seed=body.seed
+        )
 
     with captured_warnings() as warns:
         design = call_library(run)

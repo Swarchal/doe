@@ -5,7 +5,12 @@ Fields land in Milestone 1 (``docs/WEBSERVICE_BUILD.md`` §1.1).
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+)
 
 from doe_service.schemas.factors import FactorSchema
 
@@ -15,6 +20,11 @@ class DesignDocument(BaseModel):
 
     ``runs`` stays ``list[dict[str, Any]]`` — per-run key/level checking is
     ``validate_design_dict``'s job, already exhaustive; the schema does not duplicate it.
+
+    ``whole_plots`` (split-plot designs only) is a per-run list of integer plot ids;
+    like ``Design.to_dict`` it is emitted **only when set**, so a fully-randomized design
+    serializes byte-for-byte as before and the existing generation contracts (which embed
+    design documents and compare key sets exactly) are unaffected.
     """
 
     schema_version: str
@@ -22,7 +32,15 @@ class DesignDocument(BaseModel):
     factors: list[FactorSchema]
     runs: list[dict[str, Any]]
     point_types: list[str] | None = None
+    whole_plots: list[int] | None = None
     meta: dict[str, Any] | None = None
+
+    @model_serializer(mode="wrap")
+    def _drop_unset_whole_plots(self, handler: SerializerFunctionWrapHandler) -> Any:
+        data = handler(self)
+        if self.whole_plots is None:
+            data.pop("whole_plots", None)
+        return data
 
 
 class DesignRequest(BaseModel):

@@ -1,8 +1,9 @@
 """Contract lock-in: every worked example in ``docs/WEBSERVICE_API.md`` reproduced
 through the real HTTP layer (Milestone 6, ``docs/WEBSERVICE_BUILD.md`` §6).
 
-One golden ``pairs/<name>.json`` per doc example (13 total): the four design-generation
-examples (``central-composite``, ``optimal``, ``augment``, ``candidates``), the five
+One golden ``pairs/<name>.json`` per doc example (15 total): the four design-generation
+examples (``central-composite``, ``optimal``, ``augment``, ``candidates``) plus the two
+Phase-5 generation examples (``split-plot``, and ``fit-gls`` under analysis), the five
 analysis examples (``fit``, ``anova``, ``predict``, ``diagnostics``, ``coverage``), the
 three optimization examples (``stationary-point``, ``optimum``, ``desirability``), and
 the error envelope example. Each fixture's ``request`` is POSTed and the live response
@@ -38,7 +39,7 @@ def test_contract_pair(client: TestClient, name: str) -> None:
     assert_matches(response.json(), pair["response"])
 
 
-def test_thirteen_pairs_are_locked_in() -> None:
+def test_fifteen_pairs_are_locked_in() -> None:
     """One pair per ``docs/WEBSERVICE_API.md`` example -- pins the count so a future
     example added to the doc without a matching fixture is caught here first."""
-    assert len(pair_names()) == 13
+    assert len(pair_names()) == 15

@@ -53,7 +53,14 @@ The repo is a **uv workspace**: the root package is the `doe` library, and
 (`doe_service` imports `doe`, never the reverse — `doe` stays scipy-stack-only). The
 full v1 API is implemented — every route in `docs/WEBSERVICE_API.md`'s tables, with
 parameter caps enforced across every endpoint and a golden request/response contract
-test per spec example (`docs/WEBSERVICE_BUILD.md`, all six milestones done). See
+test per spec example (`docs/WEBSERVICE_BUILD.md`, all six milestones done). The Phase 5
+generators/analysis have service endpoints too: `POST /v1/designs/split-plot`,
+`/randomized-complete-block`, `/latin-square`, `/blocked-factorial`, and
+`POST /v1/analysis/fit-gls` (the REML/GLS split-plot fit). Categorical DSDs need no new
+route — `/v1/designs/definitive-screening` forwards the factor list, so it builds the
+Jones–Nachtsheim categorical augment for free. The split-plot wire additions
+(`hard_to_change` on a factor, `whole_plots` on a design) are emitted **only when set**,
+so the pre-Phase-5 design documents (and the existing contract fixtures) are byte-identical. See
 `docs/WEBSERVICE.md` (architecture + packaging decision), `docs/WEBSERVICE_API.md`
 (the v1 endpoint contract), and `docs/WEBSERVICE_BUILD.md` (the implementation build
 plan, kept as the historical build record). Service checks run from its directory:

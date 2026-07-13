@@ -1,0 +1,186 @@
+{
+  "method": "POST",
+  "path": "/v1/analysis/fit-gls",
+  "status": 200,
+  "request": {
+    "design": {
+      "schema_version": "1.0",
+      "name": "split_plot_1wp_1sp",
+      "factors": [
+        {
+          "hard_to_change": true,
+          "type": "continuous",
+          "name": "temp",
+          "low": 100.0,
+          "high": 200.0,
+          "units": null
+        },
+        {
+          "type": "continuous",
+          "name": "conc",
+          "low": 1.0,
+          "high": 5.0,
+          "units": null
+        }
+      ],
+      "runs": [
+        {
+          "std_order": 0,
+          "temp": 100.0,
+          "conc": 1.0,
+          "y": 50.0
+        },
+        {
+          "std_order": 1,
+          "temp": 100.0,
+          "conc": 5.0,
+          "y": 51.0
+        },
+        {
+          "std_order": 3,
+          "temp": 200.0,
+          "conc": 5.0,
+          "y": 50.0
+        },
+        {
+          "std_order": 2,
+          "temp": 200.0,
+          "conc": 1.0,
+          "y": 51.0
+        },
+        {
+          "std_order": 5,
+          "temp": 100.0,
+          "conc": 5.0,
+          "y": 54.0
+        },
+        {
+          "std_order": 4,
+          "temp": 100.0,
+          "conc": 1.0,
+          "y": 50.0
+        },
+        {
+          "std_order": 7,
+          "temp": 200.0,
+          "conc": 5.0,
+          "y": 49.0
+        },
+        {
+          "std_order": 6,
+          "temp": 200.0,
+          "conc": 1.0,
+          "y": 50.0
+        }
+      ],
+      "point_types": null,
+      "whole_plots": [
+        0,
+        0,
+        1,
+        1,
+        2,
+        2,
+        3,
+        3
+      ],
+      "meta": {
+        "generator": {
+          "name": "split_plot",
+          "parameters": {
+            "whole_plot_design": "full",
+            "sub_plot_design": "full",
+            "n_whole_plot_reps": 2,
+            "seed": 1
+          }
+        },
+        "randomized": true,
+        "random_seed": 1
+      }
+    },
+    "response": "y",
+    "model": "linear",
+    "confidence": 0.95
+  },
+  "response": {
+    "terms": [
+      {
+        "term": "Intercept",
+        "coefficient": 50.62500000000001,
+        "effect": 50.62500000000001,
+        "std_error": 0.4506939284323682,
+        "t": 112.32678500038162,
+        "p": 7.924679654808261e-05,
+        "ci_low": 48.68582053854897,
+        "ci_high": 52.56417946145105
+      },
+      {
+        "term": "temp",
+        "coefficient": -0.6250000000000009,
+        "effect": -1.2500000000000018,
+        "std_error": 0.4506939284323682,
+        "t": -1.3867504321034787,
+        "p": 0.29985997303284434,
+        "ci_low": -2.5641794614510385,
+        "ci_high": 1.314179461451037
+      },
+      {
+        "term": "conc",
+        "coefficient": 0.375,
+        "effect": 0.75,
+        "std_error": 0.3749999841914659,
+        "t": 1.0000000421560926,
+        "p": 0.42264971458448697,
+        "ci_low": -1.2384947056374158,
+        "ci_high": 1.9884947056374158
+      },
+      {
+        "term": "temp:conc",
+        "coefficient": -0.875,
+        "effect": -1.75,
+        "std_error": 0.3749999841914659,
+        "t": -2.33333343169755,
+        "p": 0.14481387982043864,
+        "ci_low": -2.488494705637416,
+        "ci_high": 0.7384947056374158
+      }
+    ],
+    "r_squared": 0.6535433070866141,
+    "adjusted_r2": 0.39370078740157477,
+    "dof_resid": 2,
+    "mse": 1.1249999051487976,
+    "fitted": [
+      50.00000000000001,
+      52.50000000000001,
+      49.50000000000001,
+      50.50000000000001,
+      52.50000000000001,
+      50.00000000000001,
+      49.50000000000001,
+      50.50000000000001
+    ],
+    "residuals": [
+      -7.105427357601002e-15,
+      -1.500000000000007,
+      0.4999999999999929,
+      0.4999999999999929,
+      1.499999999999993,
+      -7.105427357601002e-15,
+      -0.5000000000000071,
+      -0.5000000000000071
+    ],
+    "model": {
+      "order": 1,
+      "interactions": true
+    },
+    "warnings": [],
+    "sigma2_wp": 0.25000011592880367,
+    "n_whole_plots": 4,
+    "dof_terms": {
+      "Intercept": 2,
+      "temp": 2,
+      "conc": 2,
+      "temp:conc": 2
+    }
+  }
+}

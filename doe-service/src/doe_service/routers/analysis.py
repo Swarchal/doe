@@ -27,6 +27,7 @@ from doe import condition_number as _condition_number
 from doe import correlation_matrix as _correlation_matrix
 from doe import discrepancy as _discrepancy
 from doe import efficiency as _efficiency
+from doe import fit_gls as _fit_gls
 from doe import fit_ols as _fit_ols
 from doe import leverage as _leverage
 from doe import maximin_distance as _maximin_distance
@@ -48,6 +49,7 @@ from doe_service.schemas.analysis import (
     AnovaRequest,
     CoverageRequest,
     DiagnosticsRequest,
+    FitGlsRequest,
     FitRequest,
     PredictRequest,
 )
@@ -57,6 +59,7 @@ from doe_service.schemas.results import (
     CoverageResponse,
     DiagnosticsResponse,
     EfficiencyResult,
+    FitGlsResponse,
     FitResponse,
     PredictResponse,
 )
@@ -160,6 +163,53 @@ def fit(body: AnalysisFitRequest) -> FitResponse:
     result, warns = _fit(body)
     payload = result.to_dict(confidence=body.confidence)
     return FitResponse.model_validate({**payload, "warnings": warns})
+
+
+# --------------------------------------------------------------------------- #
+# /fit-gls
+# --------------------------------------------------------------------------- #
+
+
+@router.post("/fit-gls")
+def fit_gls(body: FitGlsRequest) -> FitGlsResponse:
+    """Wraps ``doe.fit_gls`` -- the split-plot REML/GLS fit.
+
+    The posted design must carry a ``whole_plots`` structure; ``fit_gls`` otherwise raises
+    a ``ValueError`` that :func:`~doe_service.convert.call_library` maps to 422
+    ``infeasible``. The response is the same ``FitResult.to_dict()`` payload as ``/fit``
+    plus the split-plot extras (``sigma2_wp``, ``n_whole_plots``, ``dof_terms``) that
+    ``to_dict`` does not carry -- assembled here rather than by widening the shared
+    ``/fit`` shape.
+    """
+    design = design_from_document(body.design.model_dump())
+    _check_response_column(design, body.response)
+
+    def run() -> FitResult:
+        spec = body.model if body.model is not None else _DEFAULT_FIT_MODEL
+        if isinstance(spec, str):
+            return _fit_gls(design, body.response, model=cast(_LibraryModelSpec, spec))
+        order, interactions = resolve_model(spec, default=_DEFAULT_FIT_MODEL)
+        return _fit_gls(design, body.response, order=order, interactions=interactions)
+
+    with captured_warnings() as warns:
+        result = call_library(run)
+
+    payload = result.to_dict(confidence=body.confidence)
+    dof_terms: dict[str, int] | None = None
+    if result.dof_terms is not None:
+        dof_terms = {
+            str(term): int(dof)
+            for term, dof in zip(result.term_names, result.dof_terms, strict=True)
+        }
+    return FitGlsResponse.model_validate(
+        {
+            **payload,
+            "sigma2_wp": jsonable(result.sigma2_wp),
+            "n_whole_plots": result.n_whole_plots,
+            "dof_terms": dof_terms,
+            "warnings": warns,
+        }
+    )
 
 
 # --------------------------------------------------------------------------- #

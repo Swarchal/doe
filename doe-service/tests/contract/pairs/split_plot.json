@@ -1,0 +1,89 @@
+{
+  "method": "POST",
+  "path": "/v1/designs/split-plot",
+  "status": 200,
+  "request": {
+    "factors": [
+      {
+        "type": "continuous",
+        "name": "temp",
+        "low": 100,
+        "high": 200,
+        "hard_to_change": true
+      },
+      {
+        "type": "continuous",
+        "name": "conc",
+        "low": 1,
+        "high": 5
+      }
+    ],
+    "seed": 1
+  },
+  "response": {
+    "design": {
+      "schema_version": "1.0",
+      "name": "split_plot_1wp_1sp",
+      "factors": [
+        {
+          "hard_to_change": true,
+          "type": "continuous",
+          "name": "temp",
+          "low": 100.0,
+          "high": 200.0,
+          "units": null
+        },
+        {
+          "type": "continuous",
+          "name": "conc",
+          "low": 1.0,
+          "high": 5.0,
+          "units": null
+        }
+      ],
+      "runs": [
+        {
+          "std_order": 0,
+          "temp": 100.0,
+          "conc": 1.0
+        },
+        {
+          "std_order": 1,
+          "temp": 100.0,
+          "conc": 5.0
+        },
+        {
+          "std_order": 3,
+          "temp": 200.0,
+          "conc": 5.0
+        },
+        {
+          "std_order": 2,
+          "temp": 200.0,
+          "conc": 1.0
+        }
+      ],
+      "point_types": null,
+      "whole_plots": [
+        0,
+        0,
+        1,
+        1
+      ],
+      "meta": {
+        "generator": {
+          "name": "split_plot",
+          "parameters": {
+            "whole_plot_design": "full",
+            "sub_plot_design": "full",
+            "n_whole_plot_reps": 1,
+            "seed": 1
+          }
+        },
+        "randomized": true,
+        "random_seed": 1
+      }
+    },
+    "warnings": []
+  }
+}

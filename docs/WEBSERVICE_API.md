@@ -151,6 +151,48 @@ POST /v1/designs/candidates
 Candidate points are coded (`candidate_grid` convention); mixture candidates are
 proportions, which are their own coded form.
 
+### Split-plot and blocking designs (Phase 5)
+
+Same `{factors, ...params}` in, `{design, warnings}` out as the generators above.
+Split-plot designs mark their whole-plot (hard-to-change) factors with
+`"hard_to_change": true` on the factor and return a `whole_plots` array on the design
+document (one integer plot id per run — see [SERIALIZATION.md](SERIALIZATION.md)); the
+`fit-gls` analysis endpoint consumes that structure.
+
+| Endpoint | Wraps | Parameters |
+| --- | --- | --- |
+| `POST /v1/designs/split-plot` | `split_plot` | `whole_plot_design: "full" \| DesignDocument = "full"`, `sub_plot_design: "full" \| DesignDocument = "full"`, `n_whole_plot_reps = 1`, `seed?`. Whole-plot stratum = the factors flagged `hard_to_change`; the rest are the sub-plot stratum. |
+| `POST /v1/designs/randomized-complete-block` | `randomized_complete_block` | one of `factors: [Factor, ...]` **or** `n_treatments: int`, plus `n_blocks`, `seed?` |
+| `POST /v1/designs/latin-square` | `latin_square` | `treatments: int`, `seed?` |
+| `POST /v1/designs/blocked-factorial` | `blocked_factorial` | `block_generators: ["ABC", ...]`, `seed?` — the confounded set (generators + generalized interactions) is recorded in the design's `meta["confounded_with_blocks"]` |
+
+The block-carrying generators add a reserved `block` categorical factor to the returned
+design; the existing deviation coding fits it with no analysis-side change.
+
+Two-level **categorical** factors need no new endpoint — `POST /v1/designs/definitive-screening`
+accepts them directly (it forwards the factor list), building the Jones–Nachtsheim (2013)
+DSD-augment when categoricals are present. Only its run count changes; the response shape
+is identical.
+
+Worked example:
+
+```text
+POST /v1/designs/split-plot
+{
+  "factors": [
+    {"type": "continuous", "name": "temp", "low": 100, "high": 200, "hard_to_change": true},
+    {"type": "continuous", "name": "conc", "low": 1, "high": 5}
+  ],
+  "seed": 1
+}
+→ 200
+{
+  "design": { "schema_version": "1.0", "factors": [...], "runs": [...],
+              "whole_plots": [0, 0, 1, 1], "meta": {...} },
+  "warnings": []
+}
+```
+
 ## Design operations
 
 All take and return a full design document — pure transformations:
@@ -196,6 +238,29 @@ POST /v1/analysis/fit
 Scheffé fits return `effect: null` per term (the ±1 swing is meaningless on
 proportions); saturated fits return `null` inference columns plus
 `"saturated_model"` in `warnings`.
+
+```text
+POST /v1/analysis/fit-gls
+{ "design": DesignDocument, "response": "y", "model": "linear",
+  "confidence": 0.95 }               # split-plot design: must carry "whole_plots"
+→ 200
+{
+  "terms": [ { "term": "Intercept", "coefficient": 50.625, ... },
+             { "term": "temp", "coefficient": -0.625, ... }, ... ],
+  "r_squared": ..., "adjusted_r2": ..., "dof_resid": ..., "mse": ...,
+  "fitted": [...], "residuals": [...],
+  "model": {"order": 1, "interactions": true},
+  "sigma2_wp": 0.25,                 # whole-plot variance component (REML)
+  "n_whole_plots": 4,
+  "dof_terms": {"Intercept": 2, "temp": 2, "conc": 2, "temp:conc": 2},  # containment df
+  "warnings": []
+}
+```
+
+`fit-gls` is the split-plot front door: it re-fits by REML/GLS and returns everything
+`fit` does plus the whole-plot variance component and the two-stratum degrees of freedom
+(whole-plot terms get the coarser whole-plot df — the standard errors OLS understates).
+A design with no `whole_plots` structure is a 422 `infeasible`.
 
 ```text
 POST /v1/analysis/anova

@@ -106,6 +106,68 @@ class FitResponse(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# /v1/analysis/fit-gls
+# --------------------------------------------------------------------------- #
+
+
+class FitGlsResponse(FitResponse):
+    """``POST /v1/analysis/fit-gls`` response.
+
+    Everything ``/fit`` returns (same ``FitResult.to_dict()`` shape), plus the split-plot
+    variance components ``fit_gls`` adds: ``sigma2_wp`` (the whole-plot variance
+    component), ``n_whole_plots`` (the number of whole plots), and ``dof_terms`` (the
+    two-stratum containment degrees of freedom used per term for the ``t``/``p``/CI
+    columns, keyed by term name -- whole-plot terms get the coarser whole-plot df).
+    """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "terms": [
+                        {
+                            "term": "Intercept",
+                            "coefficient": 50.62500000000001,
+                            "effect": 50.62500000000001,
+                            "std_error": 0.4506939284323682,
+                            "t": 112.32678500038162,
+                            "p": 7.924679654808261e-05,
+                            "ci_low": 48.68582053854897,
+                            "ci_high": 52.56417946145105,
+                        },
+                        {
+                            "term": "temp",
+                            "coefficient": -0.6250000000000009,
+                            "effect": -1.2500000000000018,
+                            "std_error": 0.4506939284323682,
+                            "t": -1.3867504321034787,
+                            "p": 0.29985997303284434,
+                            "ci_low": -2.5641794614510385,
+                            "ci_high": 1.314179461451037,
+                        },
+                    ],
+                    "r_squared": 0.6535433070866141,
+                    "adjusted_r2": 0.39370078740157477,
+                    "dof_resid": 2,
+                    "mse": 1.1249999051487976,
+                    "fitted": [50.00000000000001, 52.50000000000001],
+                    "residuals": [-7.105427357601002e-15, -1.500000000000007],
+                    "model": {"order": 1, "interactions": True},
+                    "sigma2_wp": 0.25000011592880367,
+                    "n_whole_plots": 4,
+                    "dof_terms": {"Intercept": 2, "temp": 2, "conc": 2, "temp:conc": 2},
+                    "warnings": [],
+                }
+            ]
+        }
+    )
+
+    sigma2_wp: float | None
+    n_whole_plots: int | None
+    dof_terms: dict[str, int] | None
+
+
+# --------------------------------------------------------------------------- #
 # /v1/analysis/anova
 # --------------------------------------------------------------------------- #
 

@@ -26,6 +26,18 @@ class AnalysisFitRequest(FitRequest):
     confidence: float = 0.95
 
 
+class FitGlsRequest(FitRequest):
+    """``POST /v1/analysis/fit-gls`` -- the split-plot GLS fit.
+
+    Same ``{design, response, model}`` shape as ``/fit``, but the posted design must carry
+    ``whole_plots`` (i.e. it came from ``split_plot`` or was serialized with a whole-plot
+    structure); ``fit_gls`` estimates the two variance components by REML and returns the
+    whole-plot-aware standard errors OLS understates.
+    """
+
+    confidence: float = 0.95
+
+
 class AnovaRequest(FitRequest):
     """``POST /v1/analysis/anova`` takes no parameters beyond the shared fit."""
 
