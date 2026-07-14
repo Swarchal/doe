@@ -259,6 +259,26 @@ the Phase-3 coordinate-exchange engine that `augment` (WORKFLOW3) also uses; its
 `wf6_*.png` figures come from `scripts/build_workflow6_assets.py` the same way — re-run it and
 update the transcriptions when its behaviour changes.
 
+`docs/WEBSERVICE_EXAMPLES.md` is the **doe-service cookbook** — one runnable `curl`
+example per HTTP endpoint, the companion to the field-by-field `docs/WEBSERVICE_API.md`.
+Like the workflow docs, every request/response pair is *real*: it is a generated file,
+rebuilt by `doe-service/scripts/build_api_examples.py`, which POSTs through the actual
+FastAPI app (`TestClient`) and captures exactly what the service returns (seeded, so
+re-runs are stable; long arrays abbreviated with a `"… N more"` marker for readability).
+When you change a wire shape, re-run `cd doe-service && uv run --extra dev python
+scripts/build_api_examples.py` and commit the regenerated doc.
+
+`docs/WEBSERVICE_WORKFLOW.md` is the **service mirror of WORKFLOW.md** — the same
+reaction-optimization study (identical factors, faced CCD, seeded synthetic response, and
+therefore identical numbers), but driven end-to-end through the HTTP API (`curl` + `jq`
+chaining a design document between steps) instead of the in-process library. Text-only
+(the service is headless — plot steps name the plot-data endpoint that feeds them, and it
+notes the one gap: prediction intervals aren't yet on the wire). Its outputs come from
+`doe-service/scripts/build_webservice_workflow.py`, which runs the whole walkthrough
+through `TestClient`; re-run it (`cd doe-service && uv run --extra dev python
+scripts/build_webservice_workflow.py`) and update the transcriptions when service
+behaviour changes.
+
 `docs/` is also a Sphinx project (`conf.py`, furo theme, MyST so the markdown guides build
 as-is, napoleon for the Google-style docstrings). `docs/api/` holds one `automodule` page per
 module; add a page there when adding a module. Build with

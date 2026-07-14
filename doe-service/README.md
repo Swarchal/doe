@@ -4,6 +4,7 @@ A stateless HTTP API over the [`doe`](../README.md) library — a uv workspace m
 the `doe` repository, depending on the in-tree `doe` package.
 
 - API contract: [`docs/WEBSERVICE_API.md`](../docs/WEBSERVICE_API.md)
+- Worked examples (one runnable `curl` per endpoint): [`docs/WEBSERVICE_EXAMPLES.md`](../docs/WEBSERVICE_EXAMPLES.md)
 - Architecture and rationale: [`docs/WEBSERVICE.md`](../docs/WEBSERVICE.md)
 
 The dependency points one way only: `doe_service` imports `doe`, never the reverse —
@@ -72,4 +73,6 @@ jq -n --slurpfile design design_with_yield.json \
 See [`docs/WEBSERVICE_API.md`](../docs/WEBSERVICE_API.md) for the full endpoint table
 (design generation/operations, analysis, optimization, plot data), the error envelope,
 and the deployment-configurable request limits; every worked example there is a passing
-contract test under `tests/contract/`.
+contract test under `tests/contract/`. For a runnable `curl` example of *every*
+endpoint, see [`docs/WEBSERVICE_EXAMPLES.md`](../docs/WEBSERVICE_EXAMPLES.md) (generated
+by `scripts/build_api_examples.py`).

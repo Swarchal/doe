@@ -5,7 +5,9 @@ The concrete API design for the stateless compute service planned in
 Every endpoint below maps onto an existing public function; request fields mirror that
 function's keyword arguments, so the OpenAPI schema doubles as library documentation.
 The implementation build plan — milestones, library prep, stub map — is
-[WEBSERVICE_BUILD.md](WEBSERVICE_BUILD.md).
+[WEBSERVICE_BUILD.md](WEBSERVICE_BUILD.md). For a runnable `curl` example of every
+endpoint (real captured request/response pairs), see the cookbook,
+[WEBSERVICE_EXAMPLES.md](WEBSERVICE_EXAMPLES.md).
 
 ## Conventions
 
