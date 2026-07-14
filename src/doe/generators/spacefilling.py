@@ -59,6 +59,14 @@ def _best_by_criterion(candidates: list[np.ndarray], criterion: LhsCriterion) ->
         scores = [pdist(c).min() for c in candidates]
         return candidates[int(np.argmax(scores))]
     if criterion == "correlation":
+        # the criterion minimises the largest *pairwise* column correlation, of which a
+        # one-factor design has none: np.corrcoef would hand back a 0-d array and
+        # np.fill_diagonal would fail on it with a bare "array must be at least 2-d"
+        if candidates[0].shape[1] < 2:
+            raise ValueError(
+                "criterion='correlation' needs at least 2 factors (it minimises the largest "
+                "correlation *between* columns); use criterion='maximin' or None"
+            )
         scores = []
         for c in candidates:
             corr = np.corrcoef(c, rowvar=False)

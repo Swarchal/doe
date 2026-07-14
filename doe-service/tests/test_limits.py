@@ -244,3 +244,100 @@ def test_default_body_cap_does_not_reject_ordinary_requests(client: TestClient) 
     factors = [_continuous("a", 0, 1), _continuous("b", 0, 1)]
     response = client.post("/v1/designs/full-factorial", json={"factors": factors})
     assert response.status_code == 200, response.text
+
+
+# --------------------------------------------------------------------------- #
+# projected run counts (the cap must fire *before* the allocation it exists to prevent)
+# --------------------------------------------------------------------------- #
+
+
+def test_full_factorial_levels_are_capped_before_generating(client: TestClient) -> None:
+    # 8 factors x 10 levels = 10**8 runs. Both inputs are within their own declared limits
+    # (max_factors is 32, and `levels` has no cap), so nothing rejected this: the service
+    # generated the design first and only then checked max_runs -- exhausting memory long
+    # before the check. The run count must be projected from the request instead.
+    body = {"factors": [_continuous(f"x{i}", 0, 1) for i in range(8)], "levels": 10}
+    response = client.post("/v1/designs/full-factorial", json=body)
+    assert response.status_code == 422, response.text
+    error = response.json()["error"]
+    assert error["code"] == "limit_exceeded"
+    assert "100000000" in error["message"]
+    assert str(DEFAULT_LIMITS.max_runs) in error["message"]
+
+
+def test_full_factorial_two_level_factor_count_is_capped_before_generating(
+    client: TestClient,
+) -> None:
+    # 25 two-level factors = 2**25 runs, with both `factors` and `levels` inside their limits
+    body = {"factors": [_continuous(f"x{i}", 0, 1) for i in range(25)], "levels": 2}
+    response = client.post("/v1/designs/full-factorial", json=body)
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "limit_exceeded"
+
+
+def test_latin_square_treatments_are_capped_before_generating(client: TestClient) -> None:
+    response = client.post("/v1/designs/latin-square", json={"treatments": 100_000})
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "limit_exceeded"
+
+
+def test_box_behnken_center_is_capped_before_generating(client: TestClient) -> None:
+    body = {"factors": [_continuous(f"x{i}", 0, 1) for i in range(3)], "center": 10**8}
+    response = client.post("/v1/designs/box-behnken", json=body)
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "limit_exceeded"
+
+
+def test_candidate_grid_levels_are_capped_before_generating(client: TestClient) -> None:
+    body = {"factors": [_continuous(f"x{i}", 0, 1) for i in range(8)], "levels": 10}
+    response = client.post("/v1/designs/candidates", json=body)
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "limit_exceeded"
+
+
+def test_blocked_factorial_factor_count_is_capped_before_generating(client: TestClient) -> None:
+    body = {
+        "factors": [_continuous(f"x{i}", 0, 1) for i in range(25)],
+        "block_generators": ["ABC"],
+    }
+    response = client.post("/v1/designs/blocked-factorial", json=body)
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "limit_exceeded"
+
+
+def test_designs_within_the_projected_cap_still_generate(client: TestClient) -> None:
+    # the projection must not reject legitimate requests
+    body = {"factors": [_continuous(f"x{i}", 0, 1) for i in range(3)], "levels": 3}
+    assert client.post("/v1/designs/full-factorial", json=body).status_code == 200
+    assert client.post("/v1/designs/latin-square", json={"treatments": 4}).status_code == 200
+
+
+# --------------------------------------------------------------------------- #
+# max_body_bytes: the cap counts bytes, it does not merely trust Content-Length
+# --------------------------------------------------------------------------- #
+
+
+def test_oversized_chunked_body_without_content_length_is_still_413() -> None:
+    # A chunked request declares no Content-Length, so a header-only check waves it through
+    # and nothing further down the stack bounds what is read into memory.
+    app = create_app(limits=Limits(max_body_bytes=1000))
+
+    def chunks() -> Any:
+        for _ in range(50):
+            yield b"x" * 500  # 25 kB in total, no Content-Length
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/designs/full-factorial",
+            content=chunks(),
+            headers={"content-type": "application/json"},
+        )
+    assert response.status_code == 413, response.text
+    assert response.json()["error"]["code"] == "limit_exceeded"
+
+
+def test_body_within_the_cap_is_served_normally() -> None:
+    app = create_app(limits=Limits(max_body_bytes=100_000))
+    body = {"factors": [_continuous("a", 0, 1)], "levels": 2}
+    with TestClient(app) as client:
+        assert client.post("/v1/designs/full-factorial", json=body).status_code == 200

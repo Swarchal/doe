@@ -99,3 +99,17 @@ def test_categorical_factors_are_rejected(factors):
     for generator in (latin_hypercube, sobol, halton):
         with pytest.raises(ValueError, match="continuous"):
             generator(mixed, n_runs=8)
+
+
+def test_correlation_criterion_needs_at_least_two_factors():
+    # np.corrcoef on a single column returns a 0-d array, so np.fill_diagonal used to fail with
+    # a bare "array must be at least 2-d"; the criterion is meaningless on one factor anyway.
+    factors = [ContinuousFactor("a", 0, 1)]
+    with pytest.raises(ValueError, match="needs at least 2 factors"):
+        latin_hypercube(factors, n_runs=8, criterion="correlation", seed=0)
+
+
+def test_maximin_criterion_still_works_on_one_factor():
+    factors = [ContinuousFactor("a", 0, 1)]
+    design = latin_hypercube(factors, n_runs=8, criterion="maximin", seed=0)
+    assert design.n_runs == 8

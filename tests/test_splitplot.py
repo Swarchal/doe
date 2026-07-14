@@ -225,3 +225,28 @@ def test_fit_gls_requires_whole_plots():
     ).with_response("y", [1.0, 2.0, 3.0, 4.0])
     with pytest.raises(ValueError, match="whole_plots"):
         fit_gls(design, "y")
+
+
+def test_gls_fit_refuses_single_stratum_statistics():
+    # A GLS result inherits the post-fit methods, all of which are built on ONE pooled residual
+    # variance -- on a split-plot fit they would test whole-plot terms against the (much smaller)
+    # sub-plot error, reintroducing the very trap fit_gls exists to remove. They must refuse.
+    design, *_ = _balanced_split_plot()
+    fit = fit_gls(design, "y")
+    for call in (fit.anova, fit.press, fit.predicted_r2, fit.lack_of_fit):
+        with pytest.raises(NotImplementedError):
+            call()
+    with pytest.raises(NotImplementedError):
+        fit.predict({"A": 1.0, "B": 1.0}, interval="confidence")
+    # point prediction has no error stratum in it, so it still works
+    assert np.isfinite(fit.predict({"A": 1.0, "B": 1.0}))
+    # and the two-stratum-aware statistics are unaffected
+    assert np.isfinite(fit.conf_int().loc["A", "lower"])
+
+
+def test_ols_on_the_same_design_still_offers_them():
+    # guard against the refusal above leaking onto ordinary OLS results
+    design, *_ = _balanced_split_plot()
+    fit = fit_ols(design, "y")
+    assert fit.anova().shape[0] > 0
+    assert np.isfinite(fit.press())

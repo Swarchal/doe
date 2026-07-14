@@ -4,10 +4,15 @@ import pytest
 from scipy import stats
 
 from doe.analysis import anova, diagnostics
-from doe.analysis.fit import FitResult, fit_ols
+from doe.analysis.fit import (
+    FitResult,
+    RankDeficientModelError,
+    SaturatedFitWarning,
+    fit_ols,
+)
 from doe.analysis.model import build_model_matrix
 from doe.factors import CategoricalFactor, ContinuousFactor, FactorSet, MixtureFactor
-from doe.generators.factorial import full_factorial
+from doe.generators.factorial import fractional_factorial, full_factorial
 from doe.generators.mixture import simplex_lattice
 from doe.generators.rsm import central_composite
 
@@ -411,3 +416,58 @@ def test_response_name_none_for_array_response():
     design, y = _replicated_design_and_response()
     result = fit_ols(design, y)
     assert result.response_name is None
+
+
+# --------------------------------------------------------------------------- #
+# rank deficiency (an aliased model must not be "fitted" silently)
+# --------------------------------------------------------------------------- #
+
+
+def test_fit_raises_on_aliased_model_rather_than_halving_effects():
+    # A resolution-III fraction aliases C with A:B. Asking for interactions (the *default*)
+    # gives 7 terms for 4 runs: lstsq would return the minimum-norm solution, splitting A's
+    # true effect evenly between A and its alias B:C -- every effect halved, a phantom
+    # interaction, and dof_resid = -3. It must raise instead.
+    factors = FactorSet([ContinuousFactor(n, 0, 1) for n in "ABC"])
+    design = fractional_factorial(factors, generators=["C=AB"])
+    y = 1 + 2 * design.coded()["A"].to_numpy()
+
+    with pytest.raises(RankDeficientModelError, match="exactly aliased"):
+        fit_ols(design, y)  # order=1, interactions=True
+
+
+def test_aliased_model_error_names_the_inestimable_terms():
+    factors = FactorSet([ContinuousFactor(n, 0, 1) for n in "ABC"])
+    design = fractional_factorial(factors, generators=["C=AB"])
+    y = 1 + 2 * design.coded()["A"].to_numpy()
+
+    with pytest.raises(RankDeficientModelError) as exc:
+        fit_ols(design, y)
+    message = str(exc.value)
+    # the two-factor interactions are what this design cannot resolve
+    for term in ("A:B", "A:C", "B:C"):
+        assert term in message
+
+
+def test_correct_model_on_the_same_fraction_recovers_the_true_effect():
+    # the fix must not cost the *estimable* model anything: main effects only, effect = 2 x coef
+    factors = FactorSet([ContinuousFactor(n, 0, 1) for n in "ABC"])
+    design = fractional_factorial(factors, generators=["C=AB"])
+    y = 1 + 2 * design.coded()["A"].to_numpy()
+
+    result = fit_ols(design, y, interactions=False)
+    assert result.summary().loc["A", "effect"] == pytest.approx(4.0)
+    assert result.dof_resid == 0
+
+
+def test_saturated_but_full_rank_model_still_fits():
+    # dof_resid == 0 is saturated, not rank-deficient: it must still fit (with the warning)
+    factors = [ContinuousFactor("a", 0, 10), ContinuousFactor("b", 0, 10)]
+    design = full_factorial(factors, levels=2)
+    coded = design.coded().to_numpy()
+    y = 10 + 3 * coded[:, 0] + 2 * coded[:, 1] + 1.5 * coded[:, 0] * coded[:, 1]
+
+    with pytest.warns(SaturatedFitWarning):
+        result = fit_ols(design, y, order=1, interactions=True)
+    assert result.dof_resid == 0
+    assert result.summary().loc["a", "effect"] == pytest.approx(6.0)

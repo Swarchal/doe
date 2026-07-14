@@ -357,7 +357,7 @@ def test_project_rejects_duplicate_names():
 
 import pandas as pd  # noqa: E402
 
-from doe.design import Design  # noqa: E402
+from doe.design import SCHEMA_VERSION, Design  # noqa: E402
 from doe.factors import FactorSet  # noqa: E402
 
 
@@ -430,3 +430,31 @@ def test_randomize_within_keeps_groups_ordered():
     r = d.randomize(seed=1, within="block")
     # blocks stay contiguous and in original order
     assert r.runs["block"].tolist() == ["B1", "B1", "B2", "B2"]
+
+
+def test_from_dict_keeps_columns_missing_from_the_first_run():
+    # The column list must be the union over all records, not just the first one's keys: a
+    # document whose first run omits a response would otherwise drop it from every run.
+    factors = FactorSet([ContinuousFactor("temperature", 40, 80)])
+    document = {
+        "schema_version": SCHEMA_VERSION,
+        "name": "",
+        **factors.to_dict(),
+        "runs": [
+            {"temperature": 40.0},  # no "yield" here
+            {"temperature": 80.0, "yield": 18.0},
+        ],
+        "point_types": None,
+        "meta": {},
+    }
+    restored = Design.from_dict(document)
+    assert "yield" in restored.runs.columns
+    assert restored.runs["yield"].tolist()[1] == 18.0
+
+
+def test_with_response_refuses_to_overwrite_an_existing_column():
+    factors = FactorSet([ContinuousFactor("temperature", 40, 80)])
+    design = Design(pd.DataFrame({"temperature": [40, 80]}), factors)
+    measured = design.with_response("yield", [12.5, 18.0])
+    with pytest.raises(ValueError, match="already on this design"):
+        measured.with_response("yield", [99.0, 99.0])

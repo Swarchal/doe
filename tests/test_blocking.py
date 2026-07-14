@@ -113,3 +113,33 @@ def test_blocked_factorial_validates():
         blocked_factorial([ContinuousFactor(c, -1, 1) for c in "ab"], block_generators=["XYZ"])
     with pytest.raises(ValueError, match="at least one"):
         blocked_factorial([ContinuousFactor(c, -1, 1) for c in "ab"], block_generators=[])
+
+
+def test_dependent_block_generators_are_rejected():
+    # AB * AC * BC = I, so these three contrasts define 4 blocks, not 2**3 = 8, and the
+    # recorded confounding would under-report what is actually lost.
+    factors = [ContinuousFactor(n, 0, 1) for n in "ABCD"]
+    with pytest.raises(ValueError, match="dependent"):
+        blocked_factorial(factors, block_generators=["AB", "AC", "BC"], seed=0)
+
+
+def test_repeated_block_generator_is_rejected():
+    factors = [ContinuousFactor(n, 0, 1) for n in "ABCD"]
+    with pytest.raises(ValueError, match="dependent"):
+        blocked_factorial(factors, block_generators=["ABC", "ABC"], seed=0)
+
+
+def test_block_generator_with_repeated_letter_is_rejected():
+    # "AAB" computes as A*A*B = B, confounding the *main effect* B with blocks while the
+    # metadata (built from a set, which drops the duplicate) still claims "AB".
+    factors = [ContinuousFactor(n, 0, 1) for n in "ABCD"]
+    with pytest.raises(ValueError, match="repeats factor letter"):
+        blocked_factorial(factors, block_generators=["AAB"], seed=0)
+
+
+def test_independent_block_generators_still_build_the_full_confounding():
+    factors = [ContinuousFactor(n, 0, 1) for n in "ABCD"]
+    design = blocked_factorial(factors, block_generators=["ABC", "ABD"], seed=0)
+    assert len(set(design.runs["block"])) == 4
+    # the generalized interaction ABC * ABD = CD is confounded too, and is recorded
+    assert set(design.meta["confounded_with_blocks"]) == {"ABC", "ABD", "CD"}

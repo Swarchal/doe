@@ -161,6 +161,32 @@ def _generalized_interactions(generator_letter_sets: list[frozenset[str]]) -> li
     return list(dict.fromkeys(confounded))
 
 
+def _require_independent_generators(
+    generators: Sequence[str], generator_letter_sets: Sequence[frozenset[str]]
+) -> None:
+    """Reject block generators that are dependent over GF(2).
+
+    Blocking contrasts multiply like GF(2) vectors (symmetric difference of their letter sets),
+    so a subset whose product is the identity -- ``AB * AC * BC = I``, or a repeated generator --
+    carries no information: those ``q`` generators cut the design into ``2^rank < 2^q`` blocks,
+    and the confounded-effects list built from them under-reports what was actually lost. The
+    subsets are enumerated directly: ``q`` is tiny (``2^q`` blocks must fit the design).
+    """
+    q = len(generator_letter_sets)
+    for r in range(2, q + 1):
+        for combo in itertools.combinations(range(q), r):
+            product: frozenset[str] = frozenset()
+            for i in combo:
+                product = product ^ generator_letter_sets[i]
+            if not product:
+                dependent = [generators[i] for i in combo]
+                raise ValueError(
+                    f"block generators {dependent} are dependent: their product is the identity, "
+                    f"so they define fewer than 2^{q} blocks and the confounded-effect list would "
+                    "under-report what is lost. Supply independent defining contrasts."
+                )
+
+
 def blocked_factorial(
     factors: Sequence[Factor], *, block_generators: Sequence[str], seed: int | None = None
 ) -> Design:
@@ -198,7 +224,7 @@ def blocked_factorial(
     contrasts: list[np.ndarray] = []
     for gen in block_generators:
         col = np.ones(coded.shape[0])
-        letters: set[str] = set()
+        letters: list[str] = []
         for letter in gen:
             try:
                 name = _letter_to_name(letter, fs.names)
@@ -207,9 +233,21 @@ def blocked_factorial(
                     f"block generator {gen!r} names unknown factor {letter!r}"
                 ) from exc
             col = col * coded[:, fs.names.index(name)]
-            letters.add(letter.upper())
+            letters.append(letter.upper())
+        # a repeated letter cancels (+/-1 columns square to 1), so "AAB" would quietly build
+        # the contrast B -- confounding a *main effect* with blocks while the recorded letter
+        # set (a set, so the duplicate vanishes) still claims "AB". Reject the typo.
+        repeated = sorted({letter for letter in letters if letters.count(letter) > 1})
+        if repeated:
+            raise ValueError(
+                f"block generator {gen!r} repeats factor letter(s) {repeated}; coded columns "
+                "are +/-1, so a repeated letter cancels itself out (A*A = 1) and the contrast "
+                "silently collapses to a shorter one"
+            )
         letter_sets.append(frozenset(letters))
         contrasts.append(col)
+
+    _require_independent_generators(list(block_generators), letter_sets)
 
     # each run's sign vector over the q contrasts -> a block index in 0 .. 2^q - 1
     sign_bits = np.column_stack([(c > 0).astype(int) for c in contrasts])

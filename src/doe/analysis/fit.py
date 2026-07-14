@@ -23,6 +23,19 @@ if TYPE_CHECKING:
 ModelSpec = Literal["linear", "quadratic", "scheffe-linear", "scheffe-quadratic"]
 
 
+class RankDeficientModelError(ValueError):
+    """Raised by :func:`fit_ols`/:func:`fit_gls` when the design cannot estimate the model.
+
+    The model matrix has fewer independent columns than terms, so at least one term is an
+    exact linear combination of the others -- a resolution-III fraction fitted with
+    two-factor interactions, say, where a main effect *is* an interaction column. Least
+    squares still returns *a* solution (the minimum-norm one, which splits an aliased
+    effect evenly between the confounded columns), so the failure is silent unless caught
+    here: the reported effects would be a fraction of their true size and phantom terms
+    would appear significant.
+    """
+
+
 class SaturatedFitWarning(UserWarning):
     """Raised by :func:`fit_ols` when a model spends every run on a parameter.
 
@@ -112,10 +125,27 @@ class FitResult:
             )
         return self.design, self.response
 
+    def _require_single_stratum(self, what: str) -> None:
+        """Refuse an OLS-only statistic on a two-stratum (split-plot) fit.
+
+        ``dof_terms`` is set only by :func:`fit_gls`, whose whole-plot and sub-plot errors are
+        separate strata. Every statistic below is built on a *single* pooled residual variance,
+        so on a split-plot fit it would silently test whole-plot terms against the (much smaller)
+        sub-plot error -- reintroducing the exact anticonservative bias ``fit_gls`` exists to
+        remove. Refusing beats answering wrongly.
+        """
+        if self.dof_terms is not None:
+            raise NotImplementedError(
+                f"{what} is not defined for a split-plot (GLS) fit: it assumes one pooled error "
+                "stratum, but this fit has two (whole-plot and sub-plot). Use summary() or "
+                "conf_int(), which honour the per-term degrees of freedom in dof_terms."
+            )
+
     def anova(self) -> pd.DataFrame:
         """Sequential (Type I) ANOVA table for this fit (see :func:`analysis.anova`)."""
         from . import anova
 
+        self._require_single_stratum("anova")
         design, response = self._require_source()
         return anova.anova_table(self, design, response)
 
@@ -123,6 +153,7 @@ class FitResult:
         """Lack-of-fit test against pure error (see :func:`analysis.anova.lack_of_fit`)."""
         from . import anova
 
+        self._require_single_stratum("lack_of_fit")
         design, response = self._require_source()
         return anova.lack_of_fit(self, design, response)
 
@@ -130,12 +161,14 @@ class FitResult:
         """PRESS statistic from leave-one-out residuals (see :func:`analysis.anova.press`)."""
         from . import anova
 
+        self._require_single_stratum("press")
         return anova.press(self)
 
     def predicted_r2(self) -> float:
         """Predicted R-squared / Q-squared (see :func:`analysis.anova.predicted_r2`)."""
         from . import anova
 
+        self._require_single_stratum("predicted_r2")
         return anova.predicted_r2(self)
 
     def adjusted_r2(self) -> float:
@@ -244,6 +277,7 @@ class FitResult:
         level: float,
     ) -> pd.DataFrame:
         """Build the ``fit``/``se``/``lower``/``upper`` band for :meth:`predict`."""
+        self._require_single_stratum("predict(interval=...)")
         if not 0.0 < level < 1.0:
             raise ValueError("level must be between 0 and 1")
         # Var of the mean response at each point: diag(X cov(beta) Xᵀ).
@@ -430,6 +464,37 @@ def _points_to_frame(
     return pd.DataFrame({name: np.broadcast_to(arr, n) for name, arr in arrays.items()})
 
 
+def _check_estimable(x: np.ndarray, term_names: list[str]) -> None:
+    """Raise if the design cannot estimate every model term independently.
+
+    Each column is admitted in model order and the rank is re-checked: a column that does
+    not raise the rank is an exact linear combination of the ones before it, i.e. aliased
+    with them. Reporting *those* columns (rather than a bare "singular matrix") points at
+    the terms to drop -- for a resolution-III fraction they are precisely the interactions
+    the design was never able to resolve.
+    """
+    rank = np.linalg.matrix_rank(x)
+    if rank == x.shape[1]:
+        return
+
+    aliased: list[str] = []
+    kept = 0  # rank of the columns admitted so far
+    for j in range(x.shape[1]):
+        if np.linalg.matrix_rank(x[:, : j + 1]) > kept:
+            kept += 1
+        else:
+            aliased.append(term_names[j])
+
+    n_runs, n_terms = x.shape
+    raise RankDeficientModelError(
+        f"the design cannot estimate this model: the model matrix has {n_terms} terms but "
+        f"rank {rank} ({n_runs} runs), so term(s) {aliased} are exactly aliased with earlier "
+        "terms and their effects cannot be separated. Fit a smaller model (e.g. "
+        "interactions=False for a resolution-III fraction, or order=1 to drop squared terms), "
+        "or run a design that supports the terms you want."
+    )
+
+
 def fit_ols(
     design: Design,
     response: np.ndarray | str,
@@ -520,6 +585,9 @@ def fit_ols(
 
     mm = build_model_matrix(design, order=order, interactions=interactions)
     x = mm.X
+    # lstsq happily returns the minimum-norm solution for an aliased model, splitting a
+    # confounded effect between its aliases instead of failing -- so rule that out first.
+    _check_estimable(x, mm.term_names)
     # least-squares solution of X b = y; in a balanced/orthogonal design the coefficients are
     # exactly the half-effects, but lstsq also handles the non-orthogonal (e.g. CCD) case.
     coef, *_ = np.linalg.lstsq(x, y, rcond=None)
@@ -671,6 +739,7 @@ def fit_gls(
 
     mm = build_model_matrix(design, order=order, interactions=interactions)
     x = mm.X
+    _check_estimable(x, mm.term_names)
     whole_plots = design.whole_plots
 
     sigma2_wp, sigma2, _reml_ll = reml_variance_components(x, y, whole_plots)

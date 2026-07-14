@@ -163,6 +163,18 @@ def fractional_factorial(factors: Sequence[Factor], generators: Sequence[str]) -
         if target in generated_cols:
             raise ValueError(f"duplicate generator for factor {target!r}")
 
+        # a repeated letter would silently cancel: coded columns are +/-1, so A*A = 1 and
+        # "D=AAB" collapses to D = B -- a perfect main-effect confound that looks like a
+        # well-formed design. Reject the typo rather than build the degenerate column.
+        letters = [letter.upper() for letter in rhs]
+        repeated = sorted({letter for letter in letters if letters.count(letter) > 1})
+        if repeated:
+            raise ValueError(
+                f"generator {gen!r} repeats factor letter(s) {repeated} on its right-hand side; "
+                "coded columns are +/-1, so a repeated letter cancels itself out (A*A = 1) and "
+                "the relation silently collapses to a shorter one"
+            )
+
         # build the generated factor's column as the elementwise product of its base columns:
         # this *is* the aliasing relation (e.g. D = A*B*C), so column D and the ABC interaction
         # are numerically identical and their effects are confounded by construction.

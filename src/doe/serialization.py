@@ -37,6 +37,16 @@ def _is_list(value: object) -> TypeGuard[Sequence[Any]]:
     return isinstance(value, Sequence) and not isinstance(value, str | bytes)
 
 
+def _is_number(value: object) -> TypeGuard[int | float]:
+    """A JSON number -- explicitly *not* a boolean.
+
+    ``bool`` subclasses ``int`` in Python, so a plain ``isinstance(value, int | float)`` accepts
+    ``true``/``false`` and would validate ``{"low": false, "high": true}`` as a well-formed
+    continuous factor spanning [0, 1]. JSON booleans are not numbers; reject them here.
+    """
+    return isinstance(value, int | float) and not isinstance(value, bool)
+
+
 def _supported_major(version: object) -> bool:
     """Accept any document whose major schema version matches this build's."""
     if not isinstance(version, str):
@@ -101,7 +111,7 @@ def validate_design_dict(data: Mapping[str, Any], *, check_ranges: bool = False)
         kind = fd.get("type")
         if kind == "continuous":
             low, high = fd.get("low"), fd.get("high")
-            if not isinstance(low, int | float) or not isinstance(high, int | float):
+            if not _is_number(low) or not _is_number(high):
                 errors.append(f"factor {name!r}: continuous 'low'/'high' must be numbers")
             elif high <= low:
                 errors.append(f"factor {name!r}: high ({high}) must exceed low ({low})")
@@ -119,7 +129,7 @@ def validate_design_dict(data: Mapping[str, Any], *, check_ranges: bool = False)
         elif kind == "mixture":
             low = fd.get("low", 0.0)
             high = fd.get("high", 1.0)
-            if not isinstance(low, int | float) or not isinstance(high, int | float):
+            if not _is_number(low) or not _is_number(high):
                 errors.append(f"factor {name!r}: mixture 'low'/'high' must be numbers")
             elif not 0.0 <= low < high <= 1.0:
                 errors.append(
@@ -158,7 +168,7 @@ def validate_design_dict(data: Mapping[str, Any], *, check_ranges: bool = False)
             if fname in categorical_levels and value not in categorical_levels[fname]:
                 errors.append(f"run[{i}] factor {fname!r}: {value!r} is not a declared level")
             elif fname in continuous_bounds:
-                if not isinstance(value, int | float):
+                if not _is_number(value):
                     errors.append(f"run[{i}] factor {fname!r}: {value!r} is not numeric")
                 elif check_ranges:
                     lo, hi = continuous_bounds[fname]

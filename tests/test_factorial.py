@@ -196,3 +196,11 @@ def test_fractional_factorial_spec_regenerates_design():
 def test_plackett_burman_records_generator_spec():
     design = plackett_burman(_factors(7))
     assert design.meta["generator"] == {"name": "plackett_burman", "parameters": {}}
+
+
+def test_generator_with_repeated_letter_is_rejected():
+    # Coded columns are +/-1, so A*A = 1 and "D=AAB" silently collapses to D = B -- a perfect
+    # main-effect confound wearing the shape of a valid design. It must not build.
+    factors = [ContinuousFactor(n, 0, 1) for n in "ABCD"]
+    with pytest.raises(ValueError, match="repeats factor letter"):
+        fractional_factorial(factors, generators=["D=AAB"])

@@ -50,9 +50,11 @@ from doe_service.convert import (
     call_library,
     captured_warnings,
     check_factor_count,
+    check_projected_runs,
     check_run_count,
     check_search_budget,
     design_from_document,
+    full_factorial_runs,
     jsonable,
 )
 from doe_service.convert import region_array as _region_array
@@ -164,10 +166,19 @@ def _search_report_from_meta(meta: Mapping[str, object]) -> SearchReport:
 
 @router.post("/full-factorial")
 def full_factorial(body: FullFactorialRequest) -> DesignResponse:
-    """Wraps ``doe.full_factorial``."""
+    """Wraps ``doe.full_factorial``.
+
+    The run count is the *product* of the per-factor levels, so it is projected and capped
+    before generating: ``max_factors`` (32) and an unbounded ``levels`` otherwise admit
+    requests that exhaust memory long before ``_design_response``'s ``max_runs`` check runs.
+    """
 
     def run() -> Design:
-        return _full_factorial(_factors(body), levels=body.levels)
+        factors = _factors(body)
+        check_projected_runs(
+            full_factorial_runs(factors, body.levels), what="this factor/level combination"
+        )
+        return _full_factorial(factors, levels=body.levels)
 
     with captured_warnings() as warns:
         design = call_library(run)
@@ -179,7 +190,13 @@ def fractional_factorial(body: FractionalFactorialRequest) -> DesignResponse:
     """Wraps ``doe.fractional_factorial``."""
 
     def run() -> Design:
-        return _fractional_factorial(_factors(body), generators=body.generators)
+        factors = _factors(body)
+        # the fraction is the 2**n_base factorial of the base factors (the generated ones are
+        # products of those columns, adding no rows)
+        n_base = len(factors) - len(body.generators)
+        if n_base >= 1:
+            check_projected_runs(2**n_base, what=f"a 2**{n_base} base factorial")
+        return _fractional_factorial(factors, generators=body.generators)
 
     with captured_warnings() as warns:
         design = call_library(run)
@@ -219,8 +236,16 @@ def central_composite(body: CentralCompositeRequest) -> DesignResponse:
     """Wraps ``doe.central_composite``."""
 
     def run() -> Design:
+        # `center` replicates are appended row-for-row, so it alone can exceed the cap; the
+        # factorial core is bounded by max_factors unless a fraction shrinks it further
+        factors = _factors(body)
+        check_projected_runs(body.center, what=f"center={body.center}")
+        if body.fraction is None:
+            check_projected_runs(
+                full_factorial_runs(factors, 2), what="this factor count's factorial core"
+            )
         return _central_composite(
-            _factors(body), alpha=body.alpha, center=body.center, fraction=body.fraction
+            factors, alpha=body.alpha, center=body.center, fraction=body.fraction
         )
 
     with captured_warnings() as warns:
@@ -233,6 +258,8 @@ def box_behnken(body: BoxBehnkenRequest) -> DesignResponse:
     """Wraps ``doe.box_behnken``."""
 
     def run() -> Design:
+        # `center` replicates are appended row-for-row, so it alone can exceed the cap
+        check_projected_runs(body.center, what=f"center={body.center}")
         return _box_behnken(_factors(body), center=body.center)
 
     with captured_warnings() as warns:
@@ -264,7 +291,14 @@ def simplex_lattice(body: SimplexLatticeRequest) -> DesignResponse:
     """Wraps ``doe.simplex_lattice``."""
 
     def run() -> Design:
-        return _simplex_lattice(_factors(body), degree=body.degree)
+        factors = _factors(body)
+        # a {k, m} lattice has C(k + m - 1, m) blends -- combinatorial in the degree
+        if body.degree >= 0:
+            check_projected_runs(
+                math.comb(len(factors) + body.degree - 1, body.degree),
+                what="this component/degree combination",
+            )
+        return _simplex_lattice(factors, degree=body.degree)
 
     with captured_warnings() as warns:
         design = call_library(run)
@@ -314,6 +348,20 @@ def split_plot(body: SplitPlotRequest) -> DesignResponse:
             if isinstance(body.sub_plot_design, str)
             else design_from_document(body.sub_plot_design.model_dump())
         )
+        # the split-plot design crosses the two strata: reps x whole-plot rows x sub-plot rows,
+        # and a "full" stratum is the 2**k factorial of its factors
+        hard = [f for f in factors if getattr(f, "hard_to_change", False)]
+        easy = [f for f in factors if not getattr(f, "hard_to_change", False)]
+        n_whole = full_factorial_runs(hard, 2) if isinstance(whole, str) else whole.n_runs
+        n_sub = full_factorial_runs(easy, 2) if isinstance(sub, str) else sub.n_runs
+        if body.n_whole_plot_reps >= 0:
+            check_projected_runs(
+                body.n_whole_plot_reps * n_whole * n_sub,
+                what=(
+                    f"{body.n_whole_plot_reps} rep(s) x {n_whole} whole plot(s) "
+                    f"x {n_sub} sub-plot run(s)"
+                ),
+            )
         return _split_plot(
             factors,
             whole_plot_design=whole,
@@ -339,8 +387,16 @@ def randomized_complete_block(body: RandomizedCompleteBlockRequest) -> DesignRes
         if body.factors is not None:
             treatments = [factor_schema_to_factor(f) for f in body.factors]
             check_factor_count(treatments)
+            n_treatments = full_factorial_runs(treatments, 2)
         else:
             treatments = cast(int, body.n_treatments)
+            n_treatments = treatments
+        # every treatment is run once per block: t * b runs, both otherwise unbounded
+        if n_treatments >= 0 and body.n_blocks >= 0:
+            check_projected_runs(
+                n_treatments * body.n_blocks,
+                what=f"{n_treatments} treatment(s) x {body.n_blocks} block(s)",
+            )
         return _randomized_complete_block(treatments, n_blocks=body.n_blocks, seed=body.seed)
 
     with captured_warnings() as warns:
@@ -353,6 +409,9 @@ def latin_square(body: LatinSquareRequest) -> DesignResponse:
     """Wraps ``doe.latin_square`` -- a ``treatments x treatments`` square design."""
 
     def run() -> Design:
+        # a t x t square is t**2 runs, and `treatments` is otherwise unbounded
+        if body.treatments >= 0:
+            check_projected_runs(body.treatments**2, what=f"treatments={body.treatments}")
         return _latin_square(body.treatments, seed=body.seed)
 
     with captured_warnings() as warns:
@@ -366,8 +425,13 @@ def blocked_factorial(body: BlockedFactorialRequest) -> DesignResponse:
     the defining ``block_generators``."""
 
     def run() -> Design:
+        factors = _factors(body)
+        # blocking splits a full 2**k factorial; it does not shrink it
+        check_projected_runs(
+            full_factorial_runs(factors, 2), what="this factor count's 2**k factorial"
+        )
         return _blocked_factorial(
-            _factors(body), block_generators=body.block_generators, seed=body.seed
+            factors, block_generators=body.block_generators, seed=body.seed
         )
 
     with captured_warnings() as warns:
@@ -462,8 +526,18 @@ def candidates(body: CandidatesRequest) -> CandidatesResponse:
         fs = FactorSet(factors)
         if fs.is_mixture:
             resolution = body.resolution if body.resolution is not None else 10
+            # a simplex lattice of `resolution` steps over k components has C(res + k - 1, k - 1)
+            # points -- combinatorial in both, so project before building (see /full-factorial)
+            if resolution >= 0:
+                check_projected_runs(
+                    math.comb(resolution + len(factors) - 1, len(factors) - 1),
+                    what="this component/resolution combination",
+                )
             return _mixture_candidates(factors, resolution=resolution), "mixture"
         levels = body.levels if body.levels is not None else 3
+        check_projected_runs(
+            full_factorial_runs(factors, levels), what="this factor/level combination"
+        )
         return _candidate_grid(factors, levels=levels), "grid"
 
     with captured_warnings():
@@ -506,6 +580,12 @@ def replicate(body: ReplicateRequest) -> DesignResponse:
 
     def run() -> Design:
         design = design_from_document(body.design.model_dump())
+        # replication multiplies the posted design's rows, and `n` is otherwise unbounded
+        if body.n >= 0:
+            check_projected_runs(
+                body.n * design.n_runs,
+                what=f"{body.n} replicate(s) of a {design.n_runs}-run design",
+            )
         return design.replicate(body.n, each=body.each)
 
     with captured_warnings() as warns:

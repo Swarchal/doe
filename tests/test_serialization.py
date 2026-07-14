@@ -411,3 +411,32 @@ def test_validate_rejects_misaligned_whole_plots():
     payload["whole_plots"] = [0, 0, 0]
     with pytest.raises(ValidationError, match="whole_plots"):
         validate_design_dict(payload)
+
+
+def test_booleans_are_not_accepted_as_continuous_bounds():
+    # bool subclasses int, so a naive isinstance(v, int | float) would validate {"low": false,
+    # "high": true} as a well-formed continuous factor spanning [0, 1]. JSON booleans are not
+    # numbers.
+    document = {
+        "schema_version": "1.0",
+        "name": "",
+        "factors": [{"type": "continuous", "name": "a", "low": False, "high": True}],
+        "runs": [{"a": 0.5}],
+        "point_types": None,
+        "meta": {},
+    }
+    with pytest.raises(ValidationError, match="must be numbers"):
+        validate_design_dict(document)
+
+
+def test_boolean_run_value_is_not_accepted_as_numeric():
+    document = {
+        "schema_version": "1.0",
+        "name": "",
+        "factors": [{"type": "continuous", "name": "a", "low": 0.0, "high": 1.0}],
+        "runs": [{"a": True}],
+        "point_types": None,
+        "meta": {},
+    }
+    with pytest.raises(ValidationError, match="not numeric"):
+        validate_design_dict(document)

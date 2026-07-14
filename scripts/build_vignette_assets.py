@@ -210,7 +210,9 @@ rng = np.random.default_rng(7)
 true = 50 + 12 * coded[:, 3] + 7 * coded[:, 1]  # compound + serum
 y_screen = np.round(true + rng.normal(0, 0.6, size=true.shape), 1)
 print("\ny_screen:", list(y_screen))
-res_screen = fit_ols(screen, y_screen, model="linear")
+# main effects only: this half-fraction is resolution IV, so its two-factor interactions are
+# aliased in pairs (AB=CD, AC=BD, AD=BC) and cannot be separated -- fit_ols refuses to fit them
+res_screen = fit_ols(screen, y_screen, order=1, interactions=False)
 print("\nscreen effects (|effect|, sorted):")
 order = np.argsort(np.abs(res_screen.effects))[::-1]
 for i in order:

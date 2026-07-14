@@ -14,6 +14,7 @@ import numpy as np
 
 from doe import (
     MODEL_SPECS,
+    CategoricalFactor,
     Design,
     Factor,
     SaturatedFitWarning,
@@ -69,6 +70,44 @@ def check_run_count(n_runs: int, *, limits: Limits = DEFAULT_LIMITS) -> None:
     """
     if n_runs > limits.max_runs:
         raise LimitExceeded(f"too many runs: {n_runs} exceeds the cap of {limits.max_runs}")
+
+
+def check_projected_runs(n_runs: int, *, what: str, limits: Limits = DEFAULT_LIMITS) -> None:
+    """422 ``limit_exceeded`` for a run count *predicted from the request*, before generating.
+
+    :func:`check_run_count` runs on a design that already exists, which is too late for the
+    generators whose run count is exponential in their parameters: ``full_factorial`` over 8
+    factors at 10 levels is 10**8 runs, and the process dies allocating them long before any
+    cap is consulted. The routes that can blow up this way project their run count from the
+    request first and call this, so the cap is enforced against the *intended* design rather
+    than the materialized one. ``what`` names the parameters that drove the projection, so the
+    caller learns which knob to turn down.
+    """
+    if n_runs > limits.max_runs:
+        raise LimitExceeded(
+            f"{what} would produce {n_runs} runs, exceeding the cap of {limits.max_runs}"
+        )
+
+
+def full_factorial_runs(factors: Sequence[Factor], levels: int | Sequence[int]) -> int:
+    """Rows a ``full_factorial`` over these factors/levels would generate (the level product).
+
+    Mirrors ``doe.full_factorial``'s own level resolution: a categorical factor always
+    contributes its own number of levels, whatever ``levels`` says. A malformed ``levels``
+    (wrong length, or a count below 2) projects as ``0`` so the request falls through to the
+    library, whose error message for that is the right one -- this helper exists to catch
+    designs that are *too big*, not to re-validate shape.
+    """
+    per: list[int] = [levels] * len(factors) if isinstance(levels, int) else list(levels)
+    if len(per) != len(factors):
+        return 0
+    total = 1
+    for factor, requested in zip(factors, per, strict=True):
+        count = len(factor.levels) if isinstance(factor, CategoricalFactor) else int(requested)
+        if count < 2:
+            return 0
+        total *= count
+    return total
 
 
 def check_search_budget(

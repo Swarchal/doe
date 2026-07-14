@@ -278,7 +278,7 @@ print(design.coded())
 ```
 
 Eight wells, run once each (no replication — that is the point of a screen). Suppose the
-measured readout came back like this; fit a linear model and rank the effects:
+measured readout came back like this; fit the **main effects** and rank them:
 
 ```python
 import numpy as np
@@ -287,7 +287,7 @@ from doe import fit_ols
 # one viability-proxy readout per run (no replicates -> no residual degrees of
 # freedom for tests; we only need the effect *sizes* to spot the hits)
 y = np.array([31.0, 55.2, 68.8, 44.5, 54.7, 30.4, 45.0, 69.8])
-result = fit_ols(design, y, model="linear")
+result = fit_ols(design, y, order=1, interactions=False)
 
 # rank terms by |effect|
 summary = result.summary()
@@ -297,19 +297,20 @@ for name, row in ranked.iterrows():
         print(f"{name:>28s}: {row['effect']:+.2f}")
 #                 compound_uM: +24.40
 #                   serum_pct: +14.20
-#        dmso_pct:compound_uM: +0.32
-#     seeding_cells:serum_pct: +0.32
-#               seeding_cells: +0.10
 #                    dmso_pct: +0.10
-#   seeding_cells:compound_uM: +0.08
-#          serum_pct:dmso_pct: +0.08
-#       serum_pct:compound_uM: +0.08
-#      seeding_cells:dmso_pct: +0.08
+#               seeding_cells: +0.10
 ```
 
+Note `interactions=False`. Eight runs cannot buy four main effects *and* six two-factor
+interactions: this half-fraction is **resolution IV**, so its interactions are aliased in
+pairs (`A·B` shares a column with `C·D`, and so on) and no arithmetic can separate them. Ask
+for them anyway — `fit_ols(design, y, model="linear")` — and the library raises
+`RankDeficientModelError` naming the terms it cannot estimate, rather than quietly returning
+a table in which each aliased pair has been handed half of the other's effect.
+
 Two effects (`compound_uM`, `serum_pct`) tower over a floor of near-zero terms — those
-near-zero terms are the inert factors and aliased interactions, all just noise. That is the
-signal a half-normal plot is built to make obvious.
+near-zero terms are the inert factors, all just noise. That is the signal a half-normal plot
+is built to make obvious.
 
 The string `"D=ABC"` is the **generator**: it _defines_ the fourth factor's column as the
 product of the first three. That is the price of the fraction — `D`'s main effect shares a
@@ -330,11 +331,10 @@ ax = half_normal_plot(result)   # labelled points; the ones off the line are you
 
 ![Half-normal plot: compound_uM and serum_pct jump off the line; the rest cluster at zero](img/v4_half_normal.png)
 
-`compound_uM` and `serum_pct` sit high and to the right, clearly detached from the dense
-cluster of inert terms hugging the bottom-left (those overlapping labels at |effect| ≈ 0
-are seeding density, DMSO, and every aliased interaction — pure noise). Two real factors
-out of four, found in eight wells. Those are the two to take forward into a response-surface
-study.
+`compound_uM` and `serum_pct` sit high and to the right, clearly detached from the inert
+terms hugging the bottom-left (those overlapping labels at |effect| ≈ 0 are seeding density
+and DMSO — pure noise). Two real factors out of four, found in eight wells. Those are the two
+to take forward into a response-surface study.
 
 ---
 

@@ -27,7 +27,14 @@ from .analysis.diagnostics import (
     maximin_distance,
     vif,
 )
-from .analysis.fit import MODEL_SPECS, FitResult, SaturatedFitWarning, fit_gls, fit_ols
+from .analysis.fit import (
+    MODEL_SPECS,
+    FitResult,
+    RankDeficientModelError,
+    SaturatedFitWarning,
+    fit_gls,
+    fit_ols,
+)
 from .analysis.optimize import (
     DesirabilityResult,
     Optimum,
@@ -92,6 +99,7 @@ __all__ = [
     "OptimalDesign",
     "ResponseGoal",
     "MODEL_SPECS",
+    "RankDeficientModelError",
     "SaturatedFitWarning",
     "StationaryPoint",
     "ValidationError",

@@ -199,6 +199,14 @@ class Design:
         """
         if name in self.factors.names:
             raise ValueError(f"response name {name!r} collides with a factor column")
+        if name in self.runs.columns:
+            # silently replacing a column of measured data is the kind of mistake that only
+            # shows up as a puzzling fit later; make the caller say so explicitly instead
+            raise ValueError(
+                f"a column {name!r} is already on this design; with_response does not overwrite "
+                "measured data -- drop it first (e.g. Design(design.runs.drop(columns=[name]), "
+                "design.factors, ...)) or attach it under a different name"
+            )
         col = np.asarray(values)
         if col.ndim != 1:
             raise ValueError("response values must be one-dimensional")
@@ -476,7 +484,13 @@ class Design:
         """
         factors = FactorSet.from_dict(data)
         records = list(data["runs"])
-        columns = list(records[0].keys()) if records else factors.names
+        # Union of every record's keys, in first-appearance order -- not just the first
+        # record's. A document whose first run happens to omit a column (a response measured
+        # only on later runs, say) would otherwise drop that column from *every* run: silent
+        # data loss on load. Records still missing a key get NaN, as pandas would anyway.
+        columns: list[str] = list(
+            dict.fromkeys(key for record in records for key in record)
+        ) or list(factors.names)
         runs = pd.DataFrame(records, columns=columns)
         point_types = data.get("point_types")
         whole_plots = data.get("whole_plots")
