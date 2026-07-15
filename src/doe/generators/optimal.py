@@ -16,7 +16,9 @@ prediction variance over the region. Generators return a plain :class:`~doe.desi
 from __future__ import annotations
 
 import itertools
-from collections.abc import Sequence
+import os
+from collections.abc import Callable, Sequence
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -169,27 +171,6 @@ def _score_i_optimal(
     return float(np.mean(variances))
 
 
-def _objective_score(
-    coded: np.ndarray,
-    *,
-    criterion: Criterion,
-    factors: FactorSet,
-    region: np.ndarray,
-    order: int,
-    interactions: bool,
-) -> float:
-    if criterion == "D":
-        return _score_d_optimal(
-            coded, factors=factors, region=region, order=order, interactions=interactions
-        )
-    if criterion == "I":
-        score = _score_i_optimal(
-            coded, factors=factors, region=region, order=order, interactions=interactions
-        )
-        return -score if np.isfinite(score) else float("-inf")
-    raise ValueError("criterion must be 'D' or 'I'")
-
-
 def _decode_design(factors: FactorSet, coded: np.ndarray) -> pd.DataFrame:
     columns: dict[str, np.ndarray | list[object]] = {}
     for j, factor in enumerate(factors):
@@ -211,26 +192,201 @@ def _decode_design(factors: FactorSet, coded: np.ndarray) -> pd.DataFrame:
     return pd.DataFrame(columns, index=np.arange(coded.shape[0]))
 
 
-def _initial_design(
-    rng: np.random.Generator,
-    *,
-    region: np.ndarray,
-    fixed: np.ndarray,
-    n_runs: int,
-) -> np.ndarray:
-    n_mutable = n_runs - fixed.shape[0]
-    if n_mutable == 0:
-        return fixed.copy()
+def _fast_objective(
+    criterion: Criterion, f_region: np.ndarray
+) -> Callable[[np.ndarray], float]:
+    """A closure scoring a *precomputed* design model matrix -- the hot-loop objective.
 
-    replace = n_mutable > region.shape[0]
-    idx = rng.choice(region.shape[0], size=n_mutable, replace=replace)
-    mutable = region[idx]
-    return np.vstack([fixed, mutable]) if fixed.size else mutable.copy()
+    The coordinate-exchange sweeps score one candidate replacement at a time, so the model
+    matrix is assembled once (region + fixed rows expanded up front) and each trial only
+    substitutes a single already-expanded row. This closure evaluates the criterion straight
+    from that ``n_runs x n_terms`` block, skipping the per-trial re-expansion of the whole
+    candidate region that dominated the old inner loop. It is numerically identical to scoring
+    the design from scratch: D returns ``log|X^T X|`` (``-inf`` if singular); I returns the
+    negated average prediction variance over ``f_region`` (``-inf`` if singular), so both are
+    maximised.
+    """
+    if criterion == "D":
+
+        def score_d(f_design: np.ndarray) -> float:
+            sign, logdet = np.linalg.slogdet(f_design.T @ f_design)
+            return float(logdet) if sign > 0 else float("-inf")
+
+        return score_d
+
+    def score_i(f_design: np.ndarray) -> float:
+        info = f_design.T @ f_design
+        sign, _ = np.linalg.slogdet(info)
+        if sign <= 0:
+            return float("-inf")
+        try:
+            info_inv = np.linalg.inv(info)
+        except np.linalg.LinAlgError:
+            return float("-inf")
+        variances = np.einsum("ij,jk,ik->i", f_region, info_inv, f_region)
+        return -float(np.mean(variances))
+
+    return score_i
+
+
+def _row_logdets_d(info: np.ndarray, a: np.ndarray, f_region: np.ndarray) -> np.ndarray | None:
+    """``log|X^T X|`` for *every* candidate in one shot, via the rank-1 determinant lemma.
+
+    A coordinate exchange at one run swaps that run's model vector out (``a``) and a candidate
+    ``b`` in, so the information matrix goes ``M -> M - aa^T + bb^T``. Writing
+    ``M_minus = M - aa^T`` (the design *without* the swept run -- a Gram matrix, hence positive
+    semidefinite) the matrix determinant lemma gives a closed form that shares ``M_minus`` across
+    all candidates::
+
+        log|M_minus + bb^T| = log|M_minus| + log(1 + b^T M_minus^{-1} b).
+
+    So one Cholesky + one inverse of ``M_minus`` (both ``O(p^3)``, done once per run) plus a
+    single vectorised quadratic form over ``f_region`` replaces the ``n_candidates`` separate
+    ``slogdet`` calls the naive sweep makes. Because ``M_minus`` is PD its inverse is PD, so
+    ``b^T M_minus^{-1} b >= 0`` and every returned value is finite and real.
+
+    Returns the ``(n_candidates,)`` vector of full ``log|X^T X|`` scores, or ``None`` when
+    ``M_minus`` is not positive definite (a rank-deficient partial design -- common on random
+    starts); the caller then falls back to the exact per-candidate ``slogdet`` path. The result
+    is the D-optimality objective, mathematically identical to scoring each candidate from
+    scratch.
+    """
+    m_minus = info - np.outer(a, a)
+    try:
+        chol = np.linalg.cholesky(m_minus)
+    except np.linalg.LinAlgError:
+        return None
+    # Cholesky can slip past a *numerically* rank-deficient M_minus (e.g. a saturated design
+    # that loses rank when a run is removed) with a tiny positive pivot, yielding a garbage
+    # inverse. Gate on the pivot spread: a ratio this small means condition number > ~1e16,
+    # i.e. effectively singular -> None -> the caller's exact per-candidate fallback, which
+    # also explores such rows more thoroughly than a rank-1 shortcut could.
+    diag = np.diagonal(chol)
+    if float(diag.min()) <= 1e-6 * float(diag.max()):
+        return None
+    g = np.linalg.inv(m_minus)
+    logdet_minus = 2.0 * float(np.sum(np.log(diag)))
+    quad = np.einsum("ij,jk,ik->i", f_region, g, f_region)
+    return np.asarray(logdet_minus + np.log1p(quad), dtype=float)
 
 
 # --------------------------------------------------------------------------- #
 # 2.2 Coordinate-exchange engine
 # --------------------------------------------------------------------------- #
+
+
+def _run_restart(
+    rng: np.random.Generator,
+    *,
+    region: np.ndarray,
+    f_region: np.ndarray,
+    f_fixed: np.ndarray,
+    fixed: np.ndarray,
+    criterion: Criterion,
+    n_runs: int,
+    first_mutable: int,
+    n_mutable: int,
+    max_iter: int,
+    tol: float,
+) -> tuple[float, np.ndarray, bool]:
+    """One coordinate-exchange restart: random start, sweep to convergence, return the result.
+
+    Pure in ``rng`` -- the only source of randomness is the initial draw of mutable rows, so a
+    restart is fully determined by the generator it is handed. Returns
+    ``(score, coded_design, converged)``; the caller keeps the best across restarts. Factored out
+    of :func:`coordinate_exchange` so restarts can run independently, in-process (sequential) or
+    across worker processes (``n_jobs``).
+    """
+    score_fn = _fast_objective(criterion, f_region)
+
+    # Draw the mutable rows as region indices, then carry the coded points and their model rows
+    # together (the model rows are the once-expanded region, indexed -- never re-expanded).
+    current = np.empty((n_runs, region.shape[1]), dtype=float)
+    f_current = np.empty((n_runs, f_region.shape[1]), dtype=float)
+    if first_mutable:
+        current[:first_mutable] = fixed
+        f_current[:first_mutable] = f_fixed
+    if n_mutable:
+        replace = n_mutable > region.shape[0]
+        idx = rng.choice(region.shape[0], size=n_mutable, replace=replace)
+        current[first_mutable:] = region[idx]
+        f_current[first_mutable:] = f_region[idx]
+
+    current_score = score_fn(f_current)
+    # D-optimality scores every candidate for a run with one rank-1 determinant update (see
+    # _row_logdets_d), so it keeps the running information matrix M = X^T X. Other criteria (I)
+    # score from scratch per candidate and don't need M.
+    info = f_current.T @ f_current if criterion == "D" else None
+    converged = False
+
+    for _iteration in range(max_iter):
+        improved = False
+        for row in range(first_mutable, n_runs):
+            logdets = (
+                _row_logdets_d(info, f_current[row], f_region) if info is not None else None
+            )
+            if logdets is not None:
+                # Vectorised rank-1 path: pick the best candidate from one score vector.
+                best_cand = int(np.argmax(logdets))
+                row_best_score = float(logdets[best_cand])
+                if row_best_score > current_score + tol:
+                    f_current[row] = f_region[best_cand]
+                    current[row] = region[best_cand]
+                    info = f_current.T @ f_current  # refresh exactly (no drift)
+                    current_score = float(np.linalg.slogdet(info)[1])
+                    improved = True
+                continue
+
+            # Fallback: exact per-candidate scoring (I-optimality, or a rank-deficient partial
+            # design where the rank-1 update is undefined).
+            row_orig = f_current[row].copy()
+            best_cand = -1
+            row_best_score = current_score
+            for cand in range(region.shape[0]):
+                f_current[row] = f_region[cand]
+                score = score_fn(f_current)
+                if score > row_best_score + tol:
+                    best_cand = cand
+                    row_best_score = score
+
+            if best_cand >= 0 and row_best_score > current_score + tol:
+                f_current[row] = f_region[best_cand]
+                current[row] = region[best_cand]
+                if info is not None:
+                    info = f_current.T @ f_current
+                current_score = row_best_score
+                improved = True
+            else:
+                f_current[row] = row_orig  # no improvement: restore the original row
+
+        if not improved:
+            converged = True
+            break
+
+    return current_score, current, converged
+
+
+# Worker-process plumbing for parallel restarts. The read-only arrays/scalars a restart needs
+# are shipped to each worker exactly once via the pool initializer (not re-pickled per task);
+# each task then only carries a spawned seed.
+_RESTART_CTX: dict[str, Any] = {}
+
+
+def _restart_pool_init(ctx: dict[str, Any]) -> None:
+    _RESTART_CTX.clear()
+    _RESTART_CTX.update(ctx)
+
+
+def _restart_pool_task(seed_seq: np.random.SeedSequence) -> tuple[float, np.ndarray, bool]:
+    return _run_restart(np.random.default_rng(seed_seq), **_RESTART_CTX)
+
+
+def _resolve_workers(n_jobs: int, *, n_restarts: int) -> int:
+    """Number of worker processes for ``n_jobs`` (``-1`` == all cores), capped at ``n_restarts``."""
+    if n_jobs == 0 or n_jobs < -1:
+        raise ValueError("n_jobs must be a positive integer, or -1 for all cores")
+    workers = (os.cpu_count() or 1) if n_jobs < 0 else n_jobs
+    return max(1, min(workers, n_restarts))
 
 
 @dataclass(frozen=True)
@@ -261,17 +417,22 @@ def coordinate_exchange(
     seed: int | None = None,
     fixed_runs: np.ndarray | None = None,
     max_iter: int = 100,
+    n_jobs: int = 1,
 ) -> OptimalDesign:
     """Build an optimal design by coordinate exchange (Meyer-Nachtsheim).
 
     Seeds an ``n_runs x k`` start of feasible coded points (for augmentation the first
     ``len(fixed_runs)`` rows are ``fixed_runs`` and are never exchanged), then repeatedly tries
-    every discrete candidate replacement for each mutable run. Each trial recomputes
-    ``log|X^T X|`` from scratch with :func:`numpy.linalg.slogdet` through
-    :func:`doe.analysis.diagnostics.log_det_information`; this is intentionally simple and
-    correctness-first before adding determinant-update shortcuts. Sweeps iterate to convergence
-    (or ``max_iter``); the whole search restarts ``n_restarts`` times from fresh random starts
-    and keeps the best, guarding against local optima.
+    every discrete candidate replacement for each mutable run. Two layers of speedup keep the
+    result numerically identical to a from-scratch refit: (1) the candidate region (and any
+    fixed rows) is expanded into model rows *once*, up front, so a trial only substitutes a
+    single already-expanded row; (2) for ``criterion="D"`` all candidates for a run are scored
+    together by a rank-1 determinant update (:func:`_row_logdets_d`) -- one Cholesky + inverse
+    of the run-deleted information matrix instead of an :func:`numpy.linalg.slogdet` per
+    candidate -- with an exact per-candidate fallback whenever that partial design is
+    rank-deficient. Sweeps iterate to convergence (or ``max_iter``); the whole search restarts
+    ``n_restarts`` times from fresh random starts and keeps the best, guarding against local
+    optima.
 
     ``model`` selects the term set (``"linear"``/``"quadratic"``); ``region`` is an explicit
     candidate set (defaults to :func:`candidate_grid`, or to
@@ -281,6 +442,18 @@ def coordinate_exchange(
     The seed actually used is recorded in ``meta["seed"]`` -- when ``seed`` is ``None`` a
     concrete one is drawn first (as :meth:`doe.Design.randomize` does), so a serialized
     optimal design can always regenerate its search.
+
+    ``n_jobs`` runs the (independent) restarts in parallel across worker processes -- ``1``
+    (default) stays single-process, ``-1`` uses all cores, ``k`` uses ``k`` (capped at
+    ``n_restarts``). This is an opt-in speedup for *large* searches (many factors/candidates,
+    high ``n_restarts``); for quick searches the process start-up and pickling overhead outweighs
+    the gain, so leave it at ``1``. The parallel path seeds each restart from an independent child
+    stream, so its result depends only on ``(seed, n_restarts)`` and is identical whatever
+    ``n_jobs > 1`` you pick -- but it is *not* the same design the single-process default produces
+    for that seed (the two seed their restarts differently, both fully reproducible). Prefer
+    running one large ``n_jobs`` search over many concurrent single-job calls, and note the
+    ``doe-service`` HTTP endpoints deliberately do not expose ``n_jobs`` (a request must not fan
+    out across the server's cores).
     """
     if criterion not in {"D", "I"}:
         raise ValueError("criterion must be 'D' or 'I'")
@@ -290,6 +463,8 @@ def coordinate_exchange(
         raise ValueError("n_restarts must be positive")
     if max_iter < 1:
         raise ValueError("max_iter must be positive")
+    if n_jobs == 0 or n_jobs < -1:
+        raise ValueError("n_jobs must be a positive integer, or -1 for all cores")
 
     fs = FactorSet(factors)
     n_factors = len(fs)
@@ -309,57 +484,67 @@ def coordinate_exchange(
     if n_runs < n_terms:
         raise ValueError(f"n_runs={n_runs} cannot estimate the {n_terms}-term {model!r} model")
 
+    # Expand the candidate region (and any fixed rows) into model rows ONCE, up front. Every
+    # design row the search ever holds is either a fixed row or a region candidate, so a trial
+    # only ever substitutes one already-expanded row -- no per-trial re-expansion of the whole
+    # region (the old inner loop's dominant cost). Fixed rows are stacked with the region before
+    # expansion so the squared-term heuristic sees the same value union the old code did (design
+    # rows are drawn from the region, so their value set is a subset), keeping the term layout --
+    # and therefore the scores -- identical.
+    stacked = np.vstack([fixed, region]) if fixed.size else region
+    f_all = expand_coded_points(stacked, fs, order=order, interactions=interactions).X
+    f_fixed = f_all[: fixed.shape[0]]
+    f_region = f_all[fixed.shape[0] :]
+
     # resolve an unset seed to a concrete drawn value (as Design.randomize does) so the
     # search recorded in meta is always regenerable from a serialized design.
     seed = _draw_seed(seed)
-    rng = np.random.default_rng(seed)
     first_mutable = fixed.shape[0]
+    n_mutable = n_runs - first_mutable
+    tol = 1e-12
+    restart_kwargs: dict[str, Any] = {
+        "region": region,
+        "f_region": f_region,
+        "f_fixed": f_fixed,
+        "fixed": fixed,
+        "criterion": criterion,
+        "n_runs": n_runs,
+        "first_mutable": first_mutable,
+        "n_mutable": n_mutable,
+        "max_iter": max_iter,
+        "tol": tol,
+    }
+
+    if n_jobs == 1:
+        # Sequential: one shared generator drawn restart-by-restart (bit-identical to the
+        # single-process engine). This is the default and the reproducibility contract.
+        rng = np.random.default_rng(seed)
+        results = [_run_restart(rng, **restart_kwargs) for _ in range(n_restarts)]
+    else:
+        # Parallel restarts. Each restart is seeded by an independent child stream spawned from
+        # the master seed, so the outcome depends only on (seed, n_restarts) -- never on the
+        # worker count or completion order. (This seeding differs from the sequential path, so a
+        # given seed maps to a different -- but equally valid and fully reproducible -- design.)
+        child_seeds = np.random.SeedSequence(seed).spawn(n_restarts)
+        workers = _resolve_workers(n_jobs, n_restarts=n_restarts)
+        if workers == 1:
+            results = [
+                _run_restart(np.random.default_rng(s), **restart_kwargs) for s in child_seeds
+            ]
+        else:
+            with ProcessPoolExecutor(
+                max_workers=workers,
+                initializer=_restart_pool_init,
+                initargs=(restart_kwargs,),
+            ) as executor:
+                results = list(executor.map(_restart_pool_task, child_seeds))
+
+    # Keep the best restart, preferring the earliest on ties (matches the sequential tie-break
+    # and is independent of the order restarts actually finished in).
     best_design: np.ndarray | None = None
     best_score = float("-inf")
     best_converged = False
-    tol = 1e-12
-
-    for _restart in range(n_restarts):
-        current = _initial_design(rng, region=region, fixed=fixed, n_runs=n_runs)
-        current_score = _objective_score(
-            current,
-            criterion=criterion,
-            factors=fs,
-            region=region,
-            order=order,
-            interactions=interactions,
-        )
-        converged = False
-
-        for _iteration in range(max_iter):
-            improved = False
-            for row in range(first_mutable, n_runs):
-                row_best = current[row].copy()
-                row_best_score = current_score
-                for candidate in region:
-                    trial = current.copy()
-                    trial[row] = candidate
-                    score = _objective_score(
-                        trial,
-                        criterion=criterion,
-                        factors=fs,
-                        region=region,
-                        order=order,
-                        interactions=interactions,
-                    )
-                    if score > row_best_score + tol:
-                        row_best = candidate.copy()
-                        row_best_score = score
-
-                if row_best_score > current_score + tol:
-                    current[row] = row_best
-                    current_score = row_best_score
-                    improved = True
-
-            if not improved:
-                converged = True
-                break
-
+    for current_score, current, converged in results:
         if current_score > best_score + tol:
             best_design = current.copy()
             best_score = current_score

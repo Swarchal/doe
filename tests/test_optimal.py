@@ -191,6 +191,51 @@ def test_unseeded_search_records_a_concrete_reusable_seed():
 
 
 # --------------------------------------------------------------------------- #
+# Parallel restarts (opt-in n_jobs)
+# --------------------------------------------------------------------------- #
+
+
+def test_parallel_restarts_are_deterministic_and_worker_count_independent():
+    # The parallel path seeds each restart from an independent child stream, so the result
+    # depends only on (seed, n_restarts) -- identical whatever n_jobs > 1 is chosen, and stable
+    # across runs (never a function of which worker finished first).
+    kw = dict(n_runs=15, model="quadratic", criterion="D", seed=3, n_restarts=8)
+    a = coordinate_exchange(_factors(3), n_jobs=2, **kw)
+    b = coordinate_exchange(_factors(3), n_jobs=4, **kw)
+    c = coordinate_exchange(_factors(3), n_jobs=-1, **kw)
+    assert np.allclose(a.design.coded().to_numpy(), b.design.coded().to_numpy())
+    assert np.allclose(a.design.coded().to_numpy(), c.design.coded().to_numpy())
+    assert a.score == pytest.approx(b.score) == pytest.approx(c.score)
+
+
+def test_parallel_restarts_report_a_valid_from_scratch_score():
+    # Whatever local optimum the parallel search keeps, its reported score must equal a
+    # from-scratch refit of that design (same invariant as the sequential engine).
+    factors = _factors(3)
+    result = coordinate_exchange(
+        factors, n_runs=15, model="quadratic", criterion="D", seed=5, n_restarts=8, n_jobs=2
+    )
+    assert result.score == pytest.approx(_log_det(result.design, order=2, interactions=True))
+    # a parallel search finds a design at least as good as a single restart from the same seed
+    solo = coordinate_exchange(
+        factors, n_runs=15, model="quadratic", criterion="D", seed=5, n_restarts=1, n_jobs=2
+    )
+    assert result.score >= solo.score - 1e-9
+
+
+def test_n_jobs_forwarded_through_wrappers():
+    a = d_optimal(_factors(3), n_runs=15, model="quadratic", seed=1, n_restarts=6, n_jobs=2)
+    b = d_optimal(_factors(3), n_runs=15, model="quadratic", seed=1, n_restarts=6, n_jobs=3)
+    assert np.allclose(a.coded().to_numpy(), b.coded().to_numpy())
+
+
+@pytest.mark.parametrize("bad", [0, -2, -5])
+def test_coordinate_exchange_rejects_invalid_n_jobs(bad):
+    with pytest.raises(ValueError, match="n_jobs"):
+        coordinate_exchange(_factors(2), n_runs=9, model="quadratic", n_jobs=bad)
+
+
+# --------------------------------------------------------------------------- #
 # I-optimal
 # --------------------------------------------------------------------------- #
 

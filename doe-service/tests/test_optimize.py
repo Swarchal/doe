@@ -16,7 +16,15 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
-from doe import ContinuousFactor, Design, FactorSet, central_composite, full_factorial
+from doe import (
+    CategoricalFactor,
+    ContinuousFactor,
+    Design,
+    FactorSet,
+    central_composite,
+    coordinate_exchange,
+    full_factorial,
+)
 from doe_service.limits import DEFAULT_LIMITS
 from doe_service.main import create_app
 
@@ -332,6 +340,12 @@ def test_mixture_design_is_infeasible_not_a_server_error() -> None:
             "model": "scheffe-quadratic",
             "maximize": True,
         },
+        "/v1/optimize/categorical-optimum": {
+            "design": design,
+            "response": "y",
+            "model": "scheffe-quadratic",
+            "maximize": True,
+        },
         "/v1/optimize/desirability": {
             "design": design,
             "goals": [
@@ -349,3 +363,77 @@ def test_mixture_design_is_infeasible_not_a_server_error() -> None:
         response = client.post(path, json=body)
         assert response.status_code == 422, f"{path}: {response.status_code} {response.text}"
         assert response.json()["error"]["code"] == "infeasible", path
+
+
+# --------------------------------------------------------------------------- #
+# categorical-optimum: the mixed continuous/categorical optimum
+# --------------------------------------------------------------------------- #
+
+
+def _mixed_design_with_response() -> dict:
+    """A D-optimal design over two continuous + one categorical factor, with a known
+    quadratic response peaking at temp=68.75, time=9.0, catalyst='B' (value 80.6875)."""
+    factors = [
+        ContinuousFactor("temp", 20.0, 80.0),
+        ContinuousFactor("time", 2.0, 10.0),
+        CategoricalFactor("catalyst", ("A", "B")),
+    ]
+    design = coordinate_exchange(factors, n_runs=16, model="quadratic", seed=0).design
+
+    def response(row: object) -> float:
+        t = (row["temp"] - 50.0) / 30.0  # type: ignore[index]
+        m = (row["time"] - 6.0) / 4.0  # type: ignore[index]
+        bump = 8.0 if row["catalyst"] == "B" else 0.0  # type: ignore[index]
+        return 70.0 + 5.0 * t + 3.0 * m - 4.0 * t**2 - 2.0 * m**2 + bump
+
+    y = [response(row) for _, row in design.runs.iterrows()]
+    return design.with_response("yield", y).to_dict()
+
+
+def test_categorical_optimum_returns_exact_mixed_optimum(client: TestClient) -> None:
+    design = _mixed_design_with_response()
+    response = client.post(
+        "/v1/optimize/categorical-optimum",
+        json={"design": design, "response": "yield", "model": "quadratic", "maximize": True},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    assert body["levels"] == {"catalyst": "B"}
+    assert body["settings"]["catalyst"] == "B"
+    assert body["settings"]["temp"] == pytest.approx(68.75, abs=1e-2)
+    assert body["settings"]["time"] == pytest.approx(9.0, abs=1e-2)
+    assert body["response"] == pytest.approx(80.6875, abs=1e-2)
+    assert body["at_bound"] is False
+
+
+def test_categorical_optimum_accepts_all_continuous_fit(client: TestClient) -> None:
+    """An all-continuous design is accepted too (empty ``levels``), so a caller need not
+    know in advance whether the design has a categorical factor."""
+    design = _workflow_design().to_dict()
+    response = client.post(
+        "/v1/optimize/categorical-optimum",
+        json={"design": design, "response": "yield_pct", "model": "quadratic", "maximize": True},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["levels"] == {}
+    assert set(body["settings"]) == {"temperature", "time", "catalyst"}
+
+
+def test_categorical_optimum_honours_continuous_bounds(client: TestClient) -> None:
+    design = _mixed_design_with_response()
+    response = client.post(
+        "/v1/optimize/categorical-optimum",
+        json={
+            "design": design,
+            "response": "yield",
+            "model": "quadratic",
+            "maximize": True,
+            "bounds": {"temp": [20.0, 60.0]},  # cap below the unconstrained optimum (68.75)
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["settings"]["temp"] == pytest.approx(60.0, abs=1e-2)
+    assert body["at_bound"] is True

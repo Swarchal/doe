@@ -56,7 +56,10 @@ parameter caps enforced across every endpoint and a golden request/response cont
 test per spec example (`docs/WEBSERVICE_BUILD.md`, all six milestones done). The Phase 5
 generators/analysis have service endpoints too: `POST /v1/designs/split-plot`,
 `/randomized-complete-block`, `/latin-square`, `/blocked-factorial`, and
-`POST /v1/analysis/fit-gls` (the REML/GLS split-plot fit). Categorical DSDs need no new
+`POST /v1/analysis/fit-gls` (the REML/GLS split-plot fit). `POST
+/v1/optimize/categorical-optimum` optimizes the continuous factors exactly within each
+combination of categorical levels (the mixed-factor optimum `/optimize/optimum` can't
+search), wrapping the library's `categorical_optimum`. Categorical DSDs need no new
 route — `/v1/designs/definitive-screening` forwards the factor list, so it builds the
 Jones–Nachtsheim categorical augment for free. The split-plot wire additions
 (`hard_to_change` on a factor, `whole_plots` on a design) are emitted **only when set**,
@@ -188,6 +191,11 @@ consumes one.
   `−½ B⁻¹ b` + canonical eigen-analysis (max/min/saddle); `optimum` does a constrained multistart
   `L-BFGS-B` search over the coded box (reports `at_bound`); `desirability` maximizes a
   Derringer–Suich geometric-mean `D` over `ResponseGoal`s via `differential_evolution`.
+  `categorical_optimum` (returning a `CategoricalOptimum`) handles a *mixed*
+  continuous/categorical fit that `optimum` rejects: for each combination of the categorical
+  factors' levels it folds those contrast columns into the continuous quadratic form
+  (`_fold_quadratic_form`) and runs the same `optimum` search, keeping the best — so the
+  continuous settings are exact, not grid-snapped, and `levels` names the winning level(s).
 - `plotting.py` — effect plots (`pareto_plot`, `main_effects_plot`, `half_normal_plot`,
   `interaction_plot` over its headless `interaction_lines`), RSM (`contour_plot` + 3-D
   `surface_plot` over their headless core `surface_grid`, which takes `fixed={factor: value}` to

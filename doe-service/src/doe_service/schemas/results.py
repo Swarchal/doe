@@ -11,7 +11,7 @@ these models only *declare* them for OpenAPI. Milestone 3 (analysis router) adds
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -398,6 +398,50 @@ class OptimumResponse(BaseModel):
         }
     )
 
+    natural: dict[str, float]
+    coded: list[float]
+    response: float
+    maximize: bool
+    at_bound: bool
+    response_name: str | None
+    warnings: list[str] = []
+
+
+# --------------------------------------------------------------------------- #
+# /v1/optimize/categorical-optimum
+# --------------------------------------------------------------------------- #
+
+
+class CategoricalOptimumResponse(BaseModel):
+    """``POST /v1/optimize/categorical-optimum`` response -- ``CategoricalOptimum.to_dict()``
+    plus ``warnings``.
+
+    Unlike ``/optimum``, this handles a categorical factor: it names the winning ``levels``
+    and reports the *exactly*-optimized continuous settings within them. ``settings`` merges
+    both into one factor->value mapping (categorical entries are level labels, hence
+    ``dict[str, Any]``); ``natural``/``coded`` cover the continuous factors only.
+    """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "settings": {"temp": 68.75, "time": 9.0, "catalyst": "B"},
+                    "levels": {"catalyst": "B"},
+                    "natural": {"temp": 68.75, "time": 9.0},
+                    "coded": [0.625, 0.75],
+                    "response": 80.6875,
+                    "maximize": True,
+                    "at_bound": False,
+                    "response_name": "yield",
+                    "warnings": [],
+                }
+            ]
+        }
+    )
+
+    settings: dict[str, Any]
+    levels: dict[str, str]
     natural: dict[str, float]
     coded: list[float]
     response: float

@@ -36,10 +36,12 @@ from .analysis.fit import (
     fit_ols,
 )
 from .analysis.optimize import (
+    CategoricalOptimum,
     DesirabilityResult,
     Optimum,
     ResponseGoal,
     StationaryPoint,
+    categorical_optimum,
     desirability,
     optimum,
     stationary_point,
@@ -95,6 +97,7 @@ __all__ = [
     "FitResult",
     "LackOfFit",
     "MixtureFactor",
+    "CategoricalOptimum",
     "Optimum",
     "OptimalDesign",
     "ResponseGoal",
@@ -136,6 +139,7 @@ __all__ = [
     "log_det_information",
     "maximin_distance",
     "mixture_candidates",
+    "categorical_optimum",
     "optimum",
     "plackett_burman",
     "predicted_r2",

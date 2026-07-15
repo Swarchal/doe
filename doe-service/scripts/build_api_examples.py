@@ -158,6 +158,27 @@ FIT_DESIGN = pair_request("fit")["design"]
 DESIRABILITY_REQ = pair_request("desirability")
 
 
+def build_mixed_design() -> dict[str, Any]:
+    """A D-optimal design over two continuous + one categorical factor with a synthetic
+    quadratic response, for the mixed categorical-optimum example."""
+    factors = [
+        {"type": "continuous", "name": "temp", "low": 20, "high": 80, "units": "C"},
+        {"type": "continuous", "name": "time", "low": 2, "high": 10, "units": "min"},
+        {"type": "categorical", "name": "catalyst", "levels": ["A", "B"]},
+    ]
+    gen = client.post(
+        "/v1/designs/optimal",
+        json={"factors": factors, "n_runs": 16, "model": "quadratic", "seed": 0},
+    ).json()["design"]
+    # Concave surface peaking at temp=68.75, time=9.0, with catalyst "B" adding a flat +8.
+    for run in gen["runs"]:
+        t = (run["temp"] - 50) / 30
+        m = (run["time"] - 6) / 4
+        bump = 8.0 if run["catalyst"] == "B" else 0.0
+        run["yield"] = round(70 + 5 * t + 3 * m - 4 * t**2 - 2 * m**2 + bump, 3)
+    return gen
+
+
 def build_scheffe_design() -> dict[str, Any]:
     """A 3-component extreme-vertices mixture design with a synthetic blend response,
     for the Scheffé fit / ternary examples."""
@@ -583,6 +604,17 @@ example(
     "flags when the optimum sits on a constraint.",
     "/v1/optimize/optimum",
     {"design": FIT_DESIGN, "response": "yield", "model": "quadratic", "maximize": True},
+)
+
+MIXED_DESIGN = build_mixed_design()
+example(
+    "Mixed continuous/categorical optimum",
+    "`/optimum` has no coded box for a categorical factor. This optimizes the continuous "
+    "factors *exactly* within each combination of categorical levels and returns the best; "
+    "`levels` names the winning level(s) and `settings` merges them with the continuous "
+    "values. An all-continuous fit is accepted too (empty `levels`).",
+    "/v1/optimize/categorical-optimum",
+    {"design": MIXED_DESIGN, "response": "yield", "model": "quadratic", "maximize": True},
 )
 
 example(

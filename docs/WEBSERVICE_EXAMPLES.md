@@ -3235,6 +3235,112 @@ curl -s -X POST http://localhost:8000/v1/optimize/optimum \
 }
 ```
 
+### Mixed continuous/categorical optimum
+
+`/optimum` has no coded box for a categorical factor. This optimizes the continuous factors *exactly* within each combination of categorical levels and returns the best; `levels` names the winning level(s) and `settings` merges them with the continuous values. An all-continuous fit is accepted too (empty `levels`).
+
+```bash
+curl -s -X POST http://localhost:8000/v1/optimize/categorical-optimum \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "design": {
+    "schema_version": "1.0",
+    "name": "d_optimal_quadratic",
+    "factors": [
+      {
+        "type": "continuous",
+        "name": "temp",
+        "low": 20.0,
+        "high": 80.0,
+        "units": "C"
+      },
+      {
+        "type": "continuous",
+        "name": "time",
+        "low": 2.0,
+        "high": 10.0,
+        "units": "min"
+      },
+      {
+        "type": "categorical",
+        "name": "catalyst",
+        "levels": [
+          "A",
+          "B"
+        ],
+        "units": null
+      }
+    ],
+    "runs": [
+      {
+        "temp": 20.0,
+        "time": 10.0,
+        "catalyst": "B",
+        "yield": 70.0
+      },
+      {
+        "temp": 20.0,
+        "time": 6.0,
+        "catalyst": "B",
+        "yield": 69.0
+      },
+      {
+        "temp": 20.0,
+        "time": 10.0,
+        "catalyst": "A",
+        "yield": 62.0
+      },
+      "… 13 more"
+    ],
+    "point_types": null,
+    "meta": {
+      "criterion": "D",
+      "score": 19.77374025523943,
+      "d_efficiency": 0.5624199468978253,
+      "n_restarts": 20,
+      "seed": 0,
+      "model": "quadratic",
+      "order": 2,
+      "interactions": true,
+      "converged": true
+    }
+  },
+  "response": "yield",
+  "model": "quadratic",
+  "maximize": true
+}'
+```
+
+> `design.runs` is abbreviated above for readability — POST the full design document (any generation response, or the one shown under [Attach responses](#attach-responses)).
+
+`200`
+
+```json
+{
+  "settings": {
+    "temp": 68.74999999999983,
+    "time": 8.999999999999973,
+    "catalyst": "B"
+  },
+  "levels": {
+    "catalyst": "B"
+  },
+  "natural": {
+    "temp": 68.74999999999983,
+    "time": 8.999999999999973
+  },
+  "coded": [
+    0.6249999999999943,
+    0.7499999999999932
+  ],
+  "response": 80.68750000000007,
+  "maximize": true,
+  "at_bound": false,
+  "response_name": "yield",
+  "warnings": []
+}
+```
+
 ### Desirability (multi-response)
 
 Derringer–Suich geometric-mean desirability across several goals (`max`/`min`/`target`), each re-fit on the shared design. Returns the best operating point plus per-response predictions and individual desirabilities.

@@ -53,6 +53,36 @@ def test_factor_count_within_cap_succeeds(client: TestClient) -> None:
     assert response.status_code == 200, response.text
 
 
+# --------------------------------------------------------------------------- #
+# optimal-search auto-parallelism policy (Limits.optimal_n_jobs)
+# --------------------------------------------------------------------------- #
+
+
+def test_optimal_n_jobs_disabled_by_default() -> None:
+    # The plain service never parallelises -- a request must not fan out across the box.
+    for n_runs in (1, 15, 100, 10_000):
+        assert DEFAULT_LIMITS.optimal_n_jobs(n_runs) == 1
+
+
+def test_optimal_n_jobs_respects_threshold_and_worker_cap() -> None:
+    limits = Limits(optimal_parallel_min_runs=24, optimal_parallel_max_workers=4)
+    assert limits.optimal_n_jobs(23) == 1  # below threshold -> single process
+    assert limits.optimal_n_jobs(24) == 4  # at threshold -> configured workers
+    assert limits.optimal_n_jobs(500) == 4
+
+
+def test_optimal_n_jobs_all_cores_sentinel() -> None:
+    limits = Limits(optimal_parallel_min_runs=10, optimal_parallel_max_workers=-1)
+    assert limits.optimal_n_jobs(9) == 1
+    assert limits.optimal_n_jobs(10) == -1  # -1 == all cores (library caps at restart count)
+
+
+def test_optimal_n_jobs_worker_cap_one_disables_even_with_threshold() -> None:
+    # max_workers=1 is single-process regardless of threshold -- another way to keep it off.
+    limits = Limits(optimal_parallel_min_runs=1, optimal_parallel_max_workers=1)
+    assert limits.optimal_n_jobs(10_000) == 1
+
+
 def test_too_many_factors_on_a_posted_design_document_is_422_limit_exceeded(
     client: TestClient,
 ) -> None:

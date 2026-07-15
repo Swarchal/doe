@@ -224,6 +224,61 @@ def test_optimal_region_shape_mismatch_is_422_infeasible(client: TestClient) -> 
     assert response.json()["error"]["code"] == "infeasible"
 
 
+# --------------------------------------------------------------------------- #
+# optimal / augment: server-chosen auto-parallelism (Limits.optimal_n_jobs)
+# --------------------------------------------------------------------------- #
+
+
+def _spy_on_coordinate_exchange(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Patch the router's ``coordinate_exchange`` to record the ``n_jobs`` it is handed."""
+    import doe_service.routers.designs as designs_router
+
+    seen: dict[str, Any] = {}
+    original = designs_router._coordinate_exchange
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        seen["n_jobs"] = kwargs.get("n_jobs")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(designs_router, "_coordinate_exchange", spy)
+    return seen
+
+
+def _optimal_body(n_runs: int) -> dict[str, Any]:
+    return {
+        "factors": [_continuous(n, 0, 1) for n in ("a", "b", "c", "d")],
+        "n_runs": n_runs,
+        "model": "quadratic",
+        "criterion": "D",
+        "seed": 0,
+    }
+
+
+def test_default_service_never_parallelises_optimal(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = _spy_on_coordinate_exchange(monkeypatch)
+    client = TestClient(create_app())  # DEFAULT_LIMITS -> disabled
+    response = _post(client, "/v1/designs/optimal", _optimal_body(30))
+    assert response.status_code == 200, response.text
+    assert seen["n_jobs"] == 1
+
+
+def test_configured_limits_parallelise_large_optimal(monkeypatch: pytest.MonkeyPatch) -> None:
+    from doe_service.limits import Limits
+
+    seen = _spy_on_coordinate_exchange(monkeypatch)
+    limits = Limits(optimal_parallel_min_runs=24, optimal_parallel_max_workers=2)
+    client = TestClient(create_app(limits=limits))
+
+    small = _post(client, "/v1/designs/optimal", _optimal_body(16))
+    assert small.status_code == 200, small.text
+    assert seen["n_jobs"] == 1  # below threshold (24) stays single-process
+
+    large = _post(client, "/v1/designs/optimal", _optimal_body(30))
+    assert large.status_code == 200, large.text
+    assert seen["n_jobs"] == 2  # at/above threshold uses the configured workers
+    assert len(large.json()["design"]["runs"]) == 30  # and still a valid design
+
+
 def test_augment_holds_existing_rows_fixed_and_tags_point_types(client: TestClient) -> None:
     factors = [_continuous("a", 0, 1), _continuous("b", 0, 1)]
     base = _post(client, "/v1/designs/full-factorial", {"factors": factors})

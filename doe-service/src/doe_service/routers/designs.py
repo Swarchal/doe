@@ -16,7 +16,7 @@ from collections.abc import Mapping
 from typing import Literal, cast
 
 import numpy as np
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from doe import (
     Design,
@@ -58,6 +58,7 @@ from doe_service.convert import (
     jsonable,
 )
 from doe_service.convert import region_array as _region_array
+from doe_service.limits import DEFAULT_LIMITS, Limits
 from doe_service.schemas.design import (
     CandidatesResponse,
     DesignDocument,
@@ -101,6 +102,16 @@ router = APIRouter(prefix="/v1/designs", tags=["designs"])
 # --------------------------------------------------------------------------- #
 # shared helpers
 # --------------------------------------------------------------------------- #
+
+
+def _app_limits(request: Request) -> Limits:
+    """The deployment's :class:`Limits`, stashed on ``app.state`` by ``create_app``.
+
+    Falls back to :data:`DEFAULT_LIMITS` if unset (e.g. a bare ``TestClient`` app or a unit
+    test that calls the endpoint function directly), so reading the parallelism policy never
+    raises regardless of how the app was constructed.
+    """
+    return getattr(request.app.state, "limits", DEFAULT_LIMITS)
 
 
 def _factors(body: FactorsRequest) -> list[Factor]:
@@ -440,7 +451,7 @@ def blocked_factorial(body: BlockedFactorialRequest) -> DesignResponse:
 
 
 @router.post("/optimal")
-def optimal(body: OptimalRequest) -> OptimalDesignResponse:
+def optimal(body: OptimalRequest, request: Request) -> OptimalDesignResponse:
     """Wraps ``doe.coordinate_exchange`` directly (not the ``d_optimal``/``i_optimal``
     wrappers), so the response can carry the ``OptimalDesign`` search report at the top
     level alongside the design.
@@ -448,9 +459,15 @@ def optimal(body: OptimalRequest) -> OptimalDesignResponse:
     ``n_runs`` and the ``n_restarts``/``max_iter`` search budget are capped before the
     (expensive) exchange search ever runs, not after -- the whole point of the cap is to
     keep the search itself bounded (Milestone 6, ``docs/WEBSERVICE_BUILD.md`` §6).
+
+    A large search may run its restarts in parallel: the server (never the client) picks
+    ``n_jobs`` from the deployment's :class:`~doe_service.limits.Limits`
+    (:meth:`~doe_service.limits.Limits.optimal_n_jobs`), which is disabled by default and
+    enabled by front-ends like doe-web.
     """
     check_run_count(body.n_runs)
     check_search_budget(body.n_restarts, body.max_iter)
+    n_jobs = _app_limits(request).optimal_n_jobs(body.n_runs)
 
     def run() -> OptimalDesign:
         factors = _factors(body)
@@ -464,6 +481,7 @@ def optimal(body: OptimalRequest) -> OptimalDesignResponse:
             n_restarts=body.n_restarts,
             max_iter=body.max_iter,
             seed=body.seed,
+            n_jobs=n_jobs,
         )
 
     with captured_warnings() as warns:
@@ -477,7 +495,7 @@ def optimal(body: OptimalRequest) -> OptimalDesignResponse:
 
 
 @router.post("/augment")
-def augment(body: AugmentRequest) -> OptimalDesignResponse:
+def augment(body: AugmentRequest, request: Request) -> OptimalDesignResponse:
     """Wraps ``doe.augment`` -- holds the posted design's rows fixed
     (``point_type="existing"``) and searches only the added rows, exactly as
     ``doe.augment`` does. ``doe.augment`` builds on ``coordinate_exchange`` internally
@@ -493,10 +511,14 @@ def augment(body: AugmentRequest) -> OptimalDesignResponse:
     """
     check_run_count(body.n_runs)
     check_search_budget(body.n_restarts, body.max_iter)
+    limits = _app_limits(request)
 
     def run() -> Design:
         design = design_from_document(body.design.model_dump())
         region = _region_array(body.region, n_factors=len(design.factors))
+        # threshold on the *augmented total* -- the search operates over all rows, holding the
+        # existing ones fixed while it exchanges only the added ones.
+        n_jobs = limits.optimal_n_jobs(design.n_runs + body.n_runs)
         return _augment(
             design,
             n_runs=body.n_runs,
@@ -506,6 +528,7 @@ def augment(body: AugmentRequest) -> OptimalDesignResponse:
             region=region,
             n_restarts=body.n_restarts,
             max_iter=body.max_iter,
+            n_jobs=n_jobs,
         )
 
     with captured_warnings() as warns:

@@ -13,12 +13,14 @@ import pytest
 from doe.analysis.fit import fit_ols
 from doe.analysis.optimize import (
     ResponseGoal,
+    categorical_optimum,
     desirability,
     optimum,
     stationary_point,
 )
 from doe.factors import CategoricalFactor, ContinuousFactor
 from doe.generators.factorial import full_factorial
+from doe.generators.optimal import coordinate_exchange
 from doe.generators.rsm import central_composite
 
 
@@ -95,6 +97,94 @@ def test_desirability_rejects_categorical_factor():
     goal = ResponseGoal(result, goal="max", low=-5.0, high=5.0)
     with pytest.raises(TypeError, match="continuous"):
         desirability([goal])
+
+
+# --------------------------------------------------------------------------- #
+# Mixed continuous/categorical optimum
+# --------------------------------------------------------------------------- #
+
+
+def _mixed_quadratic_fit():
+    """D-optimal design over two continuous + one categorical factor, fitted to a known
+    quadratic: a concave surface in coded units peaking at temp-coded 0.625, time-coded 0.75,
+    with catalyst level "B" adding a flat +8. The exact optimum is therefore temp=68.75,
+    time=9.0, catalyst=B."""
+    factors = [
+        ContinuousFactor("temp", 20.0, 80.0),
+        ContinuousFactor("time", 2.0, 10.0),
+        CategoricalFactor("catalyst", ("A", "B")),
+    ]
+    design = coordinate_exchange(factors, n_runs=16, model="quadratic", seed=0).design
+
+    def response(row):
+        t = (row["temp"] - 50.0) / 30.0
+        m = (row["time"] - 6.0) / 4.0
+        bump = 8.0 if row["catalyst"] == "B" else 0.0
+        return 70.0 + 5.0 * t + 3.0 * m - 4.0 * t**2 - 2.0 * m**2 + bump
+
+    y = [response(row) for _, row in design.runs.iterrows()]
+    return fit_ols(design.with_response("yield", y), "yield", model="quadratic")
+
+
+def test_categorical_optimum_recovers_exact_continuous_optimum():
+    result = _mixed_quadratic_fit()
+    opt = categorical_optimum(result, maximize=True)
+
+    assert opt.levels == {"catalyst": "B"}
+    # exact interior optimum, not snapped to any grid
+    assert opt.natural["temp"] == pytest.approx(68.75, abs=1e-3)
+    assert opt.natural["time"] == pytest.approx(9.0, abs=1e-3)
+    assert opt.settings()["catalyst"] == "B"
+    # analytic peak value: 70 + (5*0.625 - 4*0.625^2) + (3*0.75 - 2*0.75^2) + 8
+    assert opt.response == pytest.approx(80.6875, abs=1e-3)
+    assert not opt.at_bound
+
+
+def test_categorical_optimum_minimizes_to_the_worst_corner():
+    result = _mixed_quadratic_fit()
+    opt = categorical_optimum(result, maximize=False)
+
+    # concave surface: the minimum is a corner, catalyst A (no +8 bump)
+    assert opt.levels == {"catalyst": "A"}
+    assert opt.at_bound
+    assert opt.response < categorical_optimum(result, maximize=True).response
+
+
+def test_categorical_optimum_delegates_when_all_continuous():
+    result = _fit(
+        lambda x1, x2: 50.0 + 3.0 * x1 + 2.0 * x2 - 4.0 * x1**2 - 3.0 * x2**2 - 1.0 * x1 * x2
+    )
+    opt = categorical_optimum(result, maximize=True)
+    ref = optimum(result, maximize=True)
+
+    assert opt.levels == {}
+    assert opt.settings() == opt.natural
+    assert np.allclose(opt.coded, ref.coded)
+    assert opt.response == pytest.approx(ref.response)
+
+
+def test_categorical_optimum_honours_continuous_bounds_mapping():
+    result = _mixed_quadratic_fit()
+    # cap temp below its unconstrained optimum (68.75); the search must respect it
+    opt = categorical_optimum(result, maximize=True, bounds={"temp": (20.0, 60.0)})
+
+    assert opt.natural["temp"] == pytest.approx(60.0, abs=1e-3)
+    assert opt.at_bound
+
+
+def test_categorical_optimum_rejects_mixture_factor():
+    # a mixture (simplex) fit is neither continuous nor categorical -> clear TypeError
+    from doe.factors import MixtureFactor
+    from doe.generators.mixture import simplex_lattice
+
+    factors = [MixtureFactor("x1", 0.0, 1.0), MixtureFactor("x2", 0.0, 1.0)]
+    design = simplex_lattice(factors, degree=2)
+    rng = np.random.default_rng(0)
+    mix_fit = fit_ols(
+        design.with_response("y", rng.normal(size=design.n_runs)), "y", model="scheffe-quadratic"
+    )
+    with pytest.raises(TypeError, match="continuous and categorical"):
+        categorical_optimum(mix_fit)
 
 
 def test_stationary_point_predicted_response_is_the_extremum():

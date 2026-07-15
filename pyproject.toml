@@ -32,7 +32,7 @@ docs = [
 ]
 
 [tool.uv.workspace]
-members = ["doe-service"]
+members = ["doe-service", "doe-web"]
 
 [build-system]
 requires = ["hatchling"]
@@ -46,7 +46,7 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
-src = ["src", "tests", "doe-service/src", "doe-service/tests"]
+src = ["src", "tests", "doe-service/src", "doe-service/tests", "doe-web/src", "doe-web/tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

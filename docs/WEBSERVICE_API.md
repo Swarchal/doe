@@ -335,6 +335,23 @@ POST /v1/optimize/optimum
   "maximize": true, "at_bound": false, "warnings": [] }
 ```
 
+`/optimum` searches a continuous coded box and so rejects a categorical factor (422
+`infeasible`). For a mixed continuous/categorical fit, `/categorical-optimum` optimizes
+the continuous factors *exactly* within each combination of the categorical factors'
+levels and returns the best; an all-continuous fit is accepted too (empty `levels`):
+
+```text
+POST /v1/optimize/categorical-optimum
+{ "design": ..., "response": "yield", "model": "quadratic",
+  "maximize": true }                  # Bounds (continuous factors only), see conventions
+→ 200
+{ "settings": {"temp": 68.75, "time": 9.0, "catalyst": "B"},  # all factors merged
+  "levels": {"catalyst": "B"},        # winning categorical level(s)
+  "natural": {"temp": 68.75, "time": 9.0}, "coded": [0.625, 0.75],  # continuous only
+  "response": 80.69, "maximize": true, "at_bound": false,
+  "response_name": "yield", "warnings": [] }
+```
+
 ```text
 POST /v1/optimize/desirability
 {

@@ -1,0 +1,39 @@
+[project]
+name = "doe-web"
+version = "0.1.0"
+description = "Browser front-end prototype over doe-service: a guided experimental-plan builder"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Scott Warchal", email = "scott.warchal@gmail.com" }]
+dependencies = [
+    "doe-service",
+    "fastapi>=0.110",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "mypy>=1.10",
+    "httpx2>=0.1",    # fastapi.testclient
+    "uvicorn>=0.29",  # local dev server: uvicorn --factory doe_web.main:create_app
+]
+
+[tool.uv.sources]
+doe-service = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/doe_web"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# Run from this directory (mypy does not search parent directories for config):
+#   uv run --extra dev mypy
+[tool.mypy]
+strict = true
+files = ["src"]

@@ -20,6 +20,7 @@ resolution-markers = [
 members = [
     "doe",
     "doe-service",
+    "doe-web",
 ]
 
 [[package]]
@@ -432,6 +433,34 @@ requires-dist = [
     { name = "httpx2", marker = "extra == 'dev'", specifier = ">=0.1" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "pydantic", specifier = ">=2.7" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "uvicorn", marker = "extra == 'dev'", specifier = ">=0.29" },
+]
+provides-extras = ["dev"]
+
+[[package]]
+name = "doe-web"
+version = "0.1.0"
+source = { editable = "doe-web" }
+dependencies = [
+    { name = "doe-service" },
+    { name = "fastapi" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "httpx2" },
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "uvicorn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "doe-service", editable = "doe-service" },
+    { name = "fastapi", specifier = ">=0.110" },
+    { name = "httpx2", marker = "extra == 'dev'", specifier = ">=0.1" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "uvicorn", marker = "extra == 'dev'", specifier = ">=0.29" },
 ]

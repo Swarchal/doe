@@ -20,6 +20,7 @@ the rest of the library (designs are fitted coded, reported natural).
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, cast
@@ -28,7 +29,7 @@ import numpy as np
 import pandas as pd
 from scipy import optimize as sciopt
 
-from ..factors import ContinuousFactor, FactorSet
+from ..factors import CategoricalFactor, ContinuousFactor, FactorSet
 from ..serialization import json_safe
 from .fit import FitResult
 
@@ -416,6 +417,261 @@ def optimum(
         at_bound=at_bound,
         response_name=result.response_name,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Mixed continuous/categorical optimum
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class CategoricalOptimum:
+    """Best fitted setting of a mixed continuous/categorical model.
+
+    A categorical factor has no coded axis to search, so :func:`optimum` rejects it. This
+    result instead names the winning *level* of each categorical factor (``levels``) and the
+    exactly-optimized continuous settings within that combination (``natural``/``coded``,
+    over the continuous factors only). :meth:`settings` merges the two into one
+    ``{factor: value-or-level}`` mapping over every factor.
+    """
+
+    #: Chosen level of each categorical factor, ``{factor_name: level}``.
+    levels: dict[str, str]
+    #: Exactly-optimized continuous settings (natural units), ``{factor_name: value}``.
+    natural: dict[str, float]
+    #: The continuous factors' coded coordinates, in continuous-factor order.
+    coded: np.ndarray
+    #: Predicted response at the optimum.
+    response: float
+    #: ``True`` if maximizing, ``False`` if minimizing.
+    maximize: bool
+    #: ``True`` if any continuous factor sits on its coded box boundary.
+    at_bound: bool
+    #: The response column name, or ``None`` for a bare-array fit.
+    response_name: str | None = None
+
+    def settings(self) -> dict[str, Any]:
+        """All factors in one mapping: continuous values merged with categorical levels."""
+        return {**self.natural, **self.levels}
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to the ``POST /v1/optimize/categorical-optimum`` response body."""
+        return cast(
+            "dict[str, Any]",
+            json_safe(
+                {
+                    "settings": self.settings(),
+                    "levels": self.levels,
+                    "natural": self.natural,
+                    "coded": self.coded,
+                    "response": self.response,
+                    "maximize": self.maximize,
+                    "at_bound": self.at_bound,
+                    "response_name": self.response_name,
+                }
+            ),
+        )
+
+
+def _categorical_column_values(
+    factors: FactorSet, fixed_levels: Mapping[str, str]
+) -> dict[str, float]:
+    """Constant value each ``factor[level]`` contrast column takes at the given fixed levels.
+
+    Mirrors the deviation coding in :func:`doe.analysis.model._effect_code`: the first level
+    is the reference (every contrast column ``-1``); any other level sets its own column to
+    ``+1`` and that factor's remaining columns to ``0``.
+    """
+    values: dict[str, float] = {}
+    for name, level in fixed_levels.items():
+        factor = factors[name]
+        assert isinstance(factor, CategoricalFactor)
+        levels = list(factor.levels)
+        if level not in levels:
+            raise ValueError(
+                f"factor {name!r} has unknown level {level!r}; expected {levels}"
+            )
+        reference = levels[0]
+        for other in levels[1:]:
+            column = f"{name}[{other}]"
+            if level == reference:
+                values[column] = -1.0
+            else:
+                values[column] = 1.0 if other == level else 0.0
+    return values
+
+
+def _fold_quadratic_form(
+    result: FitResult, fixed_levels: Mapping[str, str], cont_names: Sequence[str]
+) -> tuple[float, np.ndarray, np.ndarray]:
+    """``(b0, b, B)`` over the continuous factors with categoricals held at ``fixed_levels``.
+
+    With the categorical factors fixed, their contrast columns are constants: a categorical
+    main effect folds into the intercept, and a continuous-by-categorical interaction folds
+    into the continuous factor's linear coefficient. The remaining continuous quadratic form
+    is exactly what :func:`optimum` optimizes.
+    """
+    index = {name: i for i, name in enumerate(cont_names)}
+    kc = len(cont_names)
+    b0 = 0.0
+    b = np.zeros(kc)
+    big_b = np.zeros((kc, kc))
+    cat_values = _categorical_column_values(result.factors, fixed_levels)
+    for term, raw in zip(result.term_names, result.coefficients, strict=True):
+        coef = float(raw)
+        if term == "Intercept":
+            b0 += coef
+            continue
+        const = 1.0
+        cont_parts: list[tuple[int, int]] = []  # (continuous index, power)
+        for part in term.split(":"):
+            if "^" in part:
+                base, power = part.split("^")
+                if int(power) != 2:
+                    raise ValueError(f"only quadratic (^2) terms are supported, got {term!r}")
+                cont_parts.append((index[base], 2))
+            elif part in index:
+                cont_parts.append((index[part], 1))
+            elif part in cat_values:
+                const *= cat_values[part]
+            else:
+                raise KeyError(
+                    f"term {term!r} references {part!r}, which is neither a continuous factor "
+                    "nor a fixed categorical contrast column"
+                )
+        eff = coef * const
+        total_power = sum(power for _, power in cont_parts)
+        if total_power == 0:
+            b0 += eff
+        elif total_power == 1:
+            b[cont_parts[0][0]] += eff
+        elif total_power == 2 and len(cont_parts) == 1:  # x_i^2
+            i = cont_parts[0][0]
+            big_b[i, i] += eff
+        elif total_power == 2:  # x_i:x_j
+            i, j = cont_parts[0][0], cont_parts[1][0]
+            big_b[i, j] += 0.5 * eff
+            big_b[j, i] += 0.5 * eff
+        else:
+            raise ValueError(f"only first- and second-order terms are supported, got {term!r}")
+    return b0, b, big_b
+
+
+def categorical_optimum(
+    result: FitResult,
+    *,
+    maximize: bool = True,
+    bounds: Bounds = (-1.0, 1.0),
+) -> CategoricalOptimum:
+    """Best fitted setting of a model with one or more categorical factors.
+
+    :func:`optimum` searches a continuous coded box and cannot handle an unordered
+    categorical axis. This enumerates every combination of the categorical factors' levels,
+    holds those factors fixed, and runs the same constrained continuous optimization within
+    each combination (:func:`_multistart_minimize`), returning the overall best. The
+    continuous settings are exact (a real optimizer, not a grid), and ``levels`` names the
+    winning categorical level(s).
+
+    ``bounds`` follows :func:`optimum` — but a ``{factor: (low, high)}`` mapping may only
+    name continuous factors. An all-continuous fit is delegated to :func:`optimum` and
+    returned with empty ``levels``.
+
+    Examples:
+        >>> categorical_optimum(result, maximize=True).settings()  # doctest: +SKIP
+        {'temp': 68.75, 'time': 9.0, 'catalyst': 'B'}
+    """
+    factors = result.factors
+    cont_names = [n for n in factors.names if isinstance(factors[n], ContinuousFactor)]
+    cat_names = [n for n in factors.names if isinstance(factors[n], CategoricalFactor)]
+    other = [n for n in factors.names if n not in cont_names and n not in cat_names]
+    if other:
+        raise TypeError(
+            "categorical_optimum handles continuous and categorical factors only; got "
+            f"factor(s) {other} of another kind (e.g. mixture) -- read a mixture optimum off "
+            "plotting.ternary_contour instead"
+        )
+
+    if not cat_names:  # nothing categorical to enumerate -- this is just optimum()
+        opt = optimum(result, maximize=maximize, bounds=bounds)
+        return CategoricalOptimum(
+            levels={},
+            natural=opt.natural,
+            coded=opt.coded,
+            response=opt.response,
+            maximize=maximize,
+            at_bound=opt.at_bound,
+            response_name=result.response_name,
+        )
+
+    cont_factors = FactorSet([factors[n] for n in cont_names]) if cont_names else None
+    cont_bounds = _continuous_bounds(bounds, cont_names)
+    sign = -1.0 if maximize else 1.0
+
+    best: CategoricalOptimum | None = None
+    for combo in itertools.product(*(list(factors[n].levels) for n in cat_names)):  # type: ignore[union-attr]
+        fixed_levels: dict[str, str] = {
+            name: str(level) for name, level in zip(cat_names, combo, strict=True)
+        }
+        b0, b, big_b = _fold_quadratic_form(result, fixed_levels, cont_names)
+
+        if cont_factors is not None:
+            box = _box(cont_bounds, cont_factors)
+
+            # Default args bind this combo's folded form into each closure.
+            def objective(
+                x: np.ndarray,
+                b0: float = b0,
+                b: np.ndarray = b,
+                big_b: np.ndarray = big_b,
+            ) -> float:
+                return sign * _predict(b0, b, big_b, x)
+
+            def gradient(
+                x: np.ndarray, b: np.ndarray = b, big_b: np.ndarray = big_b
+            ) -> np.ndarray:
+                return np.asarray(sign * (b + 2.0 * big_b @ x), dtype=float)
+
+            x_opt = _multistart_minimize(objective, box, jac=gradient)
+            response = _predict(b0, b, big_b, x_opt)
+            lows = np.array([lo for lo, _ in box])
+            highs = np.array([hi for _, hi in box])
+            at_bound = bool(
+                np.any(np.isclose(x_opt, lows, atol=1e-6))
+                or np.any(np.isclose(x_opt, highs, atol=1e-6))
+            )
+            natural = _decode(cont_factors, x_opt)
+        else:  # all-categorical fit: the response is the (constant) folded intercept
+            x_opt = np.array([], dtype=float)
+            response = b0
+            at_bound = False
+            natural = {}
+
+        if best is None or (response > best.response if maximize else response < best.response):
+            best = CategoricalOptimum(
+                levels=fixed_levels,
+                natural=natural,
+                coded=x_opt,
+                response=response,
+                maximize=maximize,
+                at_bound=at_bound,
+                response_name=result.response_name,
+            )
+
+    assert best is not None  # at least one categorical combination always exists
+    return best
+
+
+def _continuous_bounds(bounds: Bounds, cont_names: Sequence[str]) -> Bounds:
+    """Restrict a ``{factor: (low, high)}`` bounds mapping to the continuous factors.
+
+    A mapping may only constrain continuous factors (the ones searched); dropping categorical
+    keys lets ``_box`` run over the continuous-only ``FactorSet`` without tripping its
+    unknown-name check. Non-mapping ``bounds`` forms are returned unchanged.
+    """
+    if isinstance(bounds, Mapping):
+        allowed = set(cont_names)
+        return {name: pair for name, pair in bounds.items() if name in allowed}
+    return bounds
 
 
 # --------------------------------------------------------------------------- #

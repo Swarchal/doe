@@ -19,6 +19,8 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from doe import (
+    CategoricalFactor,
+    CategoricalOptimum,
     ContinuousFactor,
     DesirabilityResult,
     FactorSet,
@@ -27,6 +29,7 @@ from doe import (
     ResponseGoal,
     ValidationError,
 )
+from doe import categorical_optimum as _categorical_optimum
 from doe import desirability as _desirability
 from doe import optimum as _optimum
 from doe import stationary_point as _stationary_point
@@ -48,6 +51,7 @@ from doe_service.schemas.optimization import (
     StationaryPointRequest,
 )
 from doe_service.schemas.results import (
+    CategoricalOptimumResponse,
     DesirabilityResponse,
     OptimumResponse,
     StationaryPointResponse,
@@ -111,6 +115,26 @@ def _require_continuous_factors(factors: FactorSet) -> None:
         )
 
 
+def _require_optimizable_factors(factors: FactorSet) -> None:
+    """422 ``infeasible`` for a factor ``categorical_optimum`` cannot handle.
+
+    It optimizes continuous factors within each categorical-level combination; a mixture
+    (simplex) factor belongs to neither kind and makes the library raise a bare
+    ``TypeError`` that ``call_library`` (``ValueError`` only) would let escape as a 500.
+    """
+    non_optimizable = [
+        name
+        for name in factors.names
+        if not isinstance(factors[name], (ContinuousFactor, CategoricalFactor))
+    ]
+    if non_optimizable:
+        raise Infeasible(
+            "categorical_optimum handles continuous and categorical factors only; got "
+            f"factor(s) {non_optimizable} of another kind (e.g. mixture) -- for a mixture "
+            "fit read the optimum off /v1/plot-data/ternary instead"
+        )
+
+
 def _fit_quadratic(
     body: StationaryPointRequest | OptimumRequest,
 ) -> tuple[FitResult, list[str]]:
@@ -170,6 +194,39 @@ def optimum(body: OptimumRequest) -> OptimumResponse:
     opt = call_library(run)
     payload = opt.to_dict()
     return OptimumResponse.model_validate({**payload, "warnings": warns})
+
+
+# --------------------------------------------------------------------------- #
+# /categorical-optimum
+# --------------------------------------------------------------------------- #
+
+
+@router.post("/categorical-optimum")
+def categorical_optimum(body: OptimumRequest) -> CategoricalOptimumResponse:
+    """Wraps ``doe.categorical_optimum`` -- the mixed continuous/categorical optimum.
+
+    ``/optimum`` searches a continuous coded box and so rejects a categorical factor
+    (422). This endpoint instead enumerates every combination of the categorical factors'
+    levels, optimizes the continuous factors exactly within each, and returns the best --
+    naming the winning ``levels``. An all-continuous fit is accepted too (it simply
+    delegates to ``optimum`` with empty ``levels``), so a caller need not know in advance
+    whether the design has a categorical factor. A mixture (simplex) fit has no coded box
+    either and raises ``TypeError`` -> 422 ``infeasible`` (via ``call_library``).
+
+    Requires a quadratic model, exactly like ``/optimum``.
+    """
+    _require_quadratic(body.model)
+    result, warns = _fit(body, default=_DEFAULT_OPTIMIZE_MODEL)
+    _require_optimizable_factors(result.factors)
+    bounds = _validate_bounds(body.bounds, result.factors.names)
+    bounds_arg: Bounds = bounds if bounds is not None else (-1.0, 1.0)
+
+    def run() -> CategoricalOptimum:
+        return _categorical_optimum(result, maximize=body.maximize, bounds=bounds_arg)
+
+    opt = call_library(run)
+    payload = opt.to_dict()
+    return CategoricalOptimumResponse.model_validate({**payload, "warnings": warns})
 
 
 # --------------------------------------------------------------------------- #
