@@ -108,14 +108,16 @@ def create_app(*, limits: Limits = DEFAULT_LIMITS) -> FastAPI:
     """Build the FastAPI application with all routers mounted.
 
     ``limits`` is stashed on ``app.state`` (``docs/WEBSERVICE_API.md`` "Limits": "All
-    configurable at deployment") and read by :class:`BodySizeLimitMiddleware`, the one
-    check that has to run ahead of routing -- an oversized body never reaches a router, so
-    it cannot go through the usual ``LimitExceeded`` -> 422 path; per the build plan
-    (``docs/WEBSERVICE_BUILD.md`` §6) it is the one deliberate exception, answered with the
-    same error envelope but a **413** status instead of 422. Every other cap (factor/run
-    counts, search budget, region rows, resolution, goals) is enforced inside the
-    routers/``convert.py`` against ``doe_service.limits.DEFAULT_LIMITS`` directly, matching
-    how the Milestone 4/5 goal/resolution caps already do it.
+    configurable at deployment") where two kinds of consumer read it. The
+    :class:`BodySizeLimitMiddleware` reads it directly, being the one check that has to run
+    ahead of routing -- an oversized body never reaches a router, so it cannot go through
+    the usual ``LimitExceeded`` -> 422 path; per the build plan
+    (``docs/WEBSERVICE_BUILD.md`` §6) it is answered with the same error envelope but a
+    **413** status instead of 422. Every *other* cap (factor/run counts, search budget,
+    region rows, resolution, goals) reaches the routers through the ``app_limits`` FastAPI
+    dependency (``deps.py``), which pulls the same ``app.state.limits`` per request and the
+    routers thread into the ``check_*`` helpers -- so a deployment override applies to every
+    cap, not only the body-size and parallelism paths.
     """
     app = FastAPI(title="doe-service", version=__version__)
     app.state.limits = limits

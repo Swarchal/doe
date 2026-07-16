@@ -287,6 +287,66 @@ def test_validate_collects_multiple_errors():
     assert len(exc.value.errors) >= 2
 
 
+# --- FactorSet cross-factor invariants (mirror FactorSet, so Design.from_dict never
+#     raises a bare ValueError on a document validate_design_dict accepted) --------------
+
+
+def _mixture_document(*components, runs=None):
+    factors = [
+        {"type": "mixture", "name": name, "low": low, "high": high}
+        for name, low, high in components
+    ]
+    return {
+        "schema_version": "1.0",
+        "factors": factors,
+        "runs": runs if runs is not None else [{name: 0.0 for name, *_ in components}],
+    }
+
+
+def test_validate_rejects_mixture_mixed_with_other_factor_types():
+    document = {
+        "schema_version": "1.0",
+        "factors": [
+            {"type": "mixture", "name": "A", "low": 0.0, "high": 1.0},
+            {"type": "continuous", "name": "T", "low": 20.0, "high": 80.0},
+        ],
+        "runs": [{"A": 0.5, "T": 50.0}],
+    }
+    with pytest.raises(ValidationError, match="combined with other factor types"):
+        validate_design_dict(document)
+
+
+def test_validate_rejects_a_lone_mixture_component():
+    with pytest.raises(ValidationError, match="at least 2 components"):
+        validate_design_dict(_mixture_document(("A", 0.0, 1.0), runs=[{"A": 1.0}]))
+
+
+def test_validate_rejects_an_infeasible_mixture_blend():
+    # sum(low) = 1.2 > 1, so no blend of A + B can sum to 1
+    document = _mixture_document(("A", 0.6, 0.9), ("B", 0.6, 0.9), runs=[{"A": 0.5, "B": 0.5}])
+    with pytest.raises(ValidationError, match="feasible blend"):
+        validate_design_dict(document)
+
+
+def test_validate_accepts_a_feasible_all_mixture_design():
+    # regression: a well-formed mixture design must still validate cleanly
+    document = _mixture_document(
+        ("A", 0.0, 1.0), ("B", 0.0, 1.0), ("C", 0.0, 1.0),
+        runs=[{"A": 1.0, "B": 0.0, "C": 0.0}],
+    )
+    validate_design_dict(document)  # no raise
+
+
+def test_validate_guards_documents_that_Design_from_dict_would_reject():
+    # the whole point: anything validate accepts, Design.from_dict builds; anything the
+    # FactorSet would reject, validate now catches first (no bare ValueError escapes).
+    bad = _mixture_document(("A", 0.6, 0.9), ("B", 0.6, 0.9), runs=[{"A": 0.5, "B": 0.5}])
+    with pytest.raises(ValidationError):
+        validate_design_dict(bad)
+    with pytest.raises(ValueError):  # Design.from_dict -> FactorSet still raises, as before
+        Design.from_dict(bad)
+
+
 # --------------------------------------------------------------------------- #
 # ResponseGoal as data
 # --------------------------------------------------------------------------- #

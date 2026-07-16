@@ -29,19 +29,42 @@ def _plot_groups(whole_plots: Sequence[int]) -> list[np.ndarray]:
     ]
 
 
-def v0_inverse(eta: float, whole_plots: Sequence[int]) -> np.ndarray:
-    """``V₀⁻¹ = (I + η Z Zᵀ)⁻¹`` for the whole-plot indicator ``Z``, built block by block.
+def v0_inv_products(
+    eta: float, x: np.ndarray, y: np.ndarray, whole_plots: Sequence[int]
+) -> tuple[np.ndarray, np.ndarray, float, float]:
+    """The GLS pieces ``(XᵀV₀⁻¹X, XᵀV₀⁻¹y, yᵀV₀⁻¹y, log|V₀|)``, accumulated per whole plot.
 
-    Each whole plot contributes an ``n_p × n_p`` block ``I − η/(1 + η n_p) J`` (Sherman-Morrison);
-    blocks for different plots do not interact, so the full inverse is block-diagonal.
+    ``V₀⁻¹`` is block-diagonal, each whole plot's ``n_p × n_p`` block being
+    ``I − c J`` with ``c = η/(1 + η n_p)`` (Sherman-Morrison, ``J`` the all-ones block);
+    blocks for different plots do not interact. Contracting a block against that plot's rows
+    ``Xₚ``/``yₚ`` collapses onto their column sums ``sₚ = Xₚᵀ1`` and ``tₚ = 1ᵀyₚ``:
+
+        ``Xₚᵀ(I − cJ)Xₚ = XₚᵀXₚ − c sₚsₚᵀ``,   ``Xₚᵀ(I − cJ)yₚ = Xₚᵀyₚ − c tₚ sₚ``,
+        ``yₚᵀ(I − cJ)yₚ = yₚᵀyₚ − c tₚ²``,      ``log|V₀| = Σₚ log(1 + η n_p)``.
+
+    So every quantity the GLS/REML fit needs is summed plot-by-plot in ``O(n p²)`` time and
+    ``O(p²)`` memory, never forming the dense ``n × n`` inverse (which the direct
+    ``x.T @ V₀⁻¹`` product would allocate at ``O(n²)`` and multiply at ``O(p n²)``).
     """
-    n = len(whole_plots)
-    v_inv = np.zeros((n, n))
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    p = x.shape[1]
+    xtvix = np.zeros((p, p))
+    xtviy = np.zeros(p)
+    ytviy = 0.0
+    logdet_v0 = 0.0
     for idx in _plot_groups(whole_plots):
         n_p = len(idx)
-        block = np.eye(n_p) - (eta / (1.0 + eta * n_p)) * np.ones((n_p, n_p))
-        v_inv[np.ix_(idx, idx)] = block
-    return v_inv
+        xp = x[idx]
+        yp = y[idx]
+        s = xp.sum(axis=0)  # column sums = Xₚᵀ 1
+        t = float(yp.sum())  # 1ᵀ yₚ
+        c = eta / (1.0 + eta * n_p)
+        xtvix += xp.T @ xp - c * np.outer(s, s)
+        xtviy += xp.T @ yp - c * t * s
+        ytviy += float(yp @ yp) - c * t * t
+        logdet_v0 += float(np.log1p(eta * n_p))
+    return xtvix, xtviy, ytviy, logdet_v0
 
 
 def reml_variance_components(
@@ -53,8 +76,6 @@ def reml_variance_components(
     profiled REML objective in ``η`` is minimized over ``log η`` with a bounded scalar search;
     ``σ̂²`` and ``β̂`` are the closed-form GLS quantities at the optimum.
     """
-    groups = _plot_groups(whole_plots)
-    plot_sizes = [len(g) for g in groups]
     n, p = x.shape
     dof = n - p
     if dof <= 0:
@@ -62,14 +83,10 @@ def reml_variance_components(
 
     def profiled_neg2ll(eta: float) -> tuple[float, float]:
         """Return ``(-2 ℓ_R up to a constant, σ̂²)`` at this ``η``."""
-        v_inv = v0_inverse(eta, whole_plots)
-        xtvi = x.T @ v_inv
-        a = xtvi @ x
-        rhs = xtvi @ y
+        a, rhs, ytviy, logdet_v0 = v0_inv_products(eta, x, y, whole_plots)
         beta = np.linalg.solve(a, rhs)
-        y_p_y = float(y @ (v_inv @ y) - rhs @ beta)
+        y_p_y = ytviy - float(rhs @ beta)
         sigma2 = y_p_y / dof
-        logdet_v0 = float(sum(np.log1p(eta * m) for m in plot_sizes))
         _sign, logdet_a = np.linalg.slogdet(a)
         return dof * np.log(sigma2) + logdet_v0 + float(logdet_a), sigma2
 

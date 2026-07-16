@@ -16,8 +16,10 @@ request with a 500, so :func:`_require_continuous_axes` checks them up front.
 
 from __future__ import annotations
 
+from typing import Annotated
+
 import numpy as np
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from doe import ContinuousFactor, FactorSet, ValidationError
 from doe.plotting import alias_matrix as _alias_matrix
@@ -30,8 +32,9 @@ from doe_service.convert import (
     jsonable,
     resolve_model,
 )
+from doe_service.deps import app_limits
 from doe_service.errors import Infeasible
-from doe_service.limits import DEFAULT_LIMITS, LimitExceeded
+from doe_service.limits import LimitExceeded, Limits
 from doe_service.routers.analysis import _fit
 from doe_service.schemas.plotting import (
     AliasRequest,
@@ -59,15 +62,15 @@ _DEFAULT_SURFACE_MODEL = "quadratic"
 # --------------------------------------------------------------------------- #
 
 
-def _check_resolution(resolution: int) -> None:
+def _check_resolution(resolution: int, limits: Limits) -> None:
     """422 ``limit_exceeded`` for a ``resolution`` above the deployment cap.
 
     A grid is ``resolution^2`` (surface) or ``~resolution^2 / 2`` (ternary) predictions;
     the cap keeps a single request synchronous.
     """
-    if resolution > DEFAULT_LIMITS.max_resolution:
+    if resolution > limits.max_resolution:
         raise LimitExceeded(
-            f"resolution {resolution} exceeds the cap of {DEFAULT_LIMITS.max_resolution}"
+            f"resolution {resolution} exceeds the cap of {limits.max_resolution}"
         )
 
 
@@ -99,10 +102,12 @@ def _require_continuous_axes(factors: FactorSet, axes: tuple[str, ...]) -> None:
 
 
 @router.post("/surface")
-def surface(body: SurfaceRequest) -> SurfaceResponse:
+def surface(
+    body: SurfaceRequest, limits: Annotated[Limits, Depends(app_limits)]
+) -> SurfaceResponse:
     """Wraps ``doe.surface_grid`` (contour + 3-D surface meshes)."""
-    _check_resolution(body.resolution)
-    result, _ = _fit(body, default=_DEFAULT_SURFACE_MODEL)
+    _check_resolution(body.resolution, limits)
+    result, _ = _fit(body, default=_DEFAULT_SURFACE_MODEL, limits=limits)
     _require_continuous_axes(result.factors, (body.x, body.y))
 
     def run() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -122,10 +127,12 @@ def surface(body: SurfaceRequest) -> SurfaceResponse:
 
 
 @router.post("/interactions")
-def interactions(body: InteractionsRequest) -> InteractionsResponse:
+def interactions(
+    body: InteractionsRequest, limits: Annotated[Limits, Depends(app_limits)]
+) -> InteractionsResponse:
     """Wraps ``doe.interaction_lines``."""
-    _check_resolution(body.resolution)
-    result, _ = _fit(body, default=_DEFAULT_SURFACE_MODEL)
+    _check_resolution(body.resolution, limits)
+    result, _ = _fit(body, default=_DEFAULT_SURFACE_MODEL, limits=limits)
     _require_continuous_axes(result.factors, (body.x, body.trace))
 
     def run() -> tuple[np.ndarray, list[tuple[float, np.ndarray]]]:
@@ -156,14 +163,16 @@ def interactions(body: InteractionsRequest) -> InteractionsResponse:
 
 
 @router.post("/ternary")
-def ternary(body: TernaryRequest) -> TernaryResponse:
+def ternary(
+    body: TernaryRequest, limits: Annotated[Limits, Depends(app_limits)]
+) -> TernaryResponse:
     """Wraps ``doe.ternary_grid`` (3-component Scheffé blending surface).
 
     A non-mixture or non-3-component fit makes the core raise ``ValueError``, which
     ``call_library`` maps to 422 ``infeasible`` -- no extra guard needed.
     """
-    _check_resolution(body.resolution)
-    result, _ = _fit(body, default="scheffe-quadratic")
+    _check_resolution(body.resolution, limits)
+    result, _ = _fit(body, default="scheffe-quadratic", limits=limits)
 
     def run() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         return _ternary_grid(result, resolution=body.resolution)
@@ -180,13 +189,13 @@ def ternary(body: TernaryRequest) -> TernaryResponse:
 
 
 @router.post("/alias")
-def alias(body: AliasRequest) -> AliasResponse:
+def alias(body: AliasRequest, limits: Annotated[Limits, Depends(app_limits)]) -> AliasResponse:
     """Wraps ``doe.alias_matrix`` (term correlation / alias structure).
 
     Judges the design itself -- no ``response`` and no fit; ``model`` picks which terms'
     aliasing is assessed, exactly as ``build_model_matrix`` does.
     """
-    design = design_from_document(body.design.model_dump())
+    design = design_from_document(body.design.model_dump(), limits=limits)
     order, inter = resolve_model(body.model, default="linear")
 
     def run() -> tuple[list[str], np.ndarray]:

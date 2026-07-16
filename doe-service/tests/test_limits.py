@@ -207,11 +207,9 @@ def test_optimal_search_budget_within_cap_succeeds(client: TestClient) -> None:
 
 
 def test_optimal_region_row_count_over_cap_is_422_limit_exceeded(client: TestClient) -> None:
-    # Router-level checks (this one included) all read the module-level DEFAULT_LIMITS,
-    # matching the already-landed max_goals/max_resolution pattern -- a per-app ``limits``
-    # override only reaches the body-size middleware below, which is why this exercises
-    # the real default cap rather than a ``create_app(limits=...)`` override. A
-    # single-factor region keeps the (still ~100_001-row) JSON payload small.
+    # Exercises the default cap (the ``client`` fixture builds the app with DEFAULT_LIMITS);
+    # a ``create_app(limits=...)`` override reaching this same check is covered by the
+    # injected-limits tests below. A single-factor region keeps the ~100_001-row payload small.
     factors = [_continuous("a", 0, 1)]
     n_rows = DEFAULT_LIMITS.max_region_rows + 1
     body = {"factors": factors, "n_runs": 2, "region": [[0.0]] * n_rows}
@@ -371,3 +369,134 @@ def test_body_within_the_cap_is_served_normally() -> None:
     body = {"factors": [_continuous("a", 0, 1)], "levels": 2}
     with TestClient(app) as client:
         assert client.post("/v1/designs/full-factorial", json=body).status_code == 200
+
+
+# --------------------------------------------------------------------------- #
+# deployment-injected Limits are honoured by every cap, not just body-size + parallelism
+# --------------------------------------------------------------------------- #
+#
+# Before this was wired, ``create_app(limits=...)`` reached only the body-size middleware
+# and the optimal-search parallelism policy; every other cap resolved the module-global
+# DEFAULT_LIMITS, so a deployment that tightened a cap was silently unprotected. Each test
+# builds an app with a *lowered* cap and confirms the matching endpoint now honours it.
+
+
+def test_injected_max_runs_is_honoured_by_run_count_cap() -> None:
+    app = create_app(limits=Limits(max_runs=100))
+    client = TestClient(app)
+    body = {"factors": [_continuous("a", 0, 1)], "sampler": "lhs", "n_runs": 8000}
+    response = client.post("/v1/designs/space-filling", json=body)
+    assert response.status_code == 422, response.text
+    error = response.json()["error"]
+    assert error["code"] == "limit_exceeded"
+    assert "100" in error["message"]
+
+
+def test_injected_max_factors_is_honoured_by_factor_count_cap() -> None:
+    app = create_app(limits=Limits(max_factors=2))
+    client = TestClient(app)
+    body = {"factors": [_continuous(f"x{i}", 0, 1) for i in range(3)]}
+    response = client.post("/v1/designs/full-factorial", json=body)
+    assert response.status_code == 422, response.text
+    error = response.json()["error"]
+    assert error["code"] == "limit_exceeded"
+    assert "2" in error["message"]
+
+
+def test_injected_max_runs_is_honoured_on_a_posted_design_document() -> None:
+    # design_from_document (shared by every design-consuming endpoint) threads the injected cap.
+    app = create_app(limits=Limits(max_runs=3))
+    client = TestClient(app)
+    factors = [_continuous("a", 0, 1), _continuous("b", 0, 1)]
+    document = {
+        "schema_version": "1.0",
+        "factors": factors,
+        "runs": [{"a": v, "b": v} for v in (0.0, 0.25, 0.5, 0.75)],  # 4 > cap of 3
+    }
+    response = client.post("/v1/designs/randomize", json={"design": document})
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "limit_exceeded"
+
+
+def test_injected_search_budget_is_honoured_by_optimal() -> None:
+    app = create_app(limits=Limits(max_restarts=2))
+    client = TestClient(app)
+    body = {"factors": [_continuous("a", 0, 1)], "n_runs": 4, "n_restarts": 5}
+    response = client.post("/v1/designs/optimal", json=body)
+    assert response.status_code == 422, response.text
+    error = response.json()["error"]
+    assert error["code"] == "limit_exceeded"
+    assert "2" in error["message"]
+
+
+def test_injected_max_goals_is_honoured_by_desirability() -> None:
+    app = create_app(limits=Limits(max_goals=1))
+    client = TestClient(app)
+    factors = [_continuous("a", 0, 1), _continuous("b", 0, 1)]
+    generated = client.post("/v1/designs/full-factorial", json={"factors": factors}).json()
+    design = generated["design"]
+    design["runs"] = [
+        {**r, "y1": float(i), "y2": float(2 * i)} for i, r in enumerate(design["runs"])
+    ]
+    body = {
+        "design": design,
+        "goals": [
+            {"response": "y1", "goal": "max", "low": 0.0, "high": 3.0},
+            {"response": "y2", "goal": "min", "low": 0.0, "high": 6.0},
+        ],
+    }
+    response = client.post("/v1/optimize/desirability", json=body)
+    assert response.status_code == 422, response.text
+    error = response.json()["error"]
+    assert error["code"] == "limit_exceeded"
+    assert "1" in error["message"]
+
+
+def test_injected_max_resolution_is_honoured_by_plot_data() -> None:
+    app = create_app(limits=Limits(max_resolution=5))
+    client = TestClient(app)
+    factors = [_continuous("a", 0, 1), _continuous("b", 0, 1)]
+    generated = client.post("/v1/designs/full-factorial", json={"factors": factors}).json()
+    design = generated["design"]
+    design["runs"] = [{**r, "y": float(i)} for i, r in enumerate(design["runs"])]
+    body = {"design": design, "response": "y", "x": "a", "y": "b", "resolution": 20}
+    response = client.post("/v1/plot-data/surface", json=body)
+    assert response.status_code == 422, response.text
+    error = response.json()["error"]
+    assert error["code"] == "limit_exceeded"
+    assert "5" in error["message"]
+
+
+def test_raised_injected_cap_admits_a_request_the_default_would_reject() -> None:
+    # the override raises as well as lowers: 40 factors is over the default 32 but under 50.
+    # Plackett-Burman keeps the run count small (~44), so only the factor cap is in play.
+    body = {"factors": [_continuous(f"x{i}", 0, 1) for i in range(40)]}
+    admitted = TestClient(create_app(limits=Limits(max_factors=50)))
+    response = admitted.post("/v1/designs/plackett-burman", json=body)
+    assert response.status_code == 200, response.text
+    # the identical request is rejected by the default 32-factor cap
+    rejected = TestClient(create_app()).post("/v1/designs/plackett-burman", json=body)
+    assert rejected.status_code == 422, rejected.text
+    assert rejected.json()["error"]["code"] == "limit_exceeded"
+
+
+# --------------------------------------------------------------------------- #
+# space-filling caps the run count *before* materialising the sample (Finding 3)
+# --------------------------------------------------------------------------- #
+
+
+def test_space_filling_run_count_is_capped_before_materialisation(client: TestClient) -> None:
+    # n_runs is an unbounded int on the wire, and the sampler materialises exactly that many
+    # rows (maximin additionally scores 30 O(n**2) hypercubes). Without the pre-flight guard
+    # this would allocate ~GB and never return; with it, the cap fires immediately.
+    body = {"factors": [_continuous("a", 0, 1)], "sampler": "lhs", "n_runs": 10**8}
+    response = client.post("/v1/designs/space-filling", json=body)
+    assert response.status_code == 422, response.text
+    error = response.json()["error"]
+    assert error["code"] == "limit_exceeded"
+    assert str(DEFAULT_LIMITS.max_runs) in error["message"]
+
+
+def test_space_filling_within_cap_still_generates(client: TestClient) -> None:
+    body = {"factors": [_continuous("a", 0, 1)], "sampler": "halton", "n_runs": 10}
+    assert client.post("/v1/designs/space-filling", json=body).status_code == 200

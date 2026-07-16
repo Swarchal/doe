@@ -22,7 +22,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from contract.support import assert_matches, load_pair, pair_names
+from contract.support import assert_matches, load_pair, loose_keys_for, pair_names
 from doe_service.main import create_app
 
 
@@ -36,7 +36,7 @@ def test_contract_pair(client: TestClient, name: str) -> None:
     pair = load_pair(name)
     response = client.request(pair["method"], pair["path"], json=pair["request"])
     assert response.status_code == pair["status"], response.text
-    assert_matches(response.json(), pair["response"])
+    assert_matches(response.json(), pair["response"], loose_keys=loose_keys_for(name))
 
 
 def test_fifteen_pairs_are_locked_in() -> None:

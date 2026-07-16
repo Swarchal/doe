@@ -39,11 +39,11 @@ T = TypeVar("T")
 # --------------------------------------------------------------------------- #
 #
 # One shared validator per cap rather than scattering ``if`` statements through the
-# routers. Every check names the cap and the ceiling in its message, per the spec.
-# Router-level checks (``max_goals`` in ``routers/optimize.py``, ``max_resolution`` in
-# ``routers/plot_data.py``) already import ``DEFAULT_LIMITS`` directly rather than
-# threading a ``Limits`` through FastAPI dependency injection; these follow the same
-# pattern so all limit enforcement reads one way.
+# routers. Every check names the cap and the ceiling in its message, per the spec. Each
+# takes the deployment's ``Limits`` (defaulting to ``DEFAULT_LIMITS`` only when called
+# outside a request); routers obtain it from the ``app_limits`` FastAPI dependency
+# (``deps.py``) and thread it in, so a ``create_app(limits=...)`` override is honoured by
+# every cap -- not only the body-size middleware and the parallelism policy.
 
 
 def check_factor_count(factors: Sequence[Factor], *, limits: Limits = DEFAULT_LIMITS) -> None:
@@ -155,7 +155,9 @@ def region_array(
     return np.asarray(region, dtype=float)
 
 
-def design_from_document(document: Mapping[str, Any]) -> Design:
+def design_from_document(
+    document: Mapping[str, Any], *, limits: Limits = DEFAULT_LIMITS
+) -> Design:
     """``validate_design_dict`` -> ``Design.from_dict``, then the factor/run count caps.
 
     ``doe.ValidationError`` propagates; the M1 handlers map it to the 422 envelope with
@@ -166,12 +168,13 @@ def design_from_document(document: Mapping[str, Any]) -> Design:
     Every endpoint that takes a posted ``design`` document (design operations, analysis,
     optimize, plot-data) funnels through here, so this is the one shared prologue where
     ``max_factors``/``max_runs`` are enforced for all of them at once (Milestone 6,
-    ``docs/WEBSERVICE_BUILD.md`` §6).
+    ``docs/WEBSERVICE_BUILD.md`` §6). ``limits`` is the deployment's configured caps,
+    threaded in from the router's ``app_limits`` dependency.
     """
     validate_design_dict(document)
     design = Design.from_dict(document)
-    check_factor_count(list(design.factors))
-    check_run_count(design.n_runs)
+    check_factor_count(list(design.factors), limits=limits)
+    check_run_count(design.n_runs, limits=limits)
     return design
 
 

@@ -722,7 +722,7 @@ def fit_gls(
             raise ValueError("fit_gls does not support Scheffé (mixture) models")
         order, interactions = MODEL_SPECS[model]
 
-    from .variance import reml_variance_components, v0_inverse
+    from .variance import reml_variance_components, v0_inv_products
 
     response_name: str | None = None
     if isinstance(response, str):
@@ -744,11 +744,12 @@ def fit_gls(
 
     sigma2_wp, sigma2, _reml_ll = reml_variance_components(x, y, whole_plots)
     eta = sigma2_wp / sigma2 if sigma2 > 0 else 0.0
-    v_inv = v0_inverse(eta, whole_plots)
 
-    xtvi = x.T @ v_inv
-    xtvix_inv = np.linalg.pinv(xtvi @ x)
-    coef = xtvix_inv @ (xtvi @ y)
+    # GLS normal equations from the block-diagonal V₀⁻¹, accumulated per whole plot rather
+    # than through a dense n×n inverse (see analysis/variance.py:v0_inv_products).
+    xtvix, xtviy, _ytviy, _logdet = v0_inv_products(eta, x, y, whole_plots)
+    xtvix_inv = np.linalg.pinv(xtvix)
+    coef = xtvix_inv @ xtviy
     cov_beta = sigma2 * xtvix_inv
     std_errors = np.sqrt(np.diag(cov_beta))
 

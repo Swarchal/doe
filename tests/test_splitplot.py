@@ -250,3 +250,30 @@ def test_ols_on_the_same_design_still_offers_them():
     fit = fit_ols(design, "y")
     assert fit.anova().shape[0] > 0
     assert np.isfinite(fit.press())
+
+
+def test_v0_inv_products_match_the_dense_block_diagonal_inverse():
+    # Finding 4 (code review 2026-07-16): the block-accumulated GLS pieces must equal the
+    # same products formed from a dense V0^-1 = (I + eta Z Z^T)^-1, built here independently.
+    # This proves the O(n p^2) block form is *identical* to the O(p n^2) dense multiply it
+    # replaced -- not merely close -- across the whole eta range the REML search explores.
+    from doe.analysis.model import build_model_matrix
+    from doe.analysis.variance import v0_inv_products
+
+    design, y, wp, *_ = _balanced_split_plot(r=3, seed=2)
+    x = build_model_matrix(design, order=1, interactions=True).X
+    n = len(wp)
+    z = np.zeros((n, len(set(wp))))
+    for i, p in enumerate(wp):
+        z[i, p] = 1.0
+
+    for eta in (0.0, 0.3, 2.5, 100.0):
+        v0 = np.eye(n) + eta * (z @ z.T)
+        v0_inv = np.linalg.inv(v0)
+        _sign, exp_logdet = np.linalg.slogdet(v0)
+
+        xtvix, xtviy, ytviy, logdet = v0_inv_products(eta, x, y, wp)
+        assert np.allclose(xtvix, x.T @ v0_inv @ x, rtol=1e-10, atol=1e-12)
+        assert np.allclose(xtviy, x.T @ v0_inv @ y, rtol=1e-10, atol=1e-12)
+        assert ytviy == pytest.approx(float(y @ v0_inv @ y), rel=1e-10)
+        assert logdet == pytest.approx(exp_logdet, rel=1e-10)

@@ -15,11 +15,11 @@ part of the prologue entirely -- they judge the design itself, before any experi
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from doe import Design, Efficiency, FitResult, ValidationError
 from doe import anova_records as _anova_records
@@ -44,6 +44,8 @@ from doe_service.convert import (
     resolve_model,
 )
 from doe_service.convert import region_array as _region_array
+from doe_service.deps import app_limits
+from doe_service.limits import DEFAULT_LIMITS, Limits
 from doe_service.schemas.analysis import (
     AnalysisFitRequest,
     AnovaRequest,
@@ -118,9 +120,11 @@ def _resolved_fit(
     return _fit_ols(design, response, order=order, interactions=interactions)
 
 
-def _fit(body: FitRequest, *, default: str = _DEFAULT_FIT_MODEL) -> tuple[FitResult, list[str]]:
+def _fit(
+    body: FitRequest, *, default: str = _DEFAULT_FIT_MODEL, limits: Limits = DEFAULT_LIMITS
+) -> tuple[FitResult, list[str]]:
     """Shared prologue for ``/fit``, ``/anova``, ``/predict``."""
-    design = design_from_document(body.design.model_dump())
+    design = design_from_document(body.design.model_dump(), limits=limits)
     _check_response_column(design, body.response)
 
     def run() -> FitResult:
@@ -158,9 +162,9 @@ def _points_frame(points: list[dict[str, Any]], factor_names: list[str]) -> pd.D
 
 
 @router.post("/fit")
-def fit(body: AnalysisFitRequest) -> FitResponse:
+def fit(body: AnalysisFitRequest, limits: Annotated[Limits, Depends(app_limits)]) -> FitResponse:
     """Wraps ``doe.fit_ols`` → ``FitResult.to_dict``."""
-    result, warns = _fit(body)
+    result, warns = _fit(body, limits=limits)
     payload = result.to_dict(confidence=body.confidence)
     return FitResponse.model_validate({**payload, "warnings": warns})
 
@@ -171,7 +175,7 @@ def fit(body: AnalysisFitRequest) -> FitResponse:
 
 
 @router.post("/fit-gls")
-def fit_gls(body: FitGlsRequest) -> FitGlsResponse:
+def fit_gls(body: FitGlsRequest, limits: Annotated[Limits, Depends(app_limits)]) -> FitGlsResponse:
     """Wraps ``doe.fit_gls`` -- the split-plot REML/GLS fit.
 
     The posted design must carry a ``whole_plots`` structure; ``fit_gls`` otherwise raises
@@ -181,7 +185,7 @@ def fit_gls(body: FitGlsRequest) -> FitGlsResponse:
     ``to_dict`` does not carry -- assembled here rather than by widening the shared
     ``/fit`` shape.
     """
-    design = design_from_document(body.design.model_dump())
+    design = design_from_document(body.design.model_dump(), limits=limits)
     _check_response_column(design, body.response)
 
     def run() -> FitResult:
@@ -218,7 +222,7 @@ def fit_gls(body: FitGlsRequest) -> FitGlsResponse:
 
 
 @router.post("/anova")
-def anova(body: AnovaRequest) -> AnovaResponse:
+def anova(body: AnovaRequest, limits: Annotated[Limits, Depends(app_limits)]) -> AnovaResponse:
     """Wraps ``anova_records`` + ``lack_of_fit`` + ``press``/``predicted_r2``.
 
     ``lack_of_fit``'s "needs replicates" ``ValueError`` becomes ``lack_of_fit: null``
@@ -226,7 +230,7 @@ def anova(body: AnovaRequest) -> AnovaResponse:
     ``predicted_r2`` are null-guarded the same way for a saturated fit (no residual
     degrees of freedom to build a leave-one-out estimate from).
     """
-    result, warns = _fit(body)
+    result, warns = _fit(body, limits=limits)
     rows = _anova_records(result)
 
     lack_of_fit: dict[str, Any] | None
@@ -264,9 +268,11 @@ def anova(body: AnovaRequest) -> AnovaResponse:
 
 
 @router.post("/predict")
-def predict(body: PredictRequest) -> PredictResponse:
+def predict(
+    body: PredictRequest, limits: Annotated[Limits, Depends(app_limits)]
+) -> PredictResponse:
     """Wraps ``FitResult.predict`` over natural-unit point records."""
-    result, _warns = _fit(body)
+    result, _warns = _fit(body, limits=limits)
     frame = _points_frame(body.points, result.factors.names)
 
     def run() -> list[float]:
@@ -283,17 +289,19 @@ def predict(body: PredictRequest) -> PredictResponse:
 
 
 @router.post("/diagnostics")
-def diagnostics(body: DiagnosticsRequest) -> DiagnosticsResponse:
+def diagnostics(
+    body: DiagnosticsRequest, limits: Annotated[Limits, Depends(app_limits)]
+) -> DiagnosticsResponse:
     """Wraps ``efficiency``/``vif``/``condition_number``/``correlation_matrix``/``leverage``.
 
     No ``response`` -- these judge the design against a model before any experiment runs.
     """
-    design = design_from_document(body.design.model_dump())
+    design = design_from_document(body.design.model_dump(), limits=limits)
 
     def run() -> tuple[ModelMatrix, Efficiency]:
         order, interactions = resolve_model(body.model, default=_DEFAULT_DIAGNOSTICS_MODEL)
         mm = _build_model_matrix(design, order=order, interactions=interactions)
-        region = _region_array(body.region, n_factors=len(design.factors))
+        region = _region_array(body.region, n_factors=len(design.factors), limits=limits)
         eff = _efficiency(design, order=order, interactions=interactions, region=region)
         return mm, eff
 
@@ -325,9 +333,11 @@ def diagnostics(body: DiagnosticsRequest) -> DiagnosticsResponse:
 
 
 @router.post("/coverage")
-def coverage(body: CoverageRequest) -> CoverageResponse:
+def coverage(
+    body: CoverageRequest, limits: Annotated[Limits, Depends(app_limits)]
+) -> CoverageResponse:
     """Wraps ``doe.discrepancy`` + ``doe.maximin_distance``."""
-    design = design_from_document(body.design.model_dump())
+    design = design_from_document(body.design.model_dump(), limits=limits)
 
     def run() -> tuple[float, float]:
         return _discrepancy(design, method=body.method), _maximin_distance(design)

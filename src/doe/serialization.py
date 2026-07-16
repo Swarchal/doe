@@ -94,6 +94,13 @@ def validate_design_dict(data: Mapping[str, Any], *, check_ranges: bool = False)
     categorical_levels: dict[str, set[object]] = {}
     continuous_bounds: dict[str, tuple[float, float]] = {}
 
+    # Cross-factor (FactorSet-level) bookkeeping, checked after the per-factor loop so a
+    # semantically-infeasible-but-structurally-valid document is rejected here rather than
+    # left to raise a bare ``ValueError`` from ``FactorSet`` inside ``Design.from_dict``.
+    n_mixture = 0
+    non_mixture_names: list[str] = []
+    mixture_valid_bounds: list[tuple[float, float]] = []
+
     raw_factors = data.get("factors")
     if _is_list(raw_factors) and raw_factors:
         factor_records: list[Any] = list(raw_factors)
@@ -110,6 +117,8 @@ def validate_design_dict(data: Mapping[str, Any], *, check_ranges: bool = False)
             errors.append(f"factor[{i}] missing a non-empty string 'name'")
         kind = fd.get("type")
         if kind == "continuous":
+            if name is not None:
+                non_mixture_names.append(name)
             low, high = fd.get("low"), fd.get("high")
             if not _is_number(low) or not _is_number(high):
                 errors.append(f"factor {name!r}: continuous 'low'/'high' must be numbers")
@@ -118,6 +127,8 @@ def validate_design_dict(data: Mapping[str, Any], *, check_ranges: bool = False)
             elif name is not None:
                 continuous_bounds[name] = (float(low), float(high))
         elif kind == "categorical":
+            if name is not None:
+                non_mixture_names.append(name)
             levels = fd.get("levels")
             if not _is_list(levels) or len(levels) < 2:
                 errors.append(f"factor {name!r}: categorical 'levels' must list at least 2 values")
@@ -127,6 +138,7 @@ def validate_design_dict(data: Mapping[str, Any], *, check_ranges: bool = False)
                 if name is not None:
                     categorical_levels[name] = set(levels)
         elif kind == "mixture":
+            n_mixture += 1
             low = fd.get("low", 0.0)
             high = fd.get("high", 1.0)
             if not _is_number(low) or not _is_number(high):
@@ -136,8 +148,10 @@ def validate_design_dict(data: Mapping[str, Any], *, check_ranges: bool = False)
                     f"factor {name!r}: mixture bounds must satisfy 0 <= low < high <= 1, "
                     f"got [{low}, {high}]"
                 )
-            elif name is not None:
-                continuous_bounds[name] = (float(low), float(high))
+            else:
+                mixture_valid_bounds.append((float(low), float(high)))
+                if name is not None:
+                    continuous_bounds[name] = (float(low), float(high))
         else:
             errors.append(f"factor {name!r}: unknown type {kind!r}")
         htc = fd.get("hard_to_change")
@@ -149,6 +163,28 @@ def validate_design_dict(data: Mapping[str, Any], *, check_ranges: bool = False)
     dupes = sorted({n for n in factor_names if factor_names.count(n) > 1})
     if dupes:
         errors.append(f"duplicate factor names: {dupes}")
+
+    # FactorSet cross-factor invariants (mirrors ``doe.factors.FactorSet.__init__``): a mixture
+    # design must be all-mixture (>= 2 components) with a feasible blend. Checked here so these
+    # semantically-infeasible documents surface as a ``ValidationError`` (and report
+    # ``valid: false``) instead of raising a bare ``ValueError`` from ``Design.from_dict``.
+    if n_mixture and non_mixture_names:
+        errors.append(
+            "mixture components cannot be combined with other factor types; "
+            f"non-mixture factor(s): {sorted(non_mixture_names)}"
+        )
+    elif n_mixture:
+        if n_mixture < 2:
+            errors.append("a mixture design needs at least 2 components")
+        elif len(mixture_valid_bounds) == n_mixture:
+            # every component's own bounds validated: check the blend itself is feasible
+            sum_low = sum(low for low, _ in mixture_valid_bounds)
+            sum_high = sum(high for _, high in mixture_valid_bounds)
+            if not sum_low <= 1.0 <= sum_high:
+                errors.append(
+                    "mixture component bounds leave no feasible blend: need "
+                    f"sum(low) <= 1 <= sum(high), got sum(low)={sum_low}, sum(high)={sum_high}"
+                )
 
     raw_runs = data.get("runs")
     if _is_list(raw_runs):

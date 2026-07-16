@@ -16,7 +16,9 @@ would otherwise escape ``call_library`` as a 500 (see ``_require_continuous_fact
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from typing import Annotated
+
+from fastapi import APIRouter, Depends
 
 from doe import (
     CategoricalFactor,
@@ -40,8 +42,9 @@ from doe_service.convert import (
     design_from_document,
     resolve_model,
 )
+from doe_service.deps import app_limits
 from doe_service.errors import Infeasible
-from doe_service.limits import DEFAULT_LIMITS, LimitExceeded
+from doe_service.limits import LimitExceeded, Limits
 from doe_service.routers.analysis import _check_response_column, _fit, _resolved_fit
 from doe_service.schemas.common import Bounds
 from doe_service.schemas.optimization import (
@@ -136,11 +139,11 @@ def _require_optimizable_factors(factors: FactorSet) -> None:
 
 
 def _fit_quadratic(
-    body: StationaryPointRequest | OptimumRequest,
+    body: StationaryPointRequest | OptimumRequest, limits: Limits
 ) -> tuple[FitResult, list[str]]:
     """Shared prologue: reject a non-quadratic model, then the M3 fit prologue."""
     _require_quadratic(body.model)
-    result, warns = _fit(body, default=_DEFAULT_OPTIMIZE_MODEL)
+    result, warns = _fit(body, default=_DEFAULT_OPTIMIZE_MODEL, limits=limits)
     _require_continuous_factors(result.factors)
     return result, warns
 
@@ -168,9 +171,11 @@ def _validate_bounds(bounds: Bounds | None, factor_names: list[str]) -> Bounds |
 
 
 @router.post("/stationary-point")
-def stationary_point(body: StationaryPointRequest) -> StationaryPointResponse:
+def stationary_point(
+    body: StationaryPointRequest, limits: Annotated[Limits, Depends(app_limits)]
+) -> StationaryPointResponse:
     """Wraps ``doe.stationary_point`` (canonical analysis of the fitted quadratic)."""
-    result, warns = _fit_quadratic(body)
+    result, warns = _fit_quadratic(body, limits)
     sp = call_library(_stationary_point, result)
     payload = sp.to_dict()
     return StationaryPointResponse.model_validate({**payload, "warnings": warns})
@@ -182,9 +187,11 @@ def stationary_point(body: StationaryPointRequest) -> StationaryPointResponse:
 
 
 @router.post("/optimum")
-def optimum(body: OptimumRequest) -> OptimumResponse:
+def optimum(
+    body: OptimumRequest, limits: Annotated[Limits, Depends(app_limits)]
+) -> OptimumResponse:
     """Wraps ``doe.optimum`` (constrained multistart search over the coded box)."""
-    result, warns = _fit_quadratic(body)
+    result, warns = _fit_quadratic(body, limits)
     bounds = _validate_bounds(body.bounds, result.factors.names)
     bounds_arg: Bounds = bounds if bounds is not None else (-1.0, 1.0)
 
@@ -202,7 +209,9 @@ def optimum(body: OptimumRequest) -> OptimumResponse:
 
 
 @router.post("/categorical-optimum")
-def categorical_optimum(body: OptimumRequest) -> CategoricalOptimumResponse:
+def categorical_optimum(
+    body: OptimumRequest, limits: Annotated[Limits, Depends(app_limits)]
+) -> CategoricalOptimumResponse:
     """Wraps ``doe.categorical_optimum`` -- the mixed continuous/categorical optimum.
 
     ``/optimum`` searches a continuous coded box and so rejects a categorical factor
@@ -216,7 +225,7 @@ def categorical_optimum(body: OptimumRequest) -> CategoricalOptimumResponse:
     Requires a quadratic model, exactly like ``/optimum``.
     """
     _require_quadratic(body.model)
-    result, warns = _fit(body, default=_DEFAULT_OPTIMIZE_MODEL)
+    result, warns = _fit(body, default=_DEFAULT_OPTIMIZE_MODEL, limits=limits)
     _require_optimizable_factors(result.factors)
     bounds = _validate_bounds(body.bounds, result.factors.names)
     bounds_arg: Bounds = bounds if bounds is not None else (-1.0, 1.0)
@@ -235,20 +244,22 @@ def categorical_optimum(body: OptimumRequest) -> CategoricalOptimumResponse:
 
 
 @router.post("/desirability")
-def desirability(body: DesirabilityRequest) -> DesirabilityResponse:
+def desirability(
+    body: DesirabilityRequest, limits: Annotated[Limits, Depends(app_limits)]
+) -> DesirabilityResponse:
     """Wraps ``doe.desirability`` over per-goal re-fits (``doe.ResponseGoal``).
 
     Each goal re-fits its own ``response``/``model`` on the shared design -- the
     library's bracket ``ValueError``s (e.g. a ``target`` outside ``(low, high)``) become
     422 ``infeasible``. Goal count is capped at ``limits.max_goals``.
     """
-    if len(body.goals) > DEFAULT_LIMITS.max_goals:
+    if len(body.goals) > limits.max_goals:
         raise LimitExceeded(
             f"too many desirability goals: {len(body.goals)} exceeds the cap of "
-            f"{DEFAULT_LIMITS.max_goals}"
+            f"{limits.max_goals}"
         )
 
-    design = design_from_document(body.design.model_dump())
+    design = design_from_document(body.design.model_dump(), limits=limits)
     _require_continuous_factors(design.factors)
     bounds = _validate_bounds(body.bounds, design.factors.names)
     bounds_arg: Bounds = bounds if bounds is not None else (-1.0, 1.0)
