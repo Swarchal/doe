@@ -28,6 +28,29 @@ const OFFLINE_PLOT_MSG =
 
 const $ = (id) => document.getElementById(id);
 
+/* Draw (or redraw) a Plotly figure sized to its slot. Plotly measures the container only at
+ * draw time and its `responsive: true` handler only reacts to *window* resizes — a figure
+ * drawn while its slot is hidden or still settling gets Plotly's 700px default and stays
+ * wrong until the window happens to resize. Watching the slot itself with a ResizeObserver
+ * closes that gap: the figure is resized the moment its slot ends up with a different size,
+ * whatever caused the change. */
+const plotResizeObserver = typeof ResizeObserver === "undefined" ? null :
+  new ResizeObserver((entries) => {
+    for (const { target } of entries) {
+      // Only live Plotly figures in a measurable (not display:none) slot; the width check
+      // makes the resize a no-op-free fixpoint rather than an observe/resize loop.
+      if (target._fullLayout && target.offsetWidth > 0 &&
+          Math.abs(target._fullLayout.width - target.offsetWidth) > 1) {
+        Plotly.Plots.resize(target);
+      }
+    }
+  });
+
+function drawPlot(el, traces, layout) {
+  Plotly.react(el, traces, layout, { responsive: true, displaylogo: false });
+  if (plotResizeObserver) plotResizeObserver.observe(el); // observing twice is a no-op
+}
+
 async function api(path, body) {
   const res = await fetch(`/api/v1${path}`, {
     method: "POST",
@@ -871,9 +894,19 @@ async function analyze() {
       responses: { [state.responseName]: responses },
     });
     state.design = attached.design;
-    await renderResults();
-    $("step-results").hidden = false;
-    $("step-results").scrollIntoView({ behavior: "smooth" });
+    // Reveal the results card *before* drawing into it: Plotly sizes each figure to its
+    // container, and a display:none container measures 0×0 — the plots would come up at
+    // Plotly's default size and only correct themselves on the next window resize.
+    const results = $("step-results");
+    const wasHidden = results.hidden;
+    results.hidden = false;
+    try {
+      await renderResults();
+    } catch (err) {
+      results.hidden = wasHidden;
+      throw err;
+    }
+    results.scrollIntoView({ behavior: "smooth" });
   } catch (err) {
     showError("error-plan", err);
   }
@@ -1006,7 +1039,7 @@ function renderParetoPlot(effects) {
   if (typeof Plotly === "undefined") { el.innerHTML = OFFLINE_PLOT_MSG; return; }
   // Ascending, so Plotly's bottom-up horizontal bars put the largest effect at the top.
   const sorted = [...effects].sort((a, b) => a.abs - b.abs);
-  Plotly.react(el, [{
+  drawPlot(el, [{
     type: "bar",
     orientation: "h",
     x: sorted.map((e) => e.abs),
@@ -1020,7 +1053,7 @@ function renderParetoPlot(effects) {
     font: { family: "system-ui, sans-serif", color: "#1f2430" },
     paper_bgcolor: "rgba(0,0,0,0)",
     showlegend: false,
-  }, { responsive: true, displaylogo: false });
+  });
 }
 
 /* Half-normal plot: |effects| (ascending) against half-normal quantiles. Inactive (noise)
@@ -1032,7 +1065,7 @@ function renderHalfNormalPlot(effects) {
   const sorted = [...effects].sort((a, b) => a.abs - b.abs);
   const m = sorted.length;
   const quant = sorted.map((_, i) => invNormalCDF(0.5 + 0.5 * ((i + 0.5) / m)));
-  Plotly.react(el, [{
+  drawPlot(el, [{
     type: "scatter",
     mode: "markers+text",
     x: quant,
@@ -1054,7 +1087,7 @@ function renderHalfNormalPlot(effects) {
     font: { family: "system-ui, sans-serif", color: "#1f2430" },
     paper_bgcolor: "rgba(0,0,0,0)",
     showlegend: false,
-  }, { responsive: true, displaylogo: false });
+  });
 }
 
 function renderTermsTable(terms, { sortByEffect = false } = {}) {
@@ -1180,16 +1213,15 @@ function renderResidualPlots(fit) {
   };
   const marker = { color: "#256abf", size: 7, line: { color: "#ffffff", width: 1 } };
   const refLine = { color: "#8a93a6", width: 1, dash: "dash" };
-  const config = { responsive: true, displaylogo: false };
 
   // Residuals vs fitted: want a flat, patternless band about the dashed zero line.
   const xr = fitted.length ? [Math.min(...fitted), Math.max(...fitted)] : [0, 1];
-  Plotly.react(rf, [
+  drawPlot(rf, [
     { type: "scatter", mode: "lines", x: xr, y: [0, 0], line: refLine, hoverinfo: "skip" },
     { type: "scatter", mode: "markers", x: fitted, y: residuals, marker,
       hovertemplate: "fitted %{x:.4~g}<br>residual %{y:.4~g}<extra></extra>" },
   ], { ...layoutBase, xaxis: { title: { text: "fitted value" } },
-    yaxis: { title: { text: "residual" }, zeroline: false } }, config);
+    yaxis: { title: { text: "residual" }, zeroline: false } });
 
   // Normal Q–Q: ordered residuals vs theoretical standard-normal quantiles. The dashed
   // reference is the line expected if the residuals were exactly normal (intercept = mean,
@@ -1200,13 +1232,13 @@ function renderResidualPlots(fit) {
   const mean = n ? sorted.reduce((s, v) => s + v, 0) / n : 0;
   const sd = n ? Math.sqrt(sorted.reduce((s, v) => s + (v - mean) ** 2, 0) / n) : 0;
   const tr = n ? [theo[0], theo[n - 1]] : [-1, 1];
-  Plotly.react(qq, [
+  drawPlot(qq, [
     { type: "scatter", mode: "lines", x: tr, y: tr.map((z) => mean + sd * z),
       line: refLine, hoverinfo: "skip" },
     { type: "scatter", mode: "markers", x: theo, y: sorted, marker,
       hovertemplate: "theoretical %{x:.3~g}<br>residual %{y:.4~g}<extra></extra>" },
   ], { ...layoutBase, xaxis: { title: { text: "theoretical quantile" } },
-    yaxis: { title: { text: "ordered residual" } } }, config);
+    yaxis: { title: { text: "ordered residual" } } });
 }
 
 /* Acklam's rational approximation to the inverse standard-normal CDF (Φ⁻¹), accurate to
@@ -1356,14 +1388,14 @@ async function renderContour(optimumNatural) {
     });
   }
 
-  Plotly.react(el, traces, {
+  drawPlot(el, traces, {
     margin: { t: 10, r: 10, b: 55, l: 65 },
     xaxis: { title: { text: label(x) } },
     yaxis: { title: { text: label(y) } },
     showlegend: false,
     font: { family: "system-ui, sans-serif", color: "#1f2430" },
     paper_bgcolor: "rgba(0,0,0,0)",
-  }, { responsive: true, displaylogo: false });
+  });
 }
 
 /* ---------- wiring ---------- */
