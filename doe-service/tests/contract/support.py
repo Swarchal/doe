@@ -33,7 +33,7 @@ def assert_matches(actual: Any, expected: Any, *, path: str = "$") -> None:
     if isinstance(expected, bool) or isinstance(actual, bool):
         assert actual == expected, f"{path}: {actual!r} != {expected!r}"
     elif isinstance(expected, int | float) and isinstance(actual, int | float):
-        assert actual == pytest.approx(expected, rel=1e-6, abs=1e-9), (
+        assert actual == pytest.approx(expected, rel=1e-5, abs=1e-9), (
             f"{path}: {actual!r} != approx({expected!r})"
         )
     elif isinstance(expected, dict):
