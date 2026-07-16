@@ -25,10 +25,11 @@ the optimal-design engine *searches over* it. Phase 3 extends each link, never r
 
 > **Implementation status:** Phase 3 is implemented. Diagnostics, alias/leverage plotting,
 > candidate grids, mixed continuous/categorical candidate regions, D- and I-optimal design
-> wrappers, coordinate exchange, and augmentation are all covered by tests. The exchange engine
-> currently uses a correctness-first discrete candidate exchange with full model-matrix and
-> objective recomputation on each trial; rank-1 determinant updates and continuous line search are
-> deferred optimizations, not missing user-facing Phase 3 features.
+> wrappers, coordinate exchange, and augmentation are all covered by tests. The exchange engine's
+> discrete candidate exchange has since been sped up — model rows expanded once, then shared-state
+> rank-1 determinant updates for the D-criterion (see §9) — without changing its results;
+> continuous line search remains a deferred optimization, not a missing user-facing Phase 3
+> feature.
 
 ## Goals
 
@@ -211,8 +212,9 @@ Algorithm:
 1. **Seed** an `n_runs × k` start (random feasible points; for *augmentation*, the first
    `len(fixed_runs)` rows are `fixed_runs` and are never exchanged).
 2. **Sweep** every mutable run; replace the whole row with the candidate point that most improves
-   the criterion. Each trial recomputes the full model matrix and objective from scratch. This is
-   slower than a determinant-update implementation but deliberately simple and correctness-first.
+   the criterion. (As first built, each trial recomputed the full model matrix and objective from
+   scratch — deliberately simple and correctness-first; the D path has since been sped up to
+   shared-state rank-1 determinant updates with the same results, see §9.)
 3. **Iterate** sweeps until no coordinate improves (or `max_iter`).
 4. **Restart** `n_restarts` times from fresh random seeds; keep the best. Guards against the
    local optima coordinate exchange is prone to.
@@ -329,8 +331,10 @@ mypy green.
   closed-form integration.
 - **Engine choice:** Phase 3 implements coordinate exchange only. Fedorov point-exchange remains a
   possible later addition for pure candidate-set problems.
-- **Rank-1 determinant updates:** deferred. The current engine recomputes the full model matrix
-  and `slogdet` for correctness; determinant-update shortcuts can be added behind the same tests.
+- **Rank-1 determinant updates:** implemented (see §9.1). Model rows are expanded once and D
+  candidates scored by shared-state rank-1 determinant updates; the from-scratch `slogdet` path
+  remains as the exact fallback and the correctness oracle in the tests. Further determinant-update
+  work (incremental state, coordinate-wise exchange, an I-criterion delta) is catalogued in §9.2.
 - **`meta` vs. a returned diagnostics object:** generators return a plain `Design` (with
   diagnostics in `meta`) so downstream code is uniform; `coordinate_exchange` additionally
   returns the richer `OptimalDesign` for callers who want the full search report. (Mirrors
@@ -347,3 +351,83 @@ extreme-vertices) for constrained-proportion problems. Both reuse Phase 3's cand
 and diagnostics machinery — space-filling is a region-sampling problem, and extreme-vertices
 mixture designs are a constrained candidate set the coordinate-exchange engine can already
 consume.
+
+---
+
+## 9. Performance — coordinate-exchange search speed
+
+Two independent cost axes govern the D-optimal search, and profiling a several-factor
+quadratic search (`d_optimal`, `k` continuous factors, default `candidate_grid`) pins both:
+
+- **Per-candidate linear algebra** — `O(N_cand · p²)` per scored run, where `p` is the number
+  of model terms (`≈ k²/2` for a quadratic) and `N_cand` the candidate count.
+- **The candidate grid itself** — `N_cand = levels^k` (default `3^k`), exponential in the factor
+  count. This is what makes "several factors" the hard case: `3^5 = 243`, `3^7 = 2187`,
+  `3^8 = 6561`.
+
+### 9.1 Done
+
+- **Expand the model matrix once** (`_fast_objective`, `expand_coded_points` up front). The
+  candidate region and fixed rows are expanded to model rows a single time; a trial substitutes
+  one already-expanded row instead of re-expanding the whole region per trial. (Earlier speedup
+  pass — see the benchmark guards in `test_optimal_benchmark.py`.)
+- **Shared-state rank-1 determinant updates** (`_d_sweep_state` + `_d_row_logdets`). A sweep
+  holds `M = XᵀX` fixed between accepted swaps, so each candidate's variance `d_b = bᵀM⁻¹b` —
+  the `O(N_cand · p²)` term — depends only on `M`, *not* on which run is being swept. It is
+  computed **once per sweep** and reused across every run; per-run scoring drops to a single
+  mat-vec via the matrix-determinant-lemma delta:
+
+  ```
+  log|M − aaᵀ + bbᵀ| = log|M| + log[(1 − d_a)(1 + d_b) + d_ab²]
+      d_a  = aᵀM⁻¹a   (this run's leverage; scalar, per run)
+      d_b  = bᵀM⁻¹b   (candidate variances; shared, once per sweep)
+      d_ab = bᵀM⁻¹a   (one mat-vec over all candidates)
+  ```
+
+  A converged (zero-swap) sweep costs one `O(N_cand·p²)` pass instead of `n_runs` of them.
+  Numerically identical to a from-scratch refit (locked by
+  `test_row_logdets_d_matches_per_candidate_slogdet`), with an exact per-candidate fallback for
+  rank-deficient / unit-leverage rows. Measured on the default 20 restarts: ~30× at `k=7`
+  (≈39 s → 1.3 s), ~18× at `k=8` (≈2 min → 6.5 s); the win grows with `k` as `N_cand` grows.
+
+### 9.2 Next (rough priority order; none landed)
+
+- **Tier 1 follow-up — incremental state update.** After an accepted swap, `_d_sweep_state`
+  rebuilds `M⁻¹`, `F·M⁻¹`, and `d_b` from scratch (`O(N_cand·p²)`) — now the largest single
+  cost. A swap is a rank-2 change to `M` (`−aaᵀ + bbᵀ`), so `M⁻¹` updates by
+  Sherman–Morrison–Woodbury in `O(p²)` and `d_b` / `F·M⁻¹` update in `O(N_cand·p)`. Cuts each
+  swap from `O(N_cand·p²)` to `O(N_cand·p)`; needs a periodic exact resync (per sweep) to bound
+  floating-point drift. **Subsumes** the Tier-3 rank-1 `info` update below.
+
+- **Tier 2 — true coordinate exchange (removes the `3^k` grid).** The engine is *named*
+  coordinate exchange but actually does Fedorov point-exchange: it swaps whole rows against a
+  materialized `levels^k` candidate set. Genuine Meyer–Nachtsheim coordinate exchange changes
+  *one coordinate of one run at a time*, searching only `levels` values per factor —
+  `O(k · levels)` trials per run instead of `O(levels^k)`, each a rank-1 update. Polynomial in
+  `k`; the grid is never built. This is the real fix for the exponential axis. Caveats:
+  - It changes the produced designs (and the `seed → design` reproducibility contract), so it is
+    a behavior change, not a drop-in — it would need its own fixtures/regeneration.
+  - Mixture/simplex rows must stay on whole-row exchange (a single-coordinate move breaks
+    `Σ = 1`), so the engine becomes a per-factor-type path.
+  - **Continuous line search (sub-option).** For continuous factors, optimize each coordinate
+    *off-grid* (closed-form or a 1-D search on the single-coordinate D-criterion) rather than
+    snapping to `levels` values — strictly better designs than any fixed grid. This is the §7
+    "Continuous coordinate search" item, unlocked once the search is per-coordinate.
+
+- **Tier 3 — supporting wins.**
+  - **Greedy full-rank start.** Random starts are often singular, so the exact per-candidate
+    fallback (`O(N_cand·p³)` per row) fires on the first sweeps. Seeding by greedily adding the
+    determinant-increasing candidate reaches full rank immediately (the fast path always applies)
+    and converges in fewer sweeps/restarts.
+  - **Rank-1 `info` update on swaps.** `_run_restart` recomputes `f_current.T @ f_current`
+    (`O(n·p²)`) on every accepted swap; `info += bbᵀ − aaᵀ` is `O(p²)`, resynced per sweep.
+    (Superseded if the Tier-1 follow-up lands.)
+  - **Batched restarts.** Stack the `n_restarts` designs into `(R, p, p)` and drive numpy's
+    batched `slogdet` / einsum in lockstep — amortizes Python overhead with no pickling, and,
+    unlike `n_jobs`, is safe to enable inside `doe-service` (no fan-out across the server's cores).
+  - **float32 ranking pass.** Rank candidates in float32 (half the memory bandwidth on the
+    `O(N_cand·p²)` term), then re-verify the winner in float64. Mostly mooted by the shared-state
+    change, which already removed the per-row einsum.
+  - **I-optimal delta.** The I-criterion path still scores every candidate from scratch. It
+    admits an analogous Fedorov *trace* update (Sherman–Morrison on the average prediction
+    variance) — the I-optimality analog of the D delta in §9.1.

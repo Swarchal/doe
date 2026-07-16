@@ -22,8 +22,9 @@ import pytest
 from doe.analysis.model import expand_coded_points
 from doe.factors import CategoricalFactor, ContinuousFactor, FactorSet
 from doe.generators.optimal import (
+    _d_row_logdets,
+    _d_sweep_state,
     _fast_objective,
-    _row_logdets_d,
     _score_d_optimal,
     _score_i_optimal,
     candidate_grid,
@@ -103,17 +104,18 @@ def test_fast_objective_matches_from_scratch_with_categorical():
 
 
 def test_row_logdets_d_matches_per_candidate_slogdet():
-    # The vectorised rank-1 update must return, for every candidate, exactly the log|X^T X| a
-    # from-scratch slogdet of the swapped design would give.
-    fs, region, f_region, coded, f_design = _setup(
+    # The rank-1 update (shared per-sweep state + per-row scoring) must return, for every
+    # candidate, exactly the log|X^T X| a from-scratch slogdet of the swapped design would give.
+    _fs, region, f_region, _coded, f_design = _setup(
         _cont(3), n_runs=15, order=2, interactions=True, seed=7
     )
     info = f_design.T @ f_design
     row = 4
-    a = f_design[row]
 
-    logdets = _row_logdets_d(info, a, f_region)
-    assert logdets is not None  # non-saturated design -> M_minus is positive definite
+    state = _d_sweep_state(info, f_region)
+    assert state is not None  # non-saturated design -> M is comfortably positive definite
+    logdets = _d_row_logdets(state, f_design[row])
+    assert logdets is not None  # a low-leverage run -> 1 - d_a is well away from 0
 
     for cand in range(region.shape[0]):
         trial = f_design.copy()
@@ -124,14 +126,16 @@ def test_row_logdets_d_matches_per_candidate_slogdet():
 
 
 def test_row_logdets_d_falls_back_on_rank_deficient_partial_design():
-    # A saturated design (n_runs == n_terms) loses rank when any run is removed, so M_minus is
-    # not positive definite and the rank-1 update is undefined -- the helper must return None so
-    # the engine drops to its exact per-candidate path (rather than raising or lying).
-    fs, region, f_region, coded, f_design = _setup(
+    # A saturated design (n_runs == n_terms) loses rank when any run is removed, so 1 - d_a
+    # collapses (unit leverage) and the rank-1 update is undefined -- the per-row scorer must
+    # return None so the engine drops to its exact per-candidate path (rather than lying). If the
+    # random start is itself singular, the shared state is None, which triggers the same fallback.
+    _fs, _region, f_region, _coded, f_design = _setup(
         _cont(2), n_runs=6, order=2, interactions=True, seed=8
     )  # k=2 quadratic -> 6 terms == 6 runs
     info = f_design.T @ f_design
-    assert _row_logdets_d(info, f_design[0], f_region) is None
+    state = _d_sweep_state(info, f_region)
+    assert state is None or _d_row_logdets(state, f_design[0]) is None
 
 
 # --------------------------------------------------------------------------- #

@@ -229,45 +229,77 @@ def _fast_objective(
     return score_i
 
 
-def _row_logdets_d(info: np.ndarray, a: np.ndarray, f_region: np.ndarray) -> np.ndarray | None:
-    """``log|X^T X|`` for *every* candidate in one shot, via the rank-1 determinant lemma.
+# The shared per-sweep state a D-optimal sweep carries: (M^{-1}, F M^{-1}, candidate variances
+# b^T M^{-1} b, log|M|). Bundled so it can be recomputed as a unit whenever M = X^T X changes.
+_DSweepState = tuple[np.ndarray, np.ndarray, np.ndarray, float]
 
-    A coordinate exchange at one run swaps that run's model vector out (``a``) and a candidate
-    ``b`` in, so the information matrix goes ``M -> M - aa^T + bb^T``. Writing
-    ``M_minus = M - aa^T`` (the design *without* the swept run -- a Gram matrix, hence positive
-    semidefinite) the matrix determinant lemma gives a closed form that shares ``M_minus`` across
-    all candidates::
 
-        log|M_minus + bb^T| = log|M_minus| + log(1 + b^T M_minus^{-1} b).
+def _d_sweep_state(info: np.ndarray, f_region: np.ndarray) -> _DSweepState | None:
+    """Shared per-sweep state for the D-optimal exchange, or ``None`` if ``M`` is singular.
 
-    So one Cholesky + one inverse of ``M_minus`` (both ``O(p^3)``, done once per run) plus a
-    single vectorised quadratic form over ``f_region`` replaces the ``n_candidates`` separate
-    ``slogdet`` calls the naive sweep makes. Because ``M_minus`` is PD its inverse is PD, so
-    ``b^T M_minus^{-1} b >= 0`` and every returned value is finite and real.
+    A coordinate-exchange sweep scores every candidate against every mutable run while the
+    information matrix ``M = X^T X`` is *fixed* -- it changes only when a swap is accepted. The
+    quantity that dominates the per-candidate cost is each candidate's prediction variance
+    ``d_b = b^T M^{-1} b``, and it depends only on ``M``, *not* on which run is being swept. So it
+    is computed **once** here and reused across all rows in the sweep (see :func:`_d_row_logdets`).
+    That is the whole speedup: the old per-run path recomputed an ``O(n_candidates * p^2)``
+    quadratic form for *every* run; this computes it once per sweep segment (between swaps).
 
-    Returns the ``(n_candidates,)`` vector of full ``log|X^T X|`` scores, or ``None`` when
-    ``M_minus`` is not positive definite (a rank-deficient partial design -- common on random
-    starts); the caller then falls back to the exact per-candidate ``slogdet`` path. The result
-    is the D-optimality objective, mathematically identical to scoring each candidate from
-    scratch.
+    Returns ``(m_inv, fm, d_b, logdet)`` -- ``m_inv = M^{-1}``, ``fm = F M^{-1}`` (kept for the
+    per-run cross term in :func:`_d_row_logdets`), ``d_b`` the ``(n_candidates,)`` variances, and
+    ``logdet = log|M|`` -- or ``None`` when ``M`` is not comfortably positive definite (a
+    rank-deficient partial design, common on random starts), so the caller drops to the exact
+    per-candidate path. The pivot-spread gate matches the old rank-1 helper: a ratio this small
+    means condition number > ~1e16, i.e. effectively singular.
     """
-    m_minus = info - np.outer(a, a)
     try:
-        chol = np.linalg.cholesky(m_minus)
+        chol = np.linalg.cholesky(info)
     except np.linalg.LinAlgError:
         return None
-    # Cholesky can slip past a *numerically* rank-deficient M_minus (e.g. a saturated design
-    # that loses rank when a run is removed) with a tiny positive pivot, yielding a garbage
-    # inverse. Gate on the pivot spread: a ratio this small means condition number > ~1e16,
-    # i.e. effectively singular -> None -> the caller's exact per-candidate fallback, which
-    # also explores such rows more thoroughly than a rank-1 shortcut could.
     diag = np.diagonal(chol)
     if float(diag.min()) <= 1e-6 * float(diag.max()):
         return None
-    g = np.linalg.inv(m_minus)
-    logdet_minus = 2.0 * float(np.sum(np.log(diag)))
-    quad = np.einsum("ij,jk,ik->i", f_region, g, f_region)
-    return np.asarray(logdet_minus + np.log1p(quad), dtype=float)
+    m_inv = np.linalg.inv(info)
+    fm = f_region @ m_inv
+    d_b = np.einsum("ij,ij->i", fm, f_region)
+    logdet = 2.0 * float(np.sum(np.log(diag)))
+    return m_inv, fm, d_b, logdet
+
+
+def _d_row_logdets(state: _DSweepState, a: np.ndarray) -> np.ndarray | None:
+    """``log|X^T X|`` for swapping run ``a`` against *every* candidate, from shared sweep state.
+
+    A coordinate exchange at one run swaps that run's model vector out (``a``) and a candidate
+    ``b`` in, so ``M -> M - aa^T + bb^T``. Applying the matrix determinant lemma to *both* the
+    downdate and the update -- and reusing the shared ``M^{-1}`` from :func:`_d_sweep_state`
+    instead of re-inverting the run-deleted matrix per run -- collapses to::
+
+        log|M - aa^T + bb^T| = log|M| + log[(1 - d_a)(1 + d_b) + d_ab^2]
+
+    with ``d_a = a^T M^{-1} a`` (a scalar -- this run's leverage), ``d_b = b^T M^{-1} b`` (the
+    shared candidate variances), and ``d_ab = b^T M^{-1} a`` (one mat-vec ``fm @ a`` over all
+    candidates). Every per-candidate term is ``O(n_candidates * p)`` or cheaper -- the
+    ``O(n_candidates * p^2)`` work lives in the shared state -- so scoring a run's whole candidate
+    set is now dominated by a single mat-vec.
+
+    Returns the ``(n_candidates,)`` vector of full ``log|X^T X|`` scores (mathematically identical
+    to scoring each swapped design from scratch), or ``None`` when ``1 - d_a`` is too small to
+    trust: removing this run drops the design's rank (a saturated / unit-leverage run), so the
+    caller uses the exact per-candidate path for it -- matching the old helper's fallback, which
+    keyed off the same run-deleted matrix losing positive-definiteness.
+    """
+    m_inv, fm, d_b, logdet = state
+    d_a = float(a @ m_inv @ a)
+    denom = 1.0 - d_a
+    if denom <= 1e-9:
+        return None
+    d_ab = fm @ a
+    ratio = denom * (1.0 + d_b) + d_ab * d_ab
+    # ratio > 0 for a full-rank swap; a non-positive ratio marks a singular candidate -> -inf.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        logdets = logdet + np.log(ratio)
+    logdets[~(ratio > 0.0)] = -np.inf
+    return np.asarray(logdets, dtype=float)
 
 
 # --------------------------------------------------------------------------- #
@@ -313,32 +345,36 @@ def _run_restart(
         f_current[first_mutable:] = f_region[idx]
 
     current_score = score_fn(f_current)
-    # D-optimality scores every candidate for a run with one rank-1 determinant update (see
-    # _row_logdets_d), so it keeps the running information matrix M = X^T X. Other criteria (I)
-    # score from scratch per candidate and don't need M.
+    # D-optimality scores every candidate for a run from a rank-1 determinant update
+    # (see _d_row_logdets), which needs the information matrix M = X^T X and its once-per-sweep
+    # derived state (_d_sweep_state). Other criteria (I) score from scratch per candidate and
+    # need neither.
     info = f_current.T @ f_current if criterion == "D" else None
+    state = _d_sweep_state(info, f_region) if info is not None else None
     converged = False
 
     for _iteration in range(max_iter):
         improved = False
         for row in range(first_mutable, n_runs):
-            logdets = (
-                _row_logdets_d(info, f_current[row], f_region) if info is not None else None
-            )
+            logdets = _d_row_logdets(state, f_current[row]) if state is not None else None
             if logdets is not None:
-                # Vectorised rank-1 path: pick the best candidate from one score vector.
+                # Vectorised rank-1 path: pick the best candidate from one score vector, scored
+                # off the shared sweep state (no per-run re-inversion of the candidate region).
                 best_cand = int(np.argmax(logdets))
                 row_best_score = float(logdets[best_cand])
                 if row_best_score > current_score + tol:
                     f_current[row] = f_region[best_cand]
                     current[row] = region[best_cand]
                     info = f_current.T @ f_current  # refresh exactly (no drift)
-                    current_score = float(np.linalg.slogdet(info)[1])
+                    state = _d_sweep_state(info, f_region)  # M changed -> rebuild shared state
+                    current_score = (
+                        state[3] if state is not None else float(np.linalg.slogdet(info)[1])
+                    )
                     improved = True
                 continue
 
-            # Fallback: exact per-candidate scoring (I-optimality, or a rank-deficient partial
-            # design where the rank-1 update is undefined).
+            # Fallback: exact per-candidate scoring (I-optimality, or a D run where the rank-1
+            # update is undefined -- a rank-deficient partial design or a unit-leverage run).
             row_orig = f_current[row].copy()
             best_cand = -1
             row_best_score = current_score
@@ -354,6 +390,7 @@ def _run_restart(
                 current[row] = region[best_cand]
                 if info is not None:
                     info = f_current.T @ f_current
+                    state = _d_sweep_state(info, f_region)
                 current_score = row_best_score
                 improved = True
             else:
@@ -427,10 +464,12 @@ def coordinate_exchange(
     result numerically identical to a from-scratch refit: (1) the candidate region (and any
     fixed rows) is expanded into model rows *once*, up front, so a trial only substitutes a
     single already-expanded row; (2) for ``criterion="D"`` all candidates for a run are scored
-    together by a rank-1 determinant update (:func:`_row_logdets_d`) -- one Cholesky + inverse
-    of the run-deleted information matrix instead of an :func:`numpy.linalg.slogdet` per
-    candidate -- with an exact per-candidate fallback whenever that partial design is
-    rank-deficient. Sweeps iterate to convergence (or ``max_iter``); the whole search restarts
+    together by a rank-1 determinant update (:func:`_d_row_logdets`) reading a shared per-sweep
+    state (:func:`_d_sweep_state`) -- the ``O(n_candidates * p^2)`` candidate-variance vector is
+    built once per sweep and reused across every run, instead of an
+    :func:`numpy.linalg.slogdet` (or a per-run re-inversion) per candidate -- with an exact
+    per-candidate fallback whenever that partial design is rank-deficient. Sweeps iterate to
+    convergence (or ``max_iter``); the whole search restarts
     ``n_restarts`` times from fresh random starts and keeps the best, guarding against local
     optima.
 
