@@ -53,6 +53,13 @@
       <span class="hint-inline">or pick up where you left off:</span>
       <button type="button" class="secondary" id="load-plan">Load saved plan (JSON)</button>
       <input type="file" id="load-plan-file" accept="application/json,.json" hidden>
+      <button type="button" class="ghost" id="seed-toggle" title="Reproducibility (debug)">⚙</button>
+      <span id="seed-wrap" hidden>
+        <label class="inline-label">Random seed
+          <input type="number" id="seed" min="0" step="1" size="8" placeholder="none">
+        </label>
+        <span class="hint-inline">fixes the generated plan and its run order</span>
+      </span>
     </div>
     <div class="error" id="error-factors" hidden></div>
   </section>
@@ -63,6 +70,8 @@
     <p class="hint" id="plan-summary"></p>
     <div class="toolbar">
       <button type="button" class="secondary" id="download-csv">Download run sheet (CSV)</button>
+      <button type="button" class="secondary" id="import-results">Import results (CSV)</button>
+      <input type="file" id="import-results-file" accept=".csv,.tsv,.txt,text/csv" hidden>
       <button type="button" class="secondary" id="save-plan">Save plan (JSON)</button>
       <button type="button" class="secondary" id="demo-fill">Fill with demo results</button>
       <label class="inline-label">Measurement name
@@ -70,7 +79,10 @@
       </label>
     </div>
     <p class="hint">Do the runs <em>in the order shown</em> (it is randomized to protect against
-      drift), write your measurement into the last column, then analyse.</p>
+      drift). To record measurements: type them into the last column, paste a whole column copied
+      from a spreadsheet into any measurement cell, or fill in the downloaded run sheet's last
+      column and bring it back with <strong>Import results</strong>.</p>
+    <p class="notice" id="import-status" hidden></p>
     <div class="table-scroll"><table class="run-table" id="run-table"></table></div>
     <button type="button" class="primary" id="analyze">Analyse results</button>
     <div class="error" id="error-plan" hidden></div>

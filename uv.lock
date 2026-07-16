@@ -445,6 +445,7 @@ source = { editable = "doe-web" }
 dependencies = [
     { name = "doe-service" },
     { name = "fastapi" },
+    { name = "uvicorn" },
 ]
 
 [package.optional-dependencies]
@@ -452,7 +453,6 @@ dev = [
     { name = "httpx2" },
     { name = "mypy" },
     { name = "pytest" },
-    { name = "uvicorn" },
 ]
 
 [package.metadata]
@@ -462,7 +462,7 @@ requires-dist = [
     { name = "httpx2", marker = "extra == 'dev'", specifier = ">=0.1" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "uvicorn", marker = "extra == 'dev'", specifier = ">=0.29" },
+    { name = "uvicorn", specifier = ">=0.29" },
 ]
 provides-extras = ["dev"]
 

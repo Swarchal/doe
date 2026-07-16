@@ -1,6 +1,7 @@
 """Application factory.
 
-Run locally with ``uvicorn --factory doe_web.main:create_app``.
+Run locally with ``uv run doe-web`` (see :func:`main`), or directly with
+``uvicorn --factory doe_web.main:create_app``.
 
 One process serves both halves: the full doe-service API is mounted under ``/api``
 (so ``POST /api/v1/designs/central-composite`` etc.), and the static single-page
@@ -8,9 +9,11 @@ front-end is served from ``/``. Same origin, so no CORS configuration is needed 
 the doe-service app is mounted unmodified, limits, error envelopes and all.
 """
 
+import argparse
 from dataclasses import replace
 from pathlib import Path
 
+import uvicorn
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
@@ -47,3 +50,23 @@ def create_app() -> FastAPI:
     app.mount("/api", create_api_app(limits=WEB_LIMITS))
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
     return app
+
+
+def main() -> None:
+    """Console entry point: serve the combined app with uvicorn.
+
+    Installed as the ``doe-web`` script, so ``uv run doe-web`` launches the
+    server (``--host``/``--port``/``--reload`` are forwarded to uvicorn).
+    """
+    parser = argparse.ArgumentParser(prog="doe-web", description="Serve the doe-web app.")
+    parser.add_argument("--host", default="127.0.0.1", help="bind address (default: 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=8000, help="port (default: 8000)")
+    parser.add_argument("--reload", action="store_true", help="restart on source changes")
+    args = parser.parse_args()
+    uvicorn.run(
+        "doe_web.main:create_app",
+        factory=True,
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+    )

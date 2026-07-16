@@ -219,6 +219,14 @@ function onFactorsChanged() {
   }
 }
 
+/* The debug seed (behind the ⚙ toggle), or null when unset. Only two calls in the whole
+ * flow are stochastic — the D-optimal search and the run-order randomization — so seeding
+ * those makes a generated plan fully reproducible. */
+function debugSeed() {
+  const v = parseInt($("seed").value, 10);
+  return Number.isInteger(v) && v >= 0 ? v : null;
+}
+
 async function generatePlan() {
   clearError("error-factors");
   try {
@@ -248,6 +256,8 @@ async function generatePlan() {
       body.n_runs = nRuns;
       body.model = "quadratic";
     }
+    const seed = debugSeed();
+    if (seed !== null && type === "dopt") body.seed = seed;
     // Generation can take a moment (the D-optimal coordinate-exchange search especially),
     // so show a spinner once the request is actually in flight — after all validation above.
     // If it runs long, escalate the label so it clearly hasn't hung.
@@ -257,7 +267,8 @@ async function generatePlan() {
     ]);
     const { design } = await api(endpoint, body);
     // Randomize the run order so the sheet is bench-ready.
-    state.design = (await api("/designs/randomize", { design })).design;
+    state.design = (await api("/designs/randomize",
+      seed !== null ? { design, seed } : { design })).design;
     renderPlan();
     $("step-plan").hidden = false;
     $("step-results").hidden = true;
@@ -303,6 +314,7 @@ function renderPlan() {
   $("run-table").innerHTML =
     `<thead><tr>${head.map((h) => `<th${h === "Run" ? ' class="num"' : ""}>${h}</th>`).join("")}</tr></thead>` +
     `<tbody>${rows.join("")}</tbody>`;
+  $("import-status").hidden = true; // a fresh table has no imported measurements
 }
 
 /* Quote a CSV field when it contains a comma, quote or newline (factor names, levels and
@@ -344,6 +356,235 @@ function downloadCsv() {
   a.download = `${d.name || "design"}.csv`;
   a.click();
   URL.revokeObjectURL(a.href);
+}
+
+/* ---------- Step 2: results import (CSV upload + spreadsheet paste) ---------- */
+
+/* Pick the field separator by counting candidates in the header line (outside quotes):
+ * Excel in comma-decimal locales writes semicolon-separated CSV, and a spreadsheet
+ * "save as text" gives tabs. Comma wins ties, so a plain sheet stays a plain sheet. */
+function sniffDelimiter(text) {
+  const end = text.indexOf("\n");
+  const line = end === -1 ? text : text.slice(0, end);
+  let best = ",";
+  let bestCount = 0;
+  for (const d of [",", ";", "\t"]) {
+    let count = 0;
+    let inQuotes = false;
+    for (const c of line) {
+      if (c === '"') inQuotes = !inQuotes;
+      else if (!inQuotes && c === d) count += 1;
+    }
+    if (count > bestCount) { best = d; bestCount = count; }
+  }
+  return best;
+}
+
+/* Minimal RFC-4180 reader: quoted fields, doubled quotes, CR/LF/CRLF row ends.
+ * Returns rows of string cells, with all-blank rows dropped. */
+function parseCsv(text, delimiter = ",") {
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1); // Excel "CSV UTF-8" BOM
+  const rows = [];
+  let row = [];
+  let field = "";
+  let inQuotes = false;
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i += 2; continue; }
+        inQuotes = false; i += 1; continue;
+      }
+      field += c; i += 1; continue;
+    }
+    if (c === '"') { inQuotes = true; i += 1; continue; }
+    if (c === delimiter) { row.push(field); field = ""; i += 1; continue; }
+    if (c === "\n" || c === "\r") {
+      row.push(field); field = ""; rows.push(row); row = [];
+      i += c === "\r" && text[i + 1] === "\n" ? 2 : 1;
+      continue;
+    }
+    field += c; i += 1;
+  }
+  if (field !== "" || row.length) { row.push(field); rows.push(row); }
+  return rows.filter((r) => r.some((cell) => cell.trim() !== ""));
+}
+
+/* Strict numeric parse — the whole cell must be a number, unlike parseFloat's
+ * prefix parsing ("12abc" → 12, and worse, "0,5" → 0). With `commaDecimal`,
+ * a single-comma-no-dot token is read as a comma-decimal ("0,5" → 0.5), for
+ * semicolon CSVs and clipboard pastes from comma-decimal locales. */
+function parseNumber(s, commaDecimal = false) {
+  const t = s.trim();
+  if (/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(t)) return parseFloat(t);
+  if (commaDecimal && /^[+-]?\d+,\d+([eE][+-]?\d+)?$/.test(t)) {
+    return parseFloat(t.replace(",", "."));
+  }
+  return NaN;
+}
+
+/* Match an uploaded results sheet against the current plan. Pure (no DOM), so it is
+ * directly testable. Rows are matched by the sheet's `run` column when present — a
+ * sheet re-sorted in a spreadsheet still lands on the right runs — falling back to row
+ * order. Factor columns present in the sheet are cross-checked against the plan
+ * (tolerantly for continuous values), so results from a different or re-generated plan
+ * are refused instead of silently attached to the wrong runs. The measurement column is
+ * whichever column is neither `run`, a factor, a `<factor>_units` carrier, `point_type`,
+ * nor bookkeeping — preferring `preferredName`, else the first one holding numbers.
+ * Returns { name, values (number|null per run), imported, blank }; throws on any
+ * structural problem, naming the offending rows. */
+function matchResultsCsv(design, rows, preferredName, commaDecimal) {
+  if (rows.length < 2) throw new Error("That file has a header row but no data rows.");
+  const header = rows[0].map((h) => h.trim());
+  const data = rows.slice(1);
+  const n = design.runs.length;
+  const colOf = (name) => header.indexOf(name);
+
+  const known = new Set(["", "run", "point_type"]);
+  for (const c of RESERVED_RUN_COLUMNS) known.add(c.toLowerCase());
+  for (const f of design.factors) {
+    known.add(f.name.toLowerCase());
+    known.add(`${f.name}_units`.toLowerCase());
+  }
+  const candidates = header.filter((h) => !known.has(h.toLowerCase()));
+  if (!candidates.length) {
+    throw new Error(
+      "Couldn't find a measurement column — the sheet needs one extra column " +
+      `(e.g. "${preferredName || "response"}") alongside the factor columns.`);
+  }
+  const name = (preferredName && candidates.includes(preferredName)) ? preferredName
+    : candidates.find((h) => data.some((r) => !Number.isNaN(parseNumber(r[colOf(h)] ?? "", commaDecimal))))
+      ?? candidates[0];
+
+  // Which design run each data row belongs to.
+  const assignments = [];
+  const runCol = header.findIndex((h) => h.toLowerCase() === "run");
+  if (runCol !== -1) {
+    const seen = new Set();
+    data.forEach((r, rowNo) => {
+      const cell = (r[runCol] ?? "").trim();
+      const k = Number(cell);
+      if (!Number.isInteger(k) || k < 1 || k > n) {
+        throw new Error(`Row ${rowNo + 2}: run number "${cell}" isn't between 1 and ${n}.`);
+      }
+      if (seen.has(k)) throw new Error(`Run ${k} appears more than once in the file.`);
+      seen.add(k);
+      assignments.push([k - 1, r]);
+    });
+  } else {
+    if (data.length !== n) {
+      throw new Error(`The file has ${data.length} data rows but the plan has ${n} runs, ` +
+        'and there is no "run" column to match them by.');
+    }
+    data.forEach((r, i) => assignments.push([i, r]));
+  }
+
+  const mismatched = [];
+  for (const [idx, r] of assignments) {
+    for (const f of design.factors) {
+      const col = colOf(f.name);
+      if (col === -1) continue; // factor column dropped from the sheet — nothing to check
+      const cell = (r[col] ?? "").trim();
+      if (cell === "") continue;
+      const expected = design.runs[idx][f.name];
+      if (f.type === "categorical") {
+        if (cell !== String(expected)) { mismatched.push(idx + 1); break; }
+      } else {
+        const got = parseNumber(cell, commaDecimal);
+        if (Number.isNaN(got) ||
+            Math.abs(got - expected) > 1e-6 * Math.max(1, Math.abs(expected))) {
+          mismatched.push(idx + 1); break;
+        }
+      }
+    }
+  }
+  if (mismatched.length) {
+    const shown = mismatched.slice(0, 8).join(", ") + (mismatched.length > 8 ? ", …" : "");
+    throw new Error(
+      `This file doesn't match the current plan — the factor settings differ on run${mismatched.length > 1 ? "s" : ""} ` +
+      `${shown}. Import the sheet downloaded from this plan (or load the matching saved plan first).`);
+  }
+
+  const respCol = colOf(name);
+  const values = new Array(n).fill(null);
+  const bad = [];
+  for (const [idx, r] of assignments) {
+    const cell = (r[respCol] ?? "").trim();
+    if (cell === "") continue;
+    const v = parseNumber(cell, commaDecimal);
+    if (Number.isNaN(v)) { bad.push(`run ${idx + 1}: "${cell}"`); continue; }
+    values[idx] = v;
+  }
+  if (bad.length) {
+    throw new Error(`Some "${name}" values aren't numbers — ` +
+      bad.slice(0, 5).join("; ") + (bad.length > 5 ? "; …" : "") + ".");
+  }
+  const imported = values.filter((v) => v !== null).length;
+  if (!imported) {
+    throw new Error(`The "${name}" column has no numbers yet — ` +
+      "fill in your measurements and import the sheet again.");
+  }
+  return { name, values, imported, blank: n - imported };
+}
+
+function showImportStatus(message) {
+  const el = $("import-status");
+  el.textContent = `✓ ${message}`;
+  el.hidden = false;
+}
+
+/* Import a filled-in run sheet: re-upload of the downloaded CSV (or a spreadsheet
+ * re-save of it — semicolon/tab separated variants included). Fills the measurement
+ * inputs to mirror the file, so blank sheet cells clear stale typed values. */
+async function importResults(file) {
+  clearError("error-plan");
+  $("import-status").hidden = true;
+  try {
+    const text = await file.text();
+    const delimiter = sniffDelimiter(text);
+    const rows = parseCsv(text, delimiter);
+    const preferred = $("response-name").value.trim();
+    const { name, values, imported, blank } =
+      matchResultsCsv(state.design, rows, preferred, delimiter !== ",");
+    state.responseName = name;
+    $("response-name").value = name;
+    for (const input of document.querySelectorAll("input.resp")) {
+      const v = values[Number(input.dataset.run)];
+      input.value = v === null ? "" : v;
+    }
+    showImportStatus(`Imported ${imported} measurement${imported === 1 ? "" : "s"} ` +
+      `from “${name}”` +
+      (blank ? ` — ${blank} run${blank === 1 ? " is" : "s are"} still blank.` : "."));
+  } catch (err) {
+    showError("error-plan", err);
+  }
+}
+
+/* Paste a column of numbers copied from a spreadsheet into any measurement cell:
+ * the values spill down the following rows instead of landing in one input. A
+ * single-value paste keeps the browser's normal behaviour, and a copied header
+ * cell riding above the numbers is skipped. */
+function pasteResults(e) {
+  const target = e.target;
+  if (!target.classList || !target.classList.contains("resp")) return;
+  const text = e.clipboardData ? e.clipboardData.getData("text") : "";
+  const tokens = text.split(/[\n\r\t]+/).map((s) => s.trim()).filter((s) => s !== "");
+  if (tokens.length < 2) return;
+  e.preventDefault();
+  if (Number.isNaN(parseNumber(tokens[0], true)) && !Number.isNaN(parseNumber(tokens[1], true))) {
+    tokens.shift();
+  }
+  const inputs = [...document.querySelectorAll("input.resp")];
+  let i = inputs.indexOf(target);
+  let filled = 0;
+  for (const t of tokens) {
+    if (i >= inputs.length) break;
+    const v = parseNumber(t, true);
+    if (!Number.isNaN(v)) { inputs[i].value = v; filled += 1; }
+    i += 1;
+  }
+  showImportStatus(`Pasted ${filled} value${filled === 1 ? "" : "s"} from the clipboard.`);
 }
 
 /* Save the current design as a JSON file — the same Design.to_dict() document the service
@@ -695,6 +936,7 @@ $("design-type").addEventListener("change", onFactorsChanged);
 // Once the user edits the run count, stop auto-overwriting it.
 $("dopt-runs").addEventListener("input", (e) => { e.target.dataset.auto = ""; });
 $("generate").addEventListener("click", generatePlan);
+$("seed-toggle").addEventListener("click", () => { $("seed-wrap").hidden = !$("seed-wrap").hidden; });
 onFactorsChanged();
 $("load-plan").addEventListener("click", () => $("load-plan-file").click());
 $("load-plan-file").addEventListener("change", (e) => {
@@ -703,6 +945,13 @@ $("load-plan-file").addEventListener("change", (e) => {
   e.target.value = ""; // reset so re-selecting the same file fires 'change' again
 });
 $("download-csv").addEventListener("click", downloadCsv);
+$("import-results").addEventListener("click", () => $("import-results-file").click());
+$("import-results-file").addEventListener("change", (e) => {
+  const file = e.target.files[0];
+  if (file) importResults(file);
+  e.target.value = ""; // reset so re-selecting the same file fires 'change' again
+});
+$("run-table").addEventListener("paste", pasteResults);
 $("save-plan").addEventListener("click", saveDesign);
 $("demo-fill").addEventListener("click", demoFill);
 $("analyze").addEventListener("click", analyze);

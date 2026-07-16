@@ -9,14 +9,17 @@ authors = [{ name = "Scott Warchal", email = "scott.warchal@gmail.com" }]
 dependencies = [
     "doe-service",
     "fastapi>=0.110",
+    "uvicorn>=0.29",
 ]
+
+[project.scripts]
+doe-web = "doe_web.main:main"
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
     "mypy>=1.10",
     "httpx2>=0.1",    # fastapi.testclient
-    "uvicorn>=0.29",  # local dev server: uvicorn --factory doe_web.main:create_app
 ]
 
 [tool.uv.sources]

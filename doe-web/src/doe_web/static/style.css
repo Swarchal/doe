@@ -11,6 +11,8 @@
   --danger-ink: #a03030;
   --warn-bg: #fff7e6;
   --warn-ink: #8a6100;
+  --ok-bg: #ebf5ec;
+  --ok-ink: #2c6b3f;
 }
 
 * { box-sizing: border-box; }
@@ -100,6 +102,15 @@ button.remove-row {
   font-size: 1rem; padding: 0 0.4rem;
 }
 button.remove-row:hover { color: var(--danger-ink); }
+/* Deliberately quiet: the debug-only seed toggle sits at the row's far edge and only
+ * reads as a control on hover. */
+button.ghost {
+  background: none; border: none; color: var(--ink-3);
+  padding: 0.15rem 0.35rem; font-size: 0.95rem; opacity: 0.55;
+  margin-left: auto;
+}
+button.ghost:hover { opacity: 1; color: var(--accent); }
+#seed-wrap input { width: 6.5rem; }
 
 button.busy { cursor: progress; opacity: 0.85; }
 button:disabled { cursor: not-allowed; }
@@ -136,6 +147,10 @@ button:disabled { cursor: not-allowed; }
 .warnings {
   margin-bottom: 1rem; padding: 0.6rem 0.9rem; border-radius: 8px;
   background: var(--warn-bg); color: var(--warn-ink); font-size: 0.9rem;
+}
+.notice {
+  margin: 0.5rem 0; padding: 0.6rem 0.9rem; border-radius: 8px;
+  background: var(--ok-bg); color: var(--ok-ink); font-size: 0.9rem;
 }
 
 .result-row { display: flex; flex-wrap: wrap; gap: 1rem; margin: 1rem 0; }
