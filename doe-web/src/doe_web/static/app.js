@@ -201,9 +201,69 @@ function quadraticTermCount(factors) {
   return p;
 }
 
-/* Keep the plan controls in step with the current factor rows: the categorical note, and
- * the D-optimal run-count field / its suggested default. Called whenever a row or the plan
- * type changes; failures (a half-typed row) are swallowed — the note just stays as-is. */
+/* Quick screen ("ff2") run-count math, mirroring doe.generators.factorial exactly so the
+ * live hint (and the reroute decision in generatePlan()) agree with what the service will
+ * actually build. A 2-level full factorial explodes as 2^k; Plackett-Burman instead needs
+ * only the smallest constructible multiple of 4 that is >= k + 1. */
+const PB_BASES = [1, 12, 20];
+
+function isPowerOfTwo(n) { return n >= 1 && (n & (n - 1)) === 0; }
+
+function pbConstructible(n) {
+  return PB_BASES.some((base) => n % base === 0 && isPowerOfTwo(n / base));
+}
+
+function pbRunCount(k) {
+  let n = 4 * Math.ceil((k + 1) / 4);
+  while (!pbConstructible(n)) n += 4;
+  return n;
+}
+
+function fullFactorialRunCount(factors) {
+  return factors.reduce((p, f) => p * (f.type === "categorical" ? f.levels.length : 2), 1);
+}
+
+/* Plackett-Burman (see doe.generators.factorial.plackett_burman) is a 2-level design: it
+ * accepts continuous factors and categorical factors with exactly two levels, but rejects
+ * a categorical factor with three or more options. Only reroute the quick screen when every
+ * factor fits that shape — otherwise the full factorial (which already handles any
+ * categorical factor) stays the generator, so a wider factor list never turns a working
+ * plan into a 422. */
+function pbCompatible(factors) {
+  return factors.every((f) => f.type !== "categorical" || f.levels.length === 2);
+}
+
+/* More than 4 factors is where the 2-level full factorial's run count (2^k) starts to bite
+ * (32 runs at 5 factors, 64 at 6); above that, a compact Plackett-Burman screen is used
+ * instead — see generatePlan(). */
+const PB_REROUTE_MIN_FACTORS = 5;
+
+function screeningWillUsePlackettBurman(factors) {
+  return factors.length >= PB_REROUTE_MIN_FACTORS && pbCompatible(factors);
+}
+
+/* Central composite run count (see doe.generators.rsm.central_composite): the UI never passes
+ * a `fraction`, so the core is always the full 2^k factorial; add the 2k axial runs and the
+ * service's default center = 4. Anchored against tests/test_app.py's central-composite cases. */
+function centralCompositeRunCount(k) {
+  return 2 ** k + 2 * k + 4;
+}
+
+/* Box-Behnken supports only 3 <= k <= 5 factors (see doe.generators.rsm.box_behnken); outside
+ * that range the library itself raises rather than returning a design. */
+const BOX_BEHNKEN_MAX_FACTORS = 5;
+
+/* Box-Behnken run count: one edge run per +/-1 x +/-1 combination of each factor pair
+ * (4 * C(k, 2)) plus the service's default center = 3. Only meaningful for
+ * 3 <= k <= BOX_BEHNKEN_MAX_FACTORS. */
+function boxBehnkenRunCount(k) {
+  return 4 * ((k * (k - 1)) / 2) + 3;
+}
+
+/* Keep the plan controls in step with the current factor rows: the categorical note, the
+ * quick-screen Plackett-Burman reroute hint, and the D-optimal run-count field / its
+ * suggested default. Called whenever a row or the plan type changes; failures (a
+ * half-typed row) are swallowed — the notes just stay as-is. */
 function onFactorsChanged() {
   let factors = [];
   try { factors = readFactors(); } catch { /* incomplete rows — leave hints unchanged */ }
@@ -211,6 +271,22 @@ function onFactorsChanged() {
   const type = $("design-type").value;
 
   $("design-cat-note").hidden = !(anyCategorical && (type === "ccd" || type === "bb"));
+
+  const pbHint = $("ff2-pb-hint");
+  if (type === "ff2" && factors.length >= PB_REROUTE_MIN_FACTORS) {
+    pbHint.hidden = false;
+    if (pbCompatible(factors)) {
+      pbHint.textContent = `With ${factors.length} factors this uses a compact ` +
+        `Plackett–Burman screen (${pbRunCount(factors.length)} runs) instead of a ` +
+        `full factorial (${fullFactorialRunCount(factors)} runs).`;
+    } else {
+      pbHint.textContent = `With ${factors.length} factors this would normally switch to a ` +
+        "compact Plackett–Burman screen, but a categorical factor here has more than two " +
+        "options, so it stays a full factorial — expect a large number of runs.";
+    }
+  } else {
+    pbHint.hidden = true;
+  }
 
   const isDopt = type === "dopt";
   $("dopt-runs-wrap").hidden = !isDopt;
@@ -223,6 +299,38 @@ function onFactorsChanged() {
       input.dataset.auto = "1";
     }
     $("dopt-runs-hint").textContent = `≥ ${terms} runs needed to fit the model (${suggested} suggested).`;
+  }
+
+  // Live run-count preview: the bench cost of the plan as it stands right now, before the
+  // user commits by clicking "Create experimental plan". Hidden whenever the rows don't
+  // parse, there aren't yet 2 factors, or the plan/factor combination is invalid (the
+  // categorical-with-ccd/bb case #design-cat-note already covers); the D-optimal run count
+  // already has its own field + hint above, so this stays quiet for "dopt".
+  const preview = $("run-count-preview");
+  preview.hidden = true;
+  const planInvalid = anyCategorical && (type === "ccd" || type === "bb");
+  if (factors.length >= 2 && !planInvalid) {
+    let text = null;
+    if (type === "ccd") {
+      text = `This plan will need ${centralCompositeRunCount(factors.length)} runs.`;
+    } else if (type === "bb") {
+      if (factors.length < 3) {
+        text = "Box–Behnken needs at least 3 factors.";
+      } else if (factors.length > BOX_BEHNKEN_MAX_FACTORS) {
+        text = `Box–Behnken supports at most ${BOX_BEHNKEN_MAX_FACTORS} factors.`;
+      } else {
+        text = `This plan will need ${boxBehnkenRunCount(factors.length)} runs.`;
+      }
+    } else if (type === "ff2") {
+      const n = screeningWillUsePlackettBurman(factors)
+        ? pbRunCount(factors.length)
+        : fullFactorialRunCount(factors);
+      text = `This plan will need ${n} runs.`;
+    }
+    if (text !== null) {
+      preview.textContent = text;
+      preview.hidden = false;
+    }
   }
 }
 
@@ -245,14 +353,20 @@ async function generatePlan() {
         "Central composite and Box–Behnken designs need all-continuous factors. " +
         "For a categorical factor, pick the quick screen or the D-optimal custom design.");
     }
-    const endpoint = {
+    // A quick screen with more than 4 factors reroutes to a Plackett-Burman design: the
+    // 2-level full factorial's 2^k runs get impractical fast (32 at 5 factors, 64 at 6),
+    // while Plackett-Burman needs only ~k+1 runs. Only when the factor list is a shape
+    // Plackett-Burman accepts (see pbCompatible) — otherwise the full factorial stays, so
+    // this never turns a working flow into a 422.
+    const useScreeningPB = type === "ff2" && screeningWillUsePlackettBurman(factors);
+    const endpoint = useScreeningPB ? "/designs/plackett-burman" : {
       ccd: "/designs/central-composite",
       bb: "/designs/box-behnken",
       ff2: "/designs/full-factorial",
       dopt: "/designs/optimal",
     }[type];
     const body = { factors };
-    if (type === "ff2") body.levels = 2;
+    if (type === "ff2" && !useScreeningPB) body.levels = 2;
     if (type === "dopt") {
       const nRuns = parseInt($("dopt-runs").value, 10);
       const minRuns = quadraticTermCount(factors);
@@ -765,8 +879,18 @@ async function analyze() {
   }
 }
 
+/* A Plackett-Burman design is saturated for main effects (n ~= k + 1 runs): the default
+ * "quadratic" model (main effects + every pairwise interaction) has far more terms than
+ * runs (e.g. 6 factors -> 12 runs but 22 terms) and is rank-deficient. Its recorded
+ * generator (present whether the plan was just generated or loaded from JSON — see
+ * isScreeningPlan) picks the main-effects-only spec instead; every other plan keeps the
+ * quadratic model unchanged. */
 function fitRequest() {
-  return { design: state.design, response: state.responseName, model: "quadratic" };
+  const generator = state.design && state.design.meta && state.design.meta.generator;
+  const model = generator && generator.name === "plackett_burman"
+    ? { order: 1, interactions: false }
+    : "quadratic";
+  return { design: state.design, response: state.responseName, model };
 }
 
 /* Best predicted settings for a design with a categorical factor. The service optimizes the

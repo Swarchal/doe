@@ -207,6 +207,120 @@ def test_screening_flow_exposes_generator_meta_and_effects(client: TestClient) -
     assert all("effect" in t for t in non_intercept)
 
 
+def test_plackett_burman_design_for_six_factors(client: TestClient) -> None:
+    """The quick-screen reroute (app.js generatePlan(), > 4 factors) posts here instead of
+    /designs/full-factorial. 6 factors need the smallest constructible Plackett-Burman size
+    with n >= k + 1 -- that's 8 runs (the 2-level full factorial would need 2**6 = 64)."""
+    factors = [
+        {"type": "continuous", "name": n, "low": 0, "high": 1}
+        for n in ("a", "b", "c", "d", "e", "f")
+    ]
+
+    response = client.post("/api/v1/designs/plackett-burman", json={"factors": factors})
+    assert response.status_code == 200, response.text
+    design = response.json()["design"]
+    assert len(design["runs"]) == 8
+    assert design["meta"]["generator"]["name"] == "plackett_burman"
+    # Every factor column only takes its two coded extremes.
+    for f in factors:
+        values = {run[f["name"]] for run in design["runs"]}
+        assert values == {0.0, 1.0}
+
+
+def test_plackett_burman_fit_uses_main_effects_only_model(client: TestClient) -> None:
+    """app.js's fitRequest() sends {"order": 1, "interactions": false} for a Plackett-Burman
+    plan (its recorded generator, per isScreeningPlan()'s SCREENING_GENERATORS set) rather
+    than the default "quadratic" model: 6 factors in 8 runs gives 22 quadratic terms
+    (intercept + 6 main effects + 15 pairwise interactions) but only 7 main-effects terms,
+    so "quadratic" would be rank-deficient. The main-effects-only fit must instead succeed
+    with an estimable p-value on every term."""
+    factors = [
+        {"type": "continuous", "name": n, "low": 0, "high": 1}
+        for n in ("a", "b", "c", "d", "e", "f")
+    ]
+    design = client.post(
+        "/api/v1/designs/plackett-burman", json={"factors": factors}
+    ).json()["design"]
+
+    responses = [float(i) for i in range(len(design["runs"]))]
+    design = client.post(
+        "/api/v1/designs/responses",
+        json={"design": design, "responses": {"yield": responses}},
+    ).json()["design"]
+
+    # The quadratic model the UI uses everywhere else has 22 terms (intercept + 6 main
+    # effects + 15 pairwise interactions) but only 8 runs -- fewer runs than terms means the
+    # model matrix cannot be full rank, so the library refuses to fit it at all (a 422, not
+    # a silently-wrong answer). This is exactly the broken state the reroute must avoid.
+    quadratic_fit = client.post(
+        "/api/v1/analysis/fit",
+        json={"design": design, "response": "yield", "model": "quadratic"},
+    )
+    assert quadratic_fit.status_code == 422, quadratic_fit.text
+
+    fit_response = client.post(
+        "/api/v1/analysis/fit",
+        json={
+            "design": design,
+            "response": "yield",
+            "model": {"order": 1, "interactions": False},
+        },
+    )
+    assert fit_response.status_code == 200, fit_response.text
+    body = fit_response.json()
+    terms = [t for t in body["terms"] if t["term"] != "Intercept"]
+    assert len(terms) == 6  # one main effect per factor, no interactions
+    assert all(t["effect"] is not None for t in terms)
+    assert any(t["p"] is not None for t in terms)
+
+
+def test_run_count_formulas_anchor_client_side_preview(client: TestClient) -> None:
+    """app.js shows a live, client-side run-count preview in step 1 (onFactorsChanged()'s
+    centralCompositeRunCount/boxBehnkenRunCount/fullFactorialRunCount/pbRunCount helpers) so a
+    user sees the bench cost before clicking "Create experimental plan". These assertions
+    anchor those formulas against what the service actually generates, so the two can't drift
+    apart: central_composite's 2^k full-factorial core (the UI never passes a `fraction`) plus
+    2k axial runs plus the service's default center=4; box_behnken's 4 * C(k, 2) edge runs
+    (one run per +/-1 x +/-1 combination of each factor pair) plus the default center=3; and
+    the quick-screen counts (full-factorial levels=2, and its > 4 factor Plackett-Burman
+    reroute) already exercised by test_plackett_burman_design_for_six_factors above."""
+
+    def continuous_factors(k: int) -> list[dict[str, Any]]:
+        return [{"type": "continuous", "name": f"f{i}", "low": 0, "high": 1} for i in range(k)]
+
+    # central_composite: 2**k + 2*k + 4 (k=2 -> 4+4+4=12, k=3 -> 8+6+4=18, k=4 -> 16+8+4=28).
+    for k, expected in [(2, 12), (3, 18), (4, 28)]:
+        response = client.post(
+            "/api/v1/designs/central-composite", json={"factors": continuous_factors(k)}
+        )
+        assert response.status_code == 200, response.text
+        assert len(response.json()["design"]["runs"]) == expected
+
+    # box_behnken: 4 * C(k, 2) + 3 (k=3 -> 12+3=15, k=4 -> 24+3=27).
+    for k, expected in [(3, 15), (4, 27)]:
+        response = client.post(
+            "/api/v1/designs/box-behnken", json={"factors": continuous_factors(k)}
+        )
+        assert response.status_code == 200, response.text
+        assert len(response.json()["design"]["runs"]) == expected
+
+    # full-factorial at levels=2, k=3: 2**3 = 8 runs.
+    ff_response = client.post(
+        "/api/v1/designs/full-factorial",
+        json={"factors": continuous_factors(3), "levels": 2},
+    )
+    assert ff_response.status_code == 200, ff_response.text
+    assert len(ff_response.json()["design"]["runs"]) == 8
+
+    # plackett_burman, k=6: the smallest constructible size with n >= k + 1 is 8 runs (also
+    # covered above by test_plackett_burman_design_for_six_factors).
+    pb_response = client.post(
+        "/api/v1/designs/plackett-burman", json={"factors": continuous_factors(6)}
+    )
+    assert pb_response.status_code == 200, pb_response.text
+    assert len(pb_response.json()["design"]["runs"]) == 8
+
+
 def test_categorical_dopt_flow_generate_fit_surface(client: TestClient) -> None:
     """Replays the UI's categorical path: a D-optimal design over mixed factors ->
     attach responses -> fit (deviation-coded categorical term) -> surface over the two
