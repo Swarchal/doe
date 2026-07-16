@@ -757,9 +757,19 @@ async function analyze() {
       responses: { [state.responseName]: responses },
     });
     state.design = attached.design;
-    await renderResults();
-    $("step-results").hidden = false;
-    $("step-results").scrollIntoView({ behavior: "smooth" });
+    // Reveal the results card *before* drawing into it: Plotly sizes each figure to its
+    // container, and a display:none container measures 0×0 — the plots would come up at
+    // Plotly's default size and only correct themselves on the next window resize.
+    const results = $("step-results");
+    const wasHidden = results.hidden;
+    results.hidden = false;
+    try {
+      await renderResults();
+    } catch (err) {
+      results.hidden = wasHidden;
+      throw err;
+    }
+    results.scrollIntoView({ behavior: "smooth" });
   } catch (err) {
     showError("error-plan", err);
   }
