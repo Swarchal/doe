@@ -106,7 +106,7 @@
       </div>
     </div>
 
-    <div class="toolbar">
+    <div class="toolbar" id="results-controls">
       <label class="inline-label" id="maximize-label"><input type="checkbox" id="maximize" checked> Higher is better</label>
       <span id="axis-pickers" hidden>
         <label class="inline-label">Map axes:
@@ -118,12 +118,67 @@
       <span id="cat-levels" hidden></span>
     </div>
 
-    <h3>Predicted response map</h3>
-    <div id="contour" class="plot"></div>
+    <!-- Screening view: a "which factors matter?" plan has no curvature to map, so this
+         replaces the response map with the two classic screening reads (effect Pareto +
+         half-normal). Toggled against #response-map-block by setResultsView() in app.js. -->
+    <div id="screening-view" hidden>
+      <p class="hint">A screening design ranks the factors by how much they move the result.
+        The two plots below (and the table) pick out the <strong>vital few</strong> worth
+        taking forward to a follow-up experiment.</p>
+      <div class="diag-plots">
+        <figure>
+          <figcaption>Effect sizes — how far each factor / interaction shifts the response
+            across its range. Blue bars clear the significance threshold (p &lt; 0.05).</figcaption>
+          <div id="pareto" class="plot plot-small"></div>
+        </figure>
+        <figure>
+          <figcaption>Half-normal plot — inactive (noise) effects sit on the line through the
+            origin; the labelled points pulling away are the ones that matter.</figcaption>
+          <div id="halfnormal" class="plot plot-small"></div>
+        </figure>
+      </div>
+    </div>
+
+    <div id="response-map-block">
+      <h3>Predicted response map</h3>
+      <div id="contour" class="plot"></div>
+    </div>
 
     <h3>Which factors matter</h3>
     <p class="hint">Rows in <strong>bold</strong> have strong evidence of a real effect (p &lt; 0.05).</p>
     <div class="table-scroll"><table class="terms-table" id="terms-table"></table></div>
+
+    <!-- Model adequacy: is the fit trustworthy enough to act on the best settings? -->
+    <div id="adequacy">
+      <h3>Can you trust this model?</h3>
+      <p class="verdict verdict-plain" id="adequacy-verdict"></p>
+      <div class="result-row">
+        <div class="stat-tile">
+          <div class="stat-label">Predicted R²</div>
+          <div class="stat-value" id="stat-predr2">–</div>
+          <div class="stat-sub">accuracy on runs it hasn't seen</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-label">Lack-of-fit test</div>
+          <div class="stat-value" id="stat-lof">–</div>
+          <div class="stat-sub" id="stat-lof-sub"></div>
+        </div>
+      </div>
+      <div class="diag-plots">
+        <figure>
+          <figcaption>Residuals vs fitted — should scatter evenly around zero, with no
+            pattern or funnel shape.</figcaption>
+          <div id="resid-fitted" class="plot plot-small"></div>
+        </figure>
+        <figure>
+          <figcaption>Normal Q–Q — points should hug the dashed line if the residuals are
+            normal (the assumption behind the p-values).</figcaption>
+          <div id="resid-qq" class="plot plot-small"></div>
+        </figure>
+      </div>
+      <div class="error" id="error-adequacy" hidden></div>
+    </div>
+
     <div class="error" id="error-results" hidden></div>
   </section>
 </main>

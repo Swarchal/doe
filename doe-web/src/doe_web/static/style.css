@@ -165,5 +165,16 @@ button:disabled { cursor: not-allowed; }
 
 .terms-table tr.significant td { font-weight: 650; }
 
+/* Model-adequacy panel: a colour-coded plain-language verdict, then two diagnostic plots. */
+#adequacy { margin-top: 1.5rem; border-top: 1px solid var(--line); padding-top: 0.25rem; }
+.verdict { margin: 0.75rem 0; padding: 0.6rem 0.9rem; border-radius: 8px; font-size: 0.9rem; }
+.verdict-ok { background: var(--ok-bg); color: var(--ok-ink); }
+.verdict-warn { background: var(--warn-bg); color: var(--warn-ink); }
+.verdict-plain { background: var(--surface); color: var(--ink-2); }
+.diag-plots { display: flex; flex-wrap: wrap; gap: 1rem; }
+.diag-plots figure { flex: 1 1 20rem; min-width: 0; margin: 0; }
+.diag-plots figcaption { color: var(--ink-3); font-size: 0.82rem; margin-bottom: 0.25rem; }
+
 .plot { width: 100%; min-height: 420px; }
+.plot-small { min-height: 300px; }
 .plot-fallback { color: var(--ink-3); padding: 2rem; text-align: center; }

@@ -7,6 +7,7 @@
 const state = {
   design: null,       // current design document
   responseName: "response",
+  planType: null,     // the plan type the user picked ("ccd"/"bb"/"ff2"/"dopt"); null once loaded
 };
 
 /* Non-factor run columns that are bookkeeping, not measured responses: `std_order` is the
@@ -18,6 +19,12 @@ const RESERVED_RUN_COLUMNS = new Set(["std_order"]);
  * white-filled with a dark outline so they stay visible on both the dark (low) and
  * bright (high) ends of the scale. */
 const CONTOUR_COLORSCALE = "Viridis";
+
+/* Shown in a plot slot when Plotly failed to load (offline / CDN blocked) — the numbers on the
+ * page still come from the API, so only the visualisation is missing. */
+const OFFLINE_PLOT_MSG =
+  "<p class=\"plot-fallback\">Plot unavailable offline (Plotly.js loads from a CDN) — " +
+  "the numbers on the page are unaffected.</p>";
 
 const $ = (id) => document.getElementById(id);
 
@@ -266,6 +273,9 @@ async function generatePlan() {
       { after: 12000, label: "Hang tight — optimising…" },
     ]);
     const { design } = await api(endpoint, body);
+    // Remember which plan the user chose — it selects the screening vs. response-surface
+    // results view (see isScreeningPlan / renderResults).
+    state.planType = type;
     // Randomize the run order so the sheet is bench-ready.
     state.design = (await api("/designs/randomize",
       seed !== null ? { design, seed } : { design })).design;
@@ -286,6 +296,25 @@ function factorNames() { return state.design.factors.map((f) => f.name); }
 function continuousFactors() { return state.design.factors.filter((f) => f.type !== "categorical"); }
 function continuousFactorNames() { return continuousFactors().map((f) => f.name); }
 function hasCategorical() { return state.design.factors.some((f) => f.type === "categorical"); }
+
+/* Screening generators (loaded plans carry the generator that built them): a plan that ranks
+ * factor effects rather than locating an optimum. The UI only offers the 2-level full
+ * factorial, but a fractional-factorial or Plackett–Burman screen loaded from JSON is
+ * recognised too. A full factorial is screening only at 2 levels (3+ can fit curvature). */
+const SCREENING_GENERATORS = new Set(["fractional_factorial", "plackett_burman"]);
+
+function isScreeningPlan() {
+  // A freshly generated plan knows exactly which type the user picked.
+  if (state.planType) return state.planType === "ff2";
+  // A loaded plan doesn't, so infer it from the recorded generator.
+  const gen = state.design && state.design.meta && state.design.meta.generator;
+  if (!gen) return false;
+  if (gen.name === "full_factorial") {
+    const levels = gen.parameters && gen.parameters.levels;
+    return levels === 2 || (Array.isArray(levels) && levels.every((l) => l === 2));
+  }
+  return SCREENING_GENERATORS.has(gen.name);
+}
 
 function renderPlan() {
   const d = state.design;
@@ -630,6 +659,8 @@ async function loadDesign(file) {
       throw new Error("This file isn't a valid design document:\n" + (errors || []).join("\n"));
     }
     state.design = design;
+    // A loaded plan didn't come from the picker; isScreeningPlan() falls back to its generator.
+    state.planType = null;
 
     // Rebuild step 1 so the factor table reflects the loaded design.
     $("factor-rows").innerHTML = "";
@@ -756,12 +787,40 @@ function formatOptimumSettings(natural) {
 }
 
 async function renderResults() {
+  const fit = await api("/analysis/fit", fitRequest());
+
+  // The R² tile and effects table are shown in both views, so fill them once up front.
+  $("stat-r2").textContent = fmt(fit.r_squared, 3);
+  $("stat-adjr2").textContent = fit.adjusted_r2 === null ? "" : `adjusted: ${fmt(fit.adjusted_r2, 3)}`;
+
+  if (isScreeningPlan()) {
+    await renderScreeningView(fit);
+  } else {
+    await renderOptimizeView(fit);
+  }
+}
+
+/* Toggle the results card between the response-surface view (best settings + contour +
+ * adequacy) and the screening view (effect Pareto + half-normal). The R² tile and the effects
+ * table live outside both blocks, so they stay visible either way. */
+function setResultsView(mode) {
+  const screening = mode === "screening";
+  $("optimum-tile").hidden = screening;
+  $("results-controls").hidden = screening;
+  $("response-map-block").hidden = screening;
+  $("adequacy").hidden = screening;
+  $("screening-view").hidden = !screening;
+}
+
+/* Response-surface view: the best predicted settings, a fitted contour map, model-adequacy
+ * diagnostics, and the effects table. Used for every plan except the 2-level screen. */
+async function renderOptimizeView(fit) {
+  setResultsView("optimize");
   const categorical = hasCategorical();
   const maximize = $("maximize").checked;
 
   // The optimum for an all-continuous fit comes from the service's surface optimizer; a
   // categorical fit has no coded box to search, so we grid-search it here through /predict.
-  const fit = await api("/analysis/fit", fitRequest());
   const opt = categorical
     ? await bestSettingsCategorical(maximize)
     : await api("/optimize/optimum", { ...fitRequest(), maximize });
@@ -776,28 +835,285 @@ async function renderResults() {
   $("fit-warnings").hidden = warnings.length === 0;
   $("fit-warnings").textContent = warnings.join("; ");
 
-  $("stat-r2").textContent = fmt(fit.r_squared, 3);
-  $("stat-adjr2").textContent = fit.adjusted_r2 === null ? "" : `adjusted: ${fmt(fit.adjusted_r2, 3)}`;
-
   renderTermsTable(fit.terms);
+  await renderAdequacy(fit);
   setupAxisPickers(opt);
   await renderContour(opt.natural);
 }
 
-function renderTermsTable(terms) {
-  const rows = terms
+/* Screening view: a 2-level "which factors matter?" plan has no curvature to map and no
+ * meaningful interior optimum, so it swaps the best-settings tile + response map for the two
+ * classic screening reads (effect Pareto + half-normal) over the same fitted effects, and
+ * ranks the effects table by magnitude so the vital few sit at the top. */
+async function renderScreeningView(fit) {
+  setResultsView("screening");
+
+  const warnings = fit.warnings || [];
+  $("fit-warnings").hidden = warnings.length === 0;
+  $("fit-warnings").textContent = warnings.join("; ");
+
+  const effects = screeningEffects(fit.terms);
+  renderParetoPlot(effects);
+  renderHalfNormalPlot(effects);
+  renderTermsTable(fit.terms, { sortByEffect: true });
+}
+
+/* Non-intercept model terms as effects for the screening plots: the signed ±1 coded swing
+ * (falling back to twice the coefficient when the service leaves `effect` null, e.g. a
+ * saturated fit), its magnitude, and whether the service flagged it significant (p < 0.05). */
+function screeningEffects(terms) {
+  return terms
     .filter((t) => t.term !== "Intercept")
     .map((t) => {
-      const sig = t.p !== null && t.p < 0.05;
-      return `<tr${sig ? ' class="significant"' : ""}>` +
-        `<td>${t.term}</td><td class="num">${fmt(t.coefficient, 4)}</td>` +
-        `<td class="num">${t.p === null ? "–" : t.p < 0.001 ? "&lt; 0.001" : fmt(t.p, 2)}</td>` +
-        `<td>${t.p === null ? "not estimable" : sig ? "strong evidence" : "weak / none"}</td></tr>`;
+      const effect = t.effect ?? 2 * t.coefficient;
+      return {
+        term: t.term,
+        effect,
+        abs: Math.abs(effect),
+        significant: t.p !== null && t.p !== undefined && t.p < 0.05,
+      };
     });
+}
+
+/* Pareto chart of |effect|: horizontal bars, largest at the top, blue where the service found
+ * significance (p < 0.05) and grey otherwise. Degrades to a caption when Plotly is offline. */
+function renderParetoPlot(effects) {
+  const el = $("pareto");
+  if (typeof Plotly === "undefined") { el.innerHTML = OFFLINE_PLOT_MSG; return; }
+  // Ascending, so Plotly's bottom-up horizontal bars put the largest effect at the top.
+  const sorted = [...effects].sort((a, b) => a.abs - b.abs);
+  Plotly.react(el, [{
+    type: "bar",
+    orientation: "h",
+    x: sorted.map((e) => e.abs),
+    y: sorted.map((e) => e.term),
+    marker: { color: sorted.map((e) => (e.significant ? "#256abf" : "#b7c0d0")) },
+    hovertemplate: "%{y}<br>|effect| %{x:.4~g}<extra></extra>",
+  }], {
+    margin: { t: 10, r: 10, b: 45, l: 60 },
+    xaxis: { title: { text: `|effect| on ${state.responseName}` } },
+    yaxis: { automargin: true },
+    font: { family: "system-ui, sans-serif", color: "#1f2430" },
+    paper_bgcolor: "rgba(0,0,0,0)",
+    showlegend: false,
+  }, { responsive: true, displaylogo: false });
+}
+
+/* Half-normal plot: |effects| (ascending) against half-normal quantiles. Inactive (noise)
+ * effects fall on a line through the origin; active factors pull up and to the right, so the
+ * ones the service flagged significant are labelled. Reuses invNormalCDF from the adequacy panel. */
+function renderHalfNormalPlot(effects) {
+  const el = $("halfnormal");
+  if (typeof Plotly === "undefined") { el.innerHTML = OFFLINE_PLOT_MSG; return; }
+  const sorted = [...effects].sort((a, b) => a.abs - b.abs);
+  const m = sorted.length;
+  const quant = sorted.map((_, i) => invNormalCDF(0.5 + 0.5 * ((i + 0.5) / m)));
+  Plotly.react(el, [{
+    type: "scatter",
+    mode: "markers+text",
+    x: quant,
+    y: sorted.map((e) => e.abs),
+    text: sorted.map((e) => (e.significant ? e.term : "")),
+    textposition: "top left",
+    textfont: { size: 11 },
+    customdata: sorted.map((e) => e.term),
+    marker: {
+      size: 8,
+      color: sorted.map((e) => (e.significant ? "#256abf" : "#b7c0d0")),
+      line: { color: "#ffffff", width: 1 },
+    },
+    hovertemplate: "%{customdata}<br>|effect| %{y:.4~g}<extra></extra>",
+  }], {
+    margin: { t: 10, r: 10, b: 45, l: 55 },
+    xaxis: { title: { text: "half-normal quantile" } },
+    yaxis: { title: { text: "|effect|" } },
+    font: { family: "system-ui, sans-serif", color: "#1f2430" },
+    paper_bgcolor: "rgba(0,0,0,0)",
+    showlegend: false,
+  }, { responsive: true, displaylogo: false });
+}
+
+function renderTermsTable(terms, { sortByEffect = false } = {}) {
+  let terms_ = terms.filter((t) => t.term !== "Intercept");
+  if (sortByEffect) {
+    const mag = (t) => Math.abs(t.effect ?? 2 * t.coefficient);
+    terms_ = [...terms_].sort((a, b) => mag(b) - mag(a));
+  }
+  const rows = terms_.map((t) => {
+    const sig = t.p !== null && t.p < 0.05;
+    return `<tr${sig ? ' class="significant"' : ""}>` +
+      `<td>${t.term}</td><td class="num">${fmt(t.coefficient, 4)}</td>` +
+      `<td class="num">${t.p === null ? "–" : t.p < 0.001 ? "&lt; 0.001" : fmt(t.p, 2)}</td>` +
+      `<td>${t.p === null ? "not estimable" : sig ? "strong evidence" : "weak / none"}</td></tr>`;
+  });
   $("terms-table").innerHTML =
     "<thead><tr><th>Effect</th><th class=\"num\">Coefficient (coded)</th>" +
     "<th class=\"num\">p-value</th><th>Evidence it matters</th></tr></thead>" +
     `<tbody>${rows.join("")}</tbody>`;
+}
+
+/* Model-adequacy panel (below the best-settings tile): is the fit trustworthy enough to act
+ * on? Three complementary, best-effort checks — a saturated or unreplicated design leaves some
+ * of them undefined, which we surface as a plain caveat rather than failing the analysis:
+ *   - predicted R² and the lack-of-fit F-test, from `/analysis/anova`;
+ *   - the two standard residual diagnostics (residuals-vs-fitted, normal Q–Q), drawn from the
+ *     fit's own `fitted`/`residuals` (already in hand — no extra call for the plots). */
+async function renderAdequacy(fit) {
+  clearError("error-adequacy");
+  renderResidualPlots(fit);
+
+  // predicted-R² and the lack-of-fit test come from the ANOVA endpoint (same fit request).
+  let anova = null;
+  try {
+    anova = await api("/analysis/anova", fitRequest());
+  } catch (err) {
+    // Supplementary panel — a failed ANOVA must not sink the whole results view.
+    showError("error-adequacy", err);
+  }
+  const predR2 = anova ? anova.predicted_r2 : null;
+  const lof = anova ? anova.lack_of_fit : null;
+  const lofP = lof ? lof.p : null;
+
+  $("stat-predr2").textContent =
+    predR2 === null || predR2 === undefined ? "n/a" : fmt(predR2, 3);
+
+  // Lack-of-fit: a *small* p means the model misses real structure (bad); a large p reassures.
+  if (lofP === null || lofP === undefined) {
+    $("stat-lof").textContent = "n/a";
+    $("stat-lof-sub").textContent = "needs replicated runs";
+  } else if (lofP < 0.05) {
+    $("stat-lof").textContent = "possible misfit";
+    $("stat-lof-sub").textContent = `p = ${fmt(lofP, 2)} (< 0.05)`;
+  } else {
+    $("stat-lof").textContent = "no concern";
+    $("stat-lof-sub").textContent = `p = ${fmt(lofP, 2)}`;
+  }
+
+  renderVerdict(fit, predR2, lofP);
+}
+
+/* One plain-language sentence weighing the adequacy signals, colour-coded ok / warn / plain.
+ * "warn" wins if any signal is bad; "plain" when nothing could be computed (no residual dof). */
+function renderVerdict(fit, predR2, lofP) {
+  const el = $("adequacy-verdict");
+  const parts = [];
+  let tone = "plain";
+
+  const r2 = fit.r_squared;
+  if (r2 !== null && r2 !== undefined) {
+    parts.push(`The model explains ${Math.round(100 * r2)}% of the variation in your results (R²).`);
+  }
+
+  if (lofP !== null && lofP !== undefined) {
+    if (lofP < 0.05) {
+      parts.push("A lack-of-fit test flags structure the model is missing — treat the best " +
+        "settings as a rough guide, and consider adding runs (e.g. a fuller design).");
+      tone = "warn";
+    } else {
+      parts.push("A lack-of-fit test finds no evidence the model is missing structure.");
+      if (tone !== "warn") tone = "ok";
+    }
+  }
+
+  if (predR2 !== null && predR2 !== undefined) {
+    if (predR2 < 0) {
+      parts.push("Its predicted R² is negative — it forecasts new runs worse than the overall " +
+        "average would, so don't rely on the predictions.");
+      tone = "warn";
+    } else {
+      parts.push(`It should predict fresh runs with an R² of about ${fmt(predR2, 2)}.`);
+      if (tone !== "warn") tone = "ok";
+    }
+  }
+
+  if (parts.length === 0) {
+    parts.push("This design has no spare runs left over to check the model against — add " +
+      "replicated runs (repeat a setting) to test whether the model actually fits.");
+  }
+
+  el.className = `verdict verdict-${tone}`;
+  el.textContent = parts.join(" ");
+}
+
+/* The two residual diagnostics, from the fit's own fitted values + residuals, drawn with Plotly
+ * to match the contour's styling. Degrades to a caption when Plotly is unavailable offline. */
+function renderResidualPlots(fit) {
+  const rf = $("resid-fitted");
+  const qq = $("resid-qq");
+  if (typeof Plotly === "undefined") {
+    rf.innerHTML = OFFLINE_PLOT_MSG;
+    qq.innerHTML = OFFLINE_PLOT_MSG;
+    return;
+  }
+
+  const fitted = fit.fitted || [];
+  const residuals = fit.residuals || [];
+  const layoutBase = {
+    margin: { t: 10, r: 10, b: 45, l: 55 },
+    showlegend: false,
+    font: { family: "system-ui, sans-serif", color: "#1f2430" },
+    paper_bgcolor: "rgba(0,0,0,0)",
+  };
+  const marker = { color: "#256abf", size: 7, line: { color: "#ffffff", width: 1 } };
+  const refLine = { color: "#8a93a6", width: 1, dash: "dash" };
+  const config = { responsive: true, displaylogo: false };
+
+  // Residuals vs fitted: want a flat, patternless band about the dashed zero line.
+  const xr = fitted.length ? [Math.min(...fitted), Math.max(...fitted)] : [0, 1];
+  Plotly.react(rf, [
+    { type: "scatter", mode: "lines", x: xr, y: [0, 0], line: refLine, hoverinfo: "skip" },
+    { type: "scatter", mode: "markers", x: fitted, y: residuals, marker,
+      hovertemplate: "fitted %{x:.4~g}<br>residual %{y:.4~g}<extra></extra>" },
+  ], { ...layoutBase, xaxis: { title: { text: "fitted value" } },
+    yaxis: { title: { text: "residual" }, zeroline: false } }, config);
+
+  // Normal Q–Q: ordered residuals vs theoretical standard-normal quantiles. The dashed
+  // reference is the line expected if the residuals were exactly normal (intercept = mean,
+  // slope = sd) — points hugging it means the normality assumption holds.
+  const sorted = [...residuals].sort((a, b) => a - b);
+  const n = sorted.length;
+  const theo = sorted.map((_, i) => invNormalCDF((i + 0.5) / n));
+  const mean = n ? sorted.reduce((s, v) => s + v, 0) / n : 0;
+  const sd = n ? Math.sqrt(sorted.reduce((s, v) => s + (v - mean) ** 2, 0) / n) : 0;
+  const tr = n ? [theo[0], theo[n - 1]] : [-1, 1];
+  Plotly.react(qq, [
+    { type: "scatter", mode: "lines", x: tr, y: tr.map((z) => mean + sd * z),
+      line: refLine, hoverinfo: "skip" },
+    { type: "scatter", mode: "markers", x: theo, y: sorted, marker,
+      hovertemplate: "theoretical %{x:.3~g}<br>residual %{y:.4~g}<extra></extra>" },
+  ], { ...layoutBase, xaxis: { title: { text: "theoretical quantile" } },
+    yaxis: { title: { text: "ordered residual" } } }, config);
+}
+
+/* Acklam's rational approximation to the inverse standard-normal CDF (Φ⁻¹), accurate to
+ * ~1e-9 — ample for Q–Q plotting positions, and avoids pulling in a stats library client-side. */
+function invNormalCDF(p) {
+  const a = [-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02,
+    1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00];
+  const b = [-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02,
+    6.680131188771972e+01, -1.328068155288572e+01];
+  const c = [-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00,
+    -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00];
+  const d = [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00,
+    3.754408661907416e+00];
+  const plow = 0.02425;
+  const phigh = 1 - plow;
+  if (p <= 0) return -Infinity;
+  if (p >= 1) return Infinity;
+  if (p < plow) {
+    const q = Math.sqrt(-2 * Math.log(p));
+    return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
+      ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+  }
+  if (p <= phigh) {
+    const q = p - 0.5;
+    const r = q * q;
+    return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q /
+      (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
+  }
+  const q = Math.sqrt(-2 * Math.log(1 - p));
+  return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
+    ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
 }
 
 function setupAxisPickers(opt) {

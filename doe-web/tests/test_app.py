@@ -130,6 +130,27 @@ def test_end_to_end_design_response_fit_surface_flow(client: TestClient) -> None
     assert "r_squared" in fit_body
     assert len(fit_body["terms"]) > 0
 
+    # The model-adequacy panel draws residuals-vs-fitted and normal-Q-Q from these two
+    # fields, so the fit response must carry them (one per run).
+    assert len(fit_body["fitted"]) == len(runs)
+    assert len(fit_body["residuals"]) == len(runs)
+
+    # ... and it fetches the lack-of-fit test + predicted-R2 from /analysis/anova. A CCD has
+    # replicated centre points, so lack-of-fit is estimable (not null).
+    anova_response = client.post(
+        "/api/v1/analysis/anova",
+        json={
+            "design": responses_body["design"],
+            "response": "yield",
+            "model": "quadratic",
+        },
+    )
+    assert anova_response.status_code == 200, anova_response.text
+    anova_body: dict[str, Any] = anova_response.json()
+    assert "predicted_r2" in anova_body
+    assert anova_body["lack_of_fit"] is not None
+    assert "p" in anova_body["lack_of_fit"]
+
     surface_response = client.post(
         "/api/v1/plot-data/surface",
         json={
@@ -146,6 +167,44 @@ def test_end_to_end_design_response_fit_surface_flow(client: TestClient) -> None
     z = surface_body["z"]
     assert len(z) == 10
     assert all(len(row) == 10 for row in z)
+
+
+def test_screening_flow_exposes_generator_meta_and_effects(client: TestClient) -> None:
+    """The screening results view (a 2-level factorial) is chosen from the generator recorded on
+    a loaded plan and drawn from the fit's per-term effects, so both must be on the wire: the
+    design carries ``meta.generator.name == "full_factorial"`` with ``parameters.levels`` all 2
+    (one count per factor), and every fitted term reports an ``effect`` (the ±1 coded swing the
+    Pareto / half-normal use)."""
+    factors = [
+        {"type": "continuous", "name": n, "low": 0, "high": 1} for n in ("a", "b", "c")
+    ]
+
+    design_response = client.post(
+        "/api/v1/designs/full-factorial", json={"factors": factors, "levels": 2}
+    )
+    assert design_response.status_code == 200, design_response.text
+    design = design_response.json()["design"]
+
+    generator = design["meta"]["generator"]
+    assert generator["name"] == "full_factorial"
+    levels = generator["parameters"]["levels"]
+    # A per-factor list (the JS screening detection accepts either an all-2 list or scalar 2).
+    assert levels == [2, 2, 2]
+
+    responses = [float(i % 3) for i in range(len(design["runs"]))]
+    design = client.post(
+        "/api/v1/designs/responses",
+        json={"design": design, "responses": {"y": responses}},
+    ).json()["design"]
+
+    fit_response = client.post(
+        "/api/v1/analysis/fit",
+        json={"design": design, "response": "y", "model": "quadratic"},
+    )
+    assert fit_response.status_code == 200, fit_response.text
+    non_intercept = [t for t in fit_response.json()["terms"] if t["term"] != "Intercept"]
+    assert non_intercept
+    assert all("effect" in t for t in non_intercept)
 
 
 def test_categorical_dopt_flow_generate_fit_surface(client: TestClient) -> None:
