@@ -134,10 +134,19 @@ button:disabled { cursor: not-allowed; }
   display: flex; flex-wrap: wrap; gap: 0.75rem 1.25rem; align-items: center;
   margin: 0.75rem 0;
 }
+.toolbar[hidden] { display: none; }
 .inline-label { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.9rem; }
+.inline-label[hidden] { display: none; }
 
 .run-table input[type="number"] { width: 7.5rem; text-align: right; }
 .point-type { color: var(--ink-3); font-size: 0.85rem; }
+
+.response-list { display: inline-flex; flex-wrap: wrap; gap: 0.4rem 0.7rem; align-items: center; }
+.response-list .resp-row { display: inline-flex; align-items: center; gap: 0.15rem; }
+.response-list input.resp-name { width: 9rem; }
+
+.goals-table select { max-width: 100%; }
+.goals-table input[type="number"] { width: 5.5rem; text-align: right; }
 
 .error {
   margin-top: 1rem; padding: 0.6rem 0.9rem; border-radius: 8px;

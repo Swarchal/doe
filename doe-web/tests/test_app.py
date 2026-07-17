@@ -392,3 +392,196 @@ def test_categorical_dopt_flow_generate_fit_surface(client: TestClient) -> None:
     assert set(best["settings"]) == {"temp", "time", "catalyst"}
     assert best["settings"]["catalyst"] in ("A", "B")
     assert best["levels"] == {"catalyst": best["settings"]["catalyst"]}
+
+
+def test_multi_response_flow_two_fits_and_desirability(client: TestClient) -> None:
+    """Replays the UI's "balance multiple measurements" flow (app.js analyze()'s
+    multi-attach + the new #step-balance card's runBalance()): a 2-factor CCD gets two
+    response columns attached in one /designs/responses call, each is fit separately
+    (the per-response results selector re-fits on the same design), and
+    /optimize/desirability finds the settings balancing "maximize yield" against
+    "minimize impurity". The desirability contour then draws one /plot-data/surface call
+    per response with identical x/y/resolution/fixed -- the aligned-grid data path the
+    client-side desirability map depends on."""
+    factors = [
+        {"type": "continuous", "name": "temp", "low": 20, "high": 80, "units": "C"},
+        {"type": "continuous", "name": "time", "low": 2, "high": 10, "units": "min"},
+    ]
+
+    design_response = client.post("/api/v1/designs/central-composite", json={"factors": factors})
+    assert design_response.status_code == 200, design_response.text
+    design = design_response.json()["design"]
+    runs = design["runs"]
+
+    # A genuine trade-off: yield rises, impurity falls, over the same run order.
+    yields = [50.0 + (i % 7) for i in range(len(runs))]
+    impurities = [10.0 - (i % 5) * 0.5 for i in range(len(runs))]
+
+    responses_response = client.post(
+        "/api/v1/designs/responses",
+        json={"design": design, "responses": {"yield": yields, "impurity": impurities}},
+    )
+    assert responses_response.status_code == 200, responses_response.text
+    design = responses_response.json()["design"]
+    assert all("yield" in run and "impurity" in run for run in design["runs"])
+
+    for response_name in ("yield", "impurity"):
+        fit_response = client.post(
+            "/api/v1/analysis/fit",
+            json={"design": design, "response": response_name, "model": "quadratic"},
+        )
+        assert fit_response.status_code == 200, fit_response.text
+
+    goals = [
+        {
+            "response": "yield",
+            "model": "quadratic",
+            "goal": "max",
+            "low": min(yields),
+            "high": max(yields),
+        },
+        {
+            "response": "impurity",
+            "model": "quadratic",
+            "goal": "min",
+            "low": min(impurities),
+            "high": max(impurities),
+        },
+    ]
+    desirability_response = client.post(
+        "/api/v1/optimize/desirability", json={"design": design, "goals": goals}
+    )
+    assert desirability_response.status_code == 200, desirability_response.text
+    result = desirability_response.json()
+    assert set(result["natural"]) == {"temp", "time"}
+    assert 0.0 <= result["overall"] <= 1.0
+    assert set(result["responses"]) == {"yield", "impurity"}
+    assert set(result["individual"]) == {"yield", "impurity"}
+
+    # The balance contour's data path: identical x/y/resolution across both responses so
+    # the grids line up cell-for-cell for the client-side desirability combine.
+    surfaces = []
+    for response_name in ("yield", "impurity"):
+        surface_response = client.post(
+            "/api/v1/plot-data/surface",
+            json={
+                "design": design,
+                "response": response_name,
+                "model": "quadratic",
+                "x": "time",
+                "y": "temp",
+                "resolution": 8,
+            },
+        )
+        assert surface_response.status_code == 200, surface_response.text
+        surfaces.append(surface_response.json())
+    assert len(surfaces[0]["z"]) == len(surfaces[1]["z"]) == 8
+    assert surfaces[0]["x"] == surfaces[1]["x"]
+    assert surfaces[0]["y"] == surfaces[1]["y"]
+
+
+def test_desirability_rejects_categorical_factors(client: TestClient) -> None:
+    """Anchors the UI's categorical gating for the balance card (#balance-cat-note):
+    /optimize/desirability requires all-continuous factors (it searches the coded box),
+    so a mixed design must 422 rather than the UI ever attempting the request."""
+    factors = [
+        {"type": "continuous", "name": "temp", "low": 20, "high": 80, "units": "C"},
+        {"type": "continuous", "name": "time", "low": 2, "high": 10, "units": "min"},
+        {"type": "categorical", "name": "catalyst", "levels": ["A", "B"], "units": None},
+    ]
+    design_response = client.post(
+        "/api/v1/designs/optimal",
+        json={"factors": factors, "n_runs": 16, "model": "quadratic", "seed": 0},
+    )
+    assert design_response.status_code == 200, design_response.text
+    design = design_response.json()["design"]
+
+    yields = [float(i % 5) + 60 for i in range(len(design["runs"]))]
+    impurities = [10.0 - (i % 5) * 0.5 for i in range(len(design["runs"]))]
+    design = client.post(
+        "/api/v1/designs/responses",
+        json={"design": design, "responses": {"yield": yields, "impurity": impurities}},
+    ).json()["design"]
+
+    goals = [
+        {
+            "response": "yield",
+            "model": "quadratic",
+            "goal": "max",
+            "low": min(yields),
+            "high": max(yields),
+        },
+        {
+            "response": "impurity",
+            "model": "quadratic",
+            "goal": "min",
+            "low": min(impurities),
+            "high": max(impurities),
+        },
+    ]
+    desirability_response = client.post(
+        "/api/v1/optimize/desirability", json={"design": design, "goals": goals}
+    )
+    assert desirability_response.status_code == 422
+
+
+def test_interaction_plot_data_shows_crossing_lines(client: TestClient) -> None:
+    """Anchors the step-3 interaction plot (app.js renderInteractionBlock/renderInteractionPlot):
+    a response that is a *pure* interaction between two continuous factors (coded a * coded b,
+    no main effects, no curvature) fits a strong ``a:b`` term, and the classic two-factor
+    interaction plot -- predicted response vs one factor, one line per low/high setting of its
+    partner -- must show the two lines crossing rather than running parallel, since that
+    crossing is the whole reason the plot exists."""
+    factors = [
+        {"type": "continuous", "name": "a", "low": 0.0, "high": 10.0},
+        {"type": "continuous", "name": "b", "low": 20.0, "high": 40.0},
+    ]
+    design_response = client.post(
+        "/api/v1/designs/central-composite", json={"factors": factors}
+    )
+    assert design_response.status_code == 200, design_response.text
+    design = design_response.json()["design"]
+
+    def coded(low: float, high: float, value: float) -> float:
+        return 2 * (value - low) / (high - low) - 1
+
+    responses = [
+        coded(0.0, 10.0, run["a"]) * coded(20.0, 40.0, run["b"])
+        for run in design["runs"]
+    ]
+    responses_response = client.post(
+        "/api/v1/designs/responses",
+        json={"design": design, "responses": {"y": responses}},
+    )
+    assert responses_response.status_code == 200, responses_response.text
+    design = responses_response.json()["design"]
+
+    resolution = 15
+    interactions_response = client.post(
+        "/api/v1/plot-data/interactions",
+        json={
+            "design": design,
+            "response": "y",
+            "model": "quadratic",
+            "x": "a",
+            "trace": "b",
+            "resolution": resolution,
+        },
+    )
+    assert interactions_response.status_code == 200, interactions_response.text
+    body: dict[str, Any] = interactions_response.json()
+
+    assert len(body["x"]) == resolution
+
+    lines = body["lines"]
+    assert len(lines) == 2
+    trace_values = sorted(line["trace_value"] for line in lines)
+    assert trace_values == pytest.approx([20.0, 40.0])
+
+    low_line = next(line for line in lines if line["trace_value"] == pytest.approx(20.0))
+    high_line = next(line for line in lines if line["trace_value"] == pytest.approx(40.0))
+    gap_first = low_line["z"][0] - high_line["z"][0]
+    gap_last = low_line["z"][-1] - high_line["z"][-1]
+    # A pure interaction crosses: the gap between the two lines has opposite signs at the two
+    # ends of the x sweep (parallel lines -- no interaction -- would keep the same sign).
+    assert gap_first * gap_last < 0

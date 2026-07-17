@@ -76,9 +76,10 @@
       <input type="file" id="import-results-file" accept=".csv,.tsv,.txt,text/csv" hidden>
       <button type="button" class="secondary" id="save-plan">Save plan (JSON)</button>
       <button type="button" class="secondary" id="demo-fill">Fill with demo results</button>
-      <label class="inline-label">Measurement name
-        <input type="text" id="response-name" value="response" size="12">
-      </label>
+      <span class="inline-label">Measurements:
+        <span class="response-list" id="response-list"></span>
+        <button type="button" class="secondary" id="add-response">+ Add measurement</button>
+      </span>
     </div>
     <p class="hint">Do the runs <em>in the order shown</em> (it is randomized to protect against
       drift). To record measurements: type them into the last column, paste a whole column copied
@@ -109,6 +110,9 @@
     </div>
 
     <div class="toolbar" id="results-controls">
+      <label class="inline-label" id="results-response-wrap" hidden>Response:
+        <select id="results-response"></select>
+      </label>
       <label class="inline-label" id="maximize-label"><input type="checkbox" id="maximize" checked> Higher is better</label>
       <span id="axis-pickers" hidden>
         <label class="inline-label">Map axes:
@@ -150,6 +154,21 @@
     <p class="hint">Rows in <strong>bold</strong> have strong evidence of a real effect (p &lt; 0.05).</p>
     <div class="table-scroll"><table class="terms-table" id="terms-table"></table></div>
 
+    <!-- Interaction plot: only shown when a significant continuous x continuous interaction
+         exists (renderInteractionPlot() hides the whole block otherwise). Sits outside the
+         two view-toggled blocks above so it appears in both the response-surface and
+         screening views (setResultsView() must not touch it). -->
+    <div id="interaction-block" hidden>
+      <h3>How factors work together</h3>
+      <p class="hint">Parallel lines mean the two factors act independently; lines that fan out
+        or cross mean the effect of one factor depends on the setting of the other.
+        <span id="interaction-held-hint"></span></p>
+      <label class="inline-label" id="interaction-pick-wrap" hidden>Interaction:
+        <select id="interaction-pick"></select>
+      </label>
+      <div id="interaction-plot" class="plot plot-small"></div>
+    </div>
+
     <!-- Model adequacy: is the fit trustworthy enough to act on the best settings? -->
     <div id="adequacy">
       <h3>Can you trust this model?</h3>
@@ -182,6 +201,44 @@
     </div>
 
     <div class="error" id="error-results" hidden></div>
+  </section>
+
+  <!-- Step 4: balance multiple measurements (Derringer-Suich desirability). Only shown
+       once 2+ measurements are attached; gated off entirely for a design with a
+       categorical factor (the search has no coded box for it — see #balance-cat-note). -->
+  <section id="step-balance" class="card" hidden>
+    <h2><span class="step-no">4</span> Balance multiple measurements</h2>
+    <p class="hint">Find the settings that best satisfy every measurement at once — e.g.
+      maximize yield while minimizing impurity.</p>
+    <p class="hint-inline" id="balance-cat-note" hidden>Balancing multiple measurements needs
+      all-continuous factors (it searches the coded box) — this plan has a categorical
+      factor, so this step isn't available.</p>
+    <div id="balance-editor">
+      <div class="table-scroll"><table class="goals-table" id="goals-table"></table></div>
+      <button type="button" class="primary" id="run-balance">Find best balance</button>
+    </div>
+    <div id="balance-results" hidden>
+      <div class="result-row">
+        <div class="stat-tile">
+          <div class="stat-label">Best balanced settings</div>
+          <div class="stat-value" id="stat-balance-settings">–</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-label">Overall desirability</div>
+          <div class="stat-value" id="stat-balance-overall">–</div>
+          <div class="stat-sub">0 = fails a goal, 1 = ideal</div>
+        </div>
+      </div>
+      <div class="table-scroll"><table class="terms-table" id="balance-table"></table></div>
+      <div class="warnings" id="balance-warnings" hidden></div>
+      <h3>Desirability map</h3>
+      <p class="hint">Where the overall desirability is highest across two factors at a
+        time (other factors held at the best balanced settings above); the ★ marks that
+        optimum.</p>
+      <div id="balance-axis-pickers" hidden></div>
+      <div id="balance-contour" class="plot"></div>
+    </div>
+    <div class="error" id="error-balance" hidden></div>
   </section>
 </main>
 

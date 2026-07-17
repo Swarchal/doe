@@ -5,10 +5,16 @@
 "use strict";
 
 const state = {
-  design: null,       // current design document
-  responseName: "response",
-  planType: null,     // the plan type the user picked ("ccd"/"bb"/"ff2"/"dopt"); null once loaded
+  design: null,           // current design document
+  responseNames: ["response"],  // ordered measurement names (cap MAX_RESPONSES)
+  responseName: "response",     // the *active* response driving the step-3 results view
+  planType: null,         // the plan type the user picked ("ccd"/"bb"/"ff2"/"dopt"); null once loaded
 };
+
+/* Cap on simultaneously-tracked measurements — matches doe-service's own
+ * `Limits.max_goals` (POST /v1/optimize/desirability caps goals at 8), so a design with
+ * more measurements than the balance view could ever use is refused early and clearly. */
+const MAX_RESPONSES = 8;
 
 /* Non-factor run columns that are bookkeeping, not measured responses: `std_order` is the
  * standard-order index that `randomize` preserves so results can be re-joined. Excluded when
@@ -416,9 +422,12 @@ async function generatePlan() {
     // Randomize the run order so the sheet is bench-ready.
     state.design = (await api("/designs/randomize",
       seed !== null ? { design, seed } : { design })).design;
+    state.responseNames = ["response"];
+    state.responseName = "response";
     renderPlan();
     $("step-plan").hidden = false;
     $("step-results").hidden = true;
+    $("step-balance").hidden = true;
     $("step-plan").scrollIntoView({ behavior: "smooth" });
   } catch (err) {
     showError("error-factors", err);
@@ -453,7 +462,84 @@ function isScreeningPlan() {
   return SCREENING_GENERATORS.has(gen.name);
 }
 
-function renderPlan() {
+/* Rebuild the "Measurements:" row of small text inputs (one per `state.responseNames`
+ * entry) plus its remove buttons — the response-side counterpart of `addFactorRow`'s
+ * per-row wiring. Renaming or removing a measurement re-renders the whole run sheet
+ * (via `renderPlan`), so it always calls this too; called directly whenever only the
+ * controls (not the table) need refreshing. */
+function renderResponseControls() {
+  const box = $("response-list");
+  box.innerHTML = state.responseNames.map((name, i) => `
+    <span class="resp-row">
+      <input type="text" class="resp-name" data-idx="${i}" value="${escapeAttr(name)}" size="12">
+      ${state.responseNames.length > 1
+        ? '<button type="button" class="remove-row" title="Remove measurement">✕</button>'
+        : ""}
+    </span>`).join("");
+  [...box.querySelectorAll(".resp-row")].forEach((row, i) => {
+    const input = row.querySelector(".resp-name");
+    input.addEventListener("change", () => renameResponse(i, input.value));
+    const removeBtn = row.querySelector(".remove-row");
+    if (removeBtn) removeBtn.addEventListener("click", () => removeResponse(i));
+  });
+  $("add-response").disabled = state.responseNames.length >= MAX_RESPONSES;
+}
+
+/* Read every measurement input's current value, keyed by response name then run index
+ * (name-keyed, not index-keyed, so values survive a response being added/removed/renamed
+ * and the table being rebuilt with a different column set). Blank cells are omitted. */
+function snapshotResponseValues() {
+  const snap = {};
+  for (const name of state.responseNames) snap[name] = {};
+  for (const input of document.querySelectorAll("input.resp")) {
+    const name = state.responseNames[Number(input.dataset.resp)];
+    if (name === undefined || input.value === "") continue;
+    snap[name][Number(input.dataset.run)] = input.value;
+  }
+  return snap;
+}
+
+function renameResponse(i, rawValue) {
+  const name = rawValue.trim();
+  if (!name || state.responseNames.some((n, j) => j !== i && n === name)) {
+    if (!name) showError("error-plan", new Error("A measurement needs a name."));
+    else showError("error-plan", new Error(`"${name}" is already used for another measurement.`));
+    renderResponseControls(); // restore the old name in the input
+    return;
+  }
+  clearError("error-plan");
+  const snap = snapshotResponseValues();
+  const old = state.responseNames[i];
+  if (name !== old) { snap[name] = snap[old]; delete snap[old]; }
+  state.responseNames[i] = name;
+  if (state.responseName === old) state.responseName = name;
+  renderPlan(snap);
+}
+
+function removeResponse(i) {
+  if (state.responseNames.length <= 1) return;
+  const snap = snapshotResponseValues();
+  const removed = state.responseNames[i];
+  delete snap[removed];
+  state.responseNames.splice(i, 1);
+  if (state.responseName === removed) state.responseName = state.responseNames[0];
+  renderPlan(snap);
+}
+
+function addResponse() {
+  if (state.responseNames.length >= MAX_RESPONSES) return;
+  const snap = snapshotResponseValues();
+  let n = state.responseNames.length + 1;
+  let name = `response${n}`;
+  while (state.responseNames.includes(name)) { n += 1; name = `response${n}`; }
+  state.responseNames.push(name);
+  renderPlan(snap);
+}
+
+/* `responseSnapshot` (from `snapshotResponseValues`) re-fills measurement cells after a
+ * rebuild triggered by adding/removing/renaming a response — otherwise every re-render
+ * would start the sheet blank again. Omit it for a fresh plan (nothing to preserve). */
+function renderPlan(responseSnapshot) {
   const d = state.design;
   const names = factorNames();
   $("plan-summary").textContent =
@@ -470,17 +556,23 @@ function renderPlan() {
   // drop the column entirely rather than show an empty one.
   const showPointType = Boolean(d.point_types);
   const head = ["Run", ...d.factors.map((f) => f.units ? `${f.name} (${f.units})` : f.name),
-    ...(showPointType ? ["Point type"] : []), "Your measurement"];
+    ...(showPointType ? ["Point type"] : []), ...state.responseNames.map((n) => `Measurement: ${n}`)];
   const rows = d.runs.map((run, i) => {
     const cells = names.map((n) => cellFor(n, run[n])).join("");
     const pt = showPointType ? `<td class="point-type">${d.point_types[i]}</td>` : "";
-    return `<tr><td class="num">${i + 1}</td>${cells}${pt}` +
-      `<td><input type="number" class="resp" step="any" data-run="${i}"></td></tr>`;
+    const respCells = state.responseNames.map((name, k) => {
+      const v = responseSnapshot && responseSnapshot[name] && responseSnapshot[name][i] !== undefined
+        ? responseSnapshot[name][i] : "";
+      return `<td><input type="number" class="resp" step="any" data-run="${i}" data-resp="${k}" ` +
+        `value="${escapeAttr(v)}"></td>`;
+    }).join("");
+    return `<tr><td class="num">${i + 1}</td>${cells}${pt}${respCells}</tr>`;
   });
   $("run-table").innerHTML =
     `<thead><tr>${head.map((h) => `<th${h === "Run" ? ' class="num"' : ""}>${h}</th>`).join("")}</tr></thead>` +
     `<tbody>${rows.join("")}</tbody>`;
   $("import-status").hidden = true; // a fresh table has no imported measurements
+  renderResponseControls();
 }
 
 /* Quote a CSV field when it contains a comma, quote or newline (factor names, levels and
@@ -502,7 +594,7 @@ function downloadCsv() {
     if (f.units) header.push(`${f.name}_units`);
   }
   if (showPointType) header.push("point_type");
-  header.push(state.responseName || "response");
+  for (const name of state.responseNames) header.push(name);
 
   const lines = d.runs.map((run, i) => {
     const cells = [i + 1];
@@ -511,7 +603,7 @@ function downloadCsv() {
       if (f.units) cells.push(f.units);
     }
     if (showPointType) cells.push(d.point_types[i]);
-    cells.push(""); // empty response cell to fill in at the bench
+    for (const _name of state.responseNames) cells.push(""); // empty response cells to fill in at the bench
     return cells.map(csvField).join(",");
   });
 
@@ -595,12 +687,15 @@ function parseNumber(s, commaDecimal = false) {
  * sheet re-sorted in a spreadsheet still lands on the right runs — falling back to row
  * order. Factor columns present in the sheet are cross-checked against the plan
  * (tolerantly for continuous values), so results from a different or re-generated plan
- * are refused instead of silently attached to the wrong runs. The measurement column is
- * whichever column is neither `run`, a factor, a `<factor>_units` carrier, `point_type`,
- * nor bookkeeping — preferring `preferredName`, else the first one holding numbers.
- * Returns { name, values (number|null per run), imported, blank }; throws on any
- * structural problem, naming the offending rows. */
-function matchResultsCsv(design, rows, preferredName, commaDecimal) {
+ * are refused instead of silently attached to the wrong runs. Every column that is
+ * neither `run`, a factor, a `<factor>_units` carrier, `point_type`, nor bookkeeping is a
+ * measurement candidate — `preferredNames` (the plan's existing measurement names, in
+ * order) are tried first so a re-imported sheet lines back up with its columns, then any
+ * others. Returns { columns: [{ name, values (number|null per run), imported, blank }] },
+ * one entry per candidate column that has at least one number; throws on any structural
+ * problem (naming the offending rows) or on a column whose non-blank cells aren't all
+ * numbers — same strictness as before, just per-column. */
+function matchResultsCsv(design, rows, preferredNames, commaDecimal) {
   if (rows.length < 2) throw new Error("That file has a header row but no data rows.");
   const header = rows[0].map((h) => h.trim());
   const data = rows.slice(1);
@@ -617,11 +712,8 @@ function matchResultsCsv(design, rows, preferredName, commaDecimal) {
   if (!candidates.length) {
     throw new Error(
       "Couldn't find a measurement column — the sheet needs one extra column " +
-      `(e.g. "${preferredName || "response"}") alongside the factor columns.`);
+      `(e.g. "${(preferredNames && preferredNames[0]) || "response"}") alongside the factor columns.`);
   }
-  const name = (preferredName && candidates.includes(preferredName)) ? preferredName
-    : candidates.find((h) => data.some((r) => !Number.isNaN(parseNumber(r[colOf(h)] ?? "", commaDecimal))))
-      ?? candidates[0];
 
   // Which design run each data row belongs to.
   const assignments = [];
@@ -672,26 +764,37 @@ function matchResultsCsv(design, rows, preferredName, commaDecimal) {
       `${shown}. Import the sheet downloaded from this plan (or load the matching saved plan first).`);
   }
 
-  const respCol = colOf(name);
-  const values = new Array(n).fill(null);
-  const bad = [];
-  for (const [idx, r] of assignments) {
-    const cell = (r[respCol] ?? "").trim();
-    if (cell === "") continue;
-    const v = parseNumber(cell, commaDecimal);
-    if (Number.isNaN(v)) { bad.push(`run ${idx + 1}: "${cell}"`); continue; }
-    values[idx] = v;
+  // Preferred (existing measurement) names first, in their own order, then any other
+  // candidate columns — so a re-imported sheet's known columns always line up first.
+  const ordered = [
+    ...(preferredNames || []).filter((h) => candidates.includes(h)),
+    ...candidates.filter((h) => !(preferredNames || []).includes(h)),
+  ];
+
+  const columns = [];
+  for (const name of ordered) {
+    const respCol = colOf(name);
+    const values = new Array(n).fill(null);
+    const bad = [];
+    for (const [idx, r] of assignments) {
+      const cell = (r[respCol] ?? "").trim();
+      if (cell === "") continue;
+      const v = parseNumber(cell, commaDecimal);
+      if (Number.isNaN(v)) { bad.push(`run ${idx + 1}: "${cell}"`); continue; }
+      values[idx] = v;
+    }
+    if (bad.length) {
+      throw new Error(`Some "${name}" values aren't numbers — ` +
+        bad.slice(0, 5).join("; ") + (bad.length > 5 ? "; …" : "") + ".");
+    }
+    const imported = values.filter((v) => v !== null).length;
+    if (imported) columns.push({ name, values, imported, blank: n - imported });
   }
-  if (bad.length) {
-    throw new Error(`Some "${name}" values aren't numbers — ` +
-      bad.slice(0, 5).join("; ") + (bad.length > 5 ? "; …" : "") + ".");
-  }
-  const imported = values.filter((v) => v !== null).length;
-  if (!imported) {
-    throw new Error(`The "${name}" column has no numbers yet — ` +
+  if (!columns.length) {
+    throw new Error(`The "${ordered[0]}" column has no numbers yet — ` +
       "fill in your measurements and import the sheet again.");
   }
-  return { name, values, imported, blank: n - imported };
+  return { columns };
 }
 
 function showImportStatus(message) {
@@ -710,18 +813,25 @@ async function importResults(file) {
     const text = await file.text();
     const delimiter = sniffDelimiter(text);
     const rows = parseCsv(text, delimiter);
-    const preferred = $("response-name").value.trim();
-    const { name, values, imported, blank } =
-      matchResultsCsv(state.design, rows, preferred, delimiter !== ",");
-    state.responseName = name;
-    $("response-name").value = name;
-    for (const input of document.querySelectorAll("input.resp")) {
-      const v = values[Number(input.dataset.run)];
-      input.value = v === null ? "" : v;
+    const { columns } = matchResultsCsv(state.design, rows, state.responseNames, delimiter !== ",");
+
+    const snap = snapshotResponseValues();
+    const parts = [];
+    let skipped = 0;
+    for (const { name, values, imported, blank } of columns) {
+      if (!state.responseNames.includes(name)) {
+        if (state.responseNames.length >= MAX_RESPONSES) { skipped += 1; continue; }
+        state.responseNames.push(name);
+      }
+      snap[name] = {};
+      values.forEach((v, i) => { if (v !== null) snap[name][i] = v; });
+      parts.push(`${imported} measurement${imported === 1 ? "" : "s"} from “${name}”` +
+        (blank ? ` (${blank} run${blank === 1 ? " is" : "s are"} still blank)` : ""));
     }
-    showImportStatus(`Imported ${imported} measurement${imported === 1 ? "" : "s"} ` +
-      `from “${name}”` +
-      (blank ? ` — ${blank} run${blank === 1 ? " is" : "s are"} still blank.` : "."));
+    renderPlan(snap);
+    showImportStatus(`Imported ${parts.join("; ")}.` +
+      (skipped ? ` ${skipped} extra column${skipped === 1 ? "" : "s"} skipped ` +
+        `(${MAX_RESPONSES}-measurement limit).` : ""));
   } catch (err) {
     showError("error-plan", err);
   }
@@ -741,7 +851,9 @@ function pasteResults(e) {
   if (Number.isNaN(parseNumber(tokens[0], true)) && !Number.isNaN(parseNumber(tokens[1], true))) {
     tokens.shift();
   }
-  const inputs = [...document.querySelectorAll("input.resp")];
+  // Spill down within the target's own measurement column only — a multi-response sheet
+  // has one `input.resp` per response per run, sharing `data-resp`.
+  const inputs = [...document.querySelectorAll(`input.resp[data-resp="${target.dataset.resp}"]`)];
   let i = inputs.indexOf(target);
   let filled = 0;
   for (const t of tokens) {
@@ -761,10 +873,11 @@ function saveDesign() {
   let design = state.design;
   const inputs = document.querySelectorAll("input.resp");
   if (inputs.length) {
-    const name = ($("response-name").value.trim() || "response");
     const runs = state.design.runs.map((r) => ({ ...r }));
     let any = false;
     inputs.forEach((input) => {
+      const name = state.responseNames[Number(input.dataset.resp)];
+      if (!name) return;
       const v = parseFloat(input.value);
       if (!Number.isNaN(v)) { runs[Number(input.dataset.run)][name] = v; any = true; }
     });
@@ -805,33 +918,39 @@ async function loadDesign(file) {
     onFactorsChanged();
 
     // A measured response is a run column that is neither a factor nor bookkeeping
-    // (`std_order` et al.); pre-fill the first one so the results can be analysed.
+    // (`std_order` et al.); pre-fill every one so the results can be analysed.
     const factorSet = new Set(design.factors.map((f) => f.name));
     const responseCols = design.runs.length
       ? Object.keys(design.runs[0]).filter((k) => !factorSet.has(k) && !RESERVED_RUN_COLUMNS.has(k))
       : [];
 
-    renderPlan();
+    state.responseNames = responseCols.length ? responseCols.slice(0, MAX_RESPONSES) : ["response"];
+    state.responseName = state.responseNames[0];
+
+    const snap = {};
+    for (const name of state.responseNames) {
+      snap[name] = {};
+      design.runs.forEach((run, i) => {
+        const v = run[name];
+        if (v !== null && v !== undefined) snap[name][i] = v;
+      });
+    }
+    renderPlan(snap);
     $("step-plan").hidden = false;
     $("step-results").hidden = true;
-
-    if (responseCols.length) {
-      state.responseName = responseCols[0];
-      $("response-name").value = state.responseName;
-      for (const input of document.querySelectorAll("input.resp")) {
-        const v = design.runs[Number(input.dataset.run)][state.responseName];
-        if (v !== null && v !== undefined) input.value = v;
-      }
-    }
+    $("step-balance").hidden = true;
     $("step-plan").scrollIntoView({ behavior: "smooth" });
   } catch (err) {
     showError("error-factors", err);
   }
 }
 
-/* Deterministic synthetic response so the whole flow can be demoed without a lab:
+/* Deterministic synthetic response(s) so the whole flow can be demoed without a lab:
  * a smooth quadratic over the first two factors (in coded units) plus a small
- * run-dependent wiggle standing in for noise. */
+ * run-dependent wiggle standing in for noise. The first measurement (`data-resp="0"`)
+ * gets that surface; any additional measurement gets a shifted, negated variant, so a
+ * demo with 2+ measurements has a genuine trade-off between them (see the balance view
+ * below) rather than two copies of the same optimum. */
 function demoFill() {
   const d = state.design;
   const coded = (f, v) => (2 * (v - f.low)) / (f.high - f.low) - 1;
@@ -847,24 +966,45 @@ function demoFill() {
       const idx = f.levels.indexOf(run[f.name]);
       catBump += 2 * (idx - (f.levels.length - 1) / 2);
     }
-    const wiggle = 0.3 * Math.sin(37 * (a + 2 * b) + Number(input.dataset.run));
-    input.value = (70 + 4 * a + 3 * b - 3 * a * a - 2 * b * b + 1.5 * a * b + catBump + wiggle).toFixed(2);
+    const k = Number(input.dataset.resp);
+    const wiggle = 0.3 * Math.sin(37 * (a + 2 * b) + Number(input.dataset.run) + k);
+    const value = k === 0
+      ? 70 + 4 * a + 3 * b - 3 * a * a - 2 * b * b + 1.5 * a * b + catBump + wiggle
+      : 30 - 3 * a - 2 * b + 2 * a * a + 1.5 * b * b - a * b - catBump + wiggle;
+    input.value = value.toFixed(2);
   });
 }
 
 /* ---------- Step 3: analysis ---------- */
 
-function readResponses() {
+/* Read one measurement column's values, erroring with the run and measurement name of
+ * the first blank cell found. `idx` is the column's `data-resp` index. */
+function readResponseValues(idx, name) {
   const values = [];
-  for (const input of document.querySelectorAll("input.resp")) {
+  for (const input of document.querySelectorAll(`input.resp[data-resp="${idx}"]`)) {
     const v = parseFloat(input.value);
     if (Number.isNaN(v)) {
-      throw new Error(`Run ${Number(input.dataset.run) + 1} has no measurement yet — ` +
+      throw new Error(`Run ${Number(input.dataset.run) + 1} ("${name}") has no measurement yet — ` +
         "fill in every row (or use the demo button).");
     }
     values[Number(input.dataset.run)] = v;
   }
   return values;
+}
+
+/* Validate the measurement names before attaching them: unique, non-empty, and not
+ * clashing with a factor name or a reserved bookkeeping column — mirrors readFactors()'s
+ * validation style. */
+function validateResponseNames() {
+  const names = state.responseNames;
+  if (!names.length) throw new Error("Add at least one measurement.");
+  if (new Set(names).size !== names.length) throw new Error("Measurement names must be unique.");
+  const factorSet = new Set(factorNames());
+  for (const n of names) {
+    if (!n) throw new Error("Every measurement needs a name.");
+    if (factorSet.has(n)) throw new Error(`Measurement "${n}" clashes with a factor name — rename it.`);
+    if (RESERVED_RUN_COLUMNS.has(n)) throw new Error(`"${n}" is a reserved column name — rename it.`);
+  }
 }
 
 /* A copy of the design document with a given run column removed (no-op if absent). Used to
@@ -884,16 +1024,21 @@ async function analyze() {
   clearError("error-plan");
   clearError("error-results");
   try {
-    state.responseName = $("response-name").value.trim() || "response";
-    const responses = readResponses();
-    // Drop any existing column of this name first: `with_response` refuses to overwrite, so
-    // a loaded-with-results plan (or a re-analysis with edited numbers) would otherwise clash.
-    const base = designWithoutColumn(state.design, state.responseName);
-    const attached = await api("/designs/responses", {
-      design: base,
-      responses: { [state.responseName]: responses },
+    validateResponseNames();
+    // Drop any existing column of each name first: `with_response` refuses to overwrite,
+    // so a loaded-with-results plan (or a re-analysis with edited numbers) would otherwise
+    // clash. Attach every measurement in one call.
+    let base = state.design;
+    const responses = {};
+    state.responseNames.forEach((name, idx) => {
+      responses[name] = readResponseValues(idx, name);
+      base = designWithoutColumn(base, name);
     });
+    const attached = await api("/designs/responses", { design: base, responses });
     state.design = attached.design;
+    if (!state.responseNames.includes(state.responseName)) {
+      state.responseName = state.responseNames[0];
+    }
     // Reveal the results card *before* drawing into it: Plotly sizes each figure to its
     // container, and a display:none container measures 0×0 — the plots would come up at
     // Plotly's default size and only correct themselves on the next window resize.
@@ -901,15 +1046,29 @@ async function analyze() {
     const wasHidden = results.hidden;
     results.hidden = false;
     try {
+      renderResultsResponseSelector();
       await renderResults();
     } catch (err) {
       results.hidden = wasHidden;
       throw err;
     }
+    showBalanceCardIfEligible();
     results.scrollIntoView({ behavior: "smooth" });
   } catch (err) {
     showError("error-plan", err);
   }
+}
+
+/* Show/hide the `#results-response` selector (results-controls toolbar) based on how
+ * many measurements are attached — a single measurement needs no selector at all. */
+function renderResultsResponseSelector() {
+  const wrap = $("results-response-wrap");
+  const many = state.responseNames.length > 1;
+  wrap.hidden = !many;
+  if (!many) return;
+  const sel = $("results-response");
+  sel.innerHTML = state.responseNames.map((n) => `<option value="${escapeAttr(n)}">${n}</option>`).join("");
+  sel.value = state.responseName;
 }
 
 /* A Plackett-Burman design is saturated for main effects (n ~= k + 1 runs): the default
@@ -996,6 +1155,7 @@ async function renderOptimizeView(fit) {
   await renderAdequacy(fit);
   setupAxisPickers(opt);
   await renderContour(opt.natural);
+  await renderInteractionBlock(fit, opt.natural);
 }
 
 /* Screening view: a 2-level "which factors matter?" plan has no curvature to map and no
@@ -1013,6 +1173,7 @@ async function renderScreeningView(fit) {
   renderParetoPlot(effects);
   renderHalfNormalPlot(effects);
   renderTermsTable(fit.terms, { sortByEffect: true });
+  await renderInteractionBlock(fit, screeningHeldNatural());
 }
 
 /* Non-intercept model terms as effects for the screening plots: the signed ±1 coded swing
@@ -1398,6 +1559,383 @@ async function renderContour(optimumNatural) {
   });
 }
 
+/* ---------- Step 3: interaction plot ---------- */
+
+/* Stash for the picker's redraw-only-this-plot behaviour: the qualifying pairs (so the
+ * picker's <select> can be rebuilt without re-fitting) and the natural-unit values every
+ * non-axis factor is held at. Set once by renderInteractionBlock; read again by
+ * renderInteractionPlot when the picker changes without re-running renderResults(). */
+let interactionContext = null;
+
+/* Significant (p < 0.05) continuous x continuous interaction terms, sorted by |effect|
+ * descending. A term only qualifies when both ":"-split halves are exact continuous factor
+ * names — a term involving a categorical factor's deviation-coded contrast column (e.g.
+ * "catalyst[B]:temperature") never matches a bare factor name, so it's excluded (the
+ * library's interaction_lines rejects a categorical axis, and the router turns that into a
+ * 422). */
+function continuousInteractionPairs(terms) {
+  const continuous = new Set(continuousFactorNames());
+  return terms
+    .filter((t) => t.p !== null && t.p !== undefined && t.p < 0.05 && t.term.includes(":"))
+    .map((t) => ({ term: t.term, parts: t.term.split(":"), effect: t.effect ?? 2 * t.coefficient }))
+    .filter((t) => t.parts.length === 2 && t.parts.every((p) => continuous.has(p)))
+    .sort((a, b) => Math.abs(b.effect) - Math.abs(a.effect));
+}
+
+/* Show (and draw) the interaction-plot block when at least one significant continuous x
+ * continuous interaction exists in `fit.terms`; hide the whole block otherwise, so the page
+ * stays uncluttered when there's nothing to show. `heldNatural` supplies the natural-unit
+ * value every non-axis factor is held at while sweeping the plot: the optimum for a
+ * response-surface fit (renderOptimizeView), or each factor's midpoint / first level for a
+ * screening fit (renderScreeningView), which has no optimum to hold at. */
+async function renderInteractionBlock(fit, heldNatural) {
+  const pairs = continuousInteractionPairs(fit.terms);
+  const block = $("interaction-block");
+  if (!pairs.length) { block.hidden = true; interactionContext = null; return; }
+  block.hidden = false;
+
+  const many = pairs.length > 1;
+  $("interaction-pick-wrap").hidden = !many;
+  if (many) {
+    const sel = $("interaction-pick");
+    sel.innerHTML = pairs.map((p) => `<option value="${escapeAttr(p.term)}">${p.term}</option>`).join("");
+    sel.value = pairs[0].term;
+  }
+
+  $("interaction-held-hint").textContent = state.design.factors.length > 2
+    ? `(other factors held at ${isScreeningPlan() ? "their midpoint / first option" : "the best predicted settings"})`
+    : "";
+
+  interactionContext = { pairs, heldNatural };
+  await renderInteractionPlot(pairs[0]);
+}
+
+/* Fetch and draw the interaction plot for one qualifying term — its two ":"-split parts are
+ * the swept factor (`x`) and the factor whose low/high settings each become a line
+ * (`trace`). Only this plot is refetched/redrawn when the picker changes, not the whole
+ * results view (renderResults() is not re-run). A failed call renders its message inline
+ * rather than sinking the rest of the results view (mirrors renderAdequacy's soft-fail). */
+async function renderInteractionPlot(pair) {
+  const el = $("interaction-plot");
+  if (typeof Plotly === "undefined") { el.innerHTML = OFFLINE_PLOT_MSG; return; }
+
+  const [x, trace] = pair.parts;
+  const heldNatural = interactionContext.heldNatural;
+  const fixed = {};
+  for (const f of state.design.factors) {
+    if (f.name === x || f.name === trace) continue;
+    fixed[f.name] = heldNatural[f.name];
+  }
+
+  let data;
+  try {
+    data = await api("/plot-data/interactions", { ...fitRequest(), x, trace, fixed, resolution: 25 });
+  } catch (err) {
+    el.innerHTML = `<p class="plot-fallback">${escapeAttr(err instanceof Error ? err.message : String(err))}</p>`;
+    return;
+  }
+
+  const label = (n) => {
+    const f = state.design.factors.find((ff) => ff.name === n);
+    return f.units ? `${n} (${f.units})` : n;
+  };
+  const traceFactor = state.design.factors.find((f) => f.name === trace);
+  const traceUnits = traceFactor.units ? ` ${traceFactor.units}` : "";
+  // Colorblind-safe blue/orange pair, matching the palette used elsewhere on the page.
+  const colors = ["#256abf", "#e07b39"];
+
+  const traces = data.lines.map((line, i) => ({
+    type: "scatter",
+    mode: "lines+markers",
+    name: `${trace} = ${fmt(line.trace_value, 4)}${traceUnits}`,
+    x: data.x,
+    y: line.z,
+    line: { color: colors[i % colors.length], width: 2 },
+    marker: { color: colors[i % colors.length], size: 6, line: { color: "#ffffff", width: 1 } },
+    hovertemplate: `${x}: %{x:.4~g}<br>predicted ${state.responseName}: %{y:.4~g}` +
+      `<extra>${trace} = ${fmt(line.trace_value, 4)}${traceUnits}</extra>`,
+  }));
+
+  drawPlot(el, traces, {
+    margin: { t: 10, r: 10, b: 55, l: 65 },
+    xaxis: { title: { text: label(x) } },
+    yaxis: { title: { text: `predicted ${state.responseName}` } },
+    legend: { orientation: "h", y: -0.25 },
+    font: { family: "system-ui, sans-serif", color: "#1f2430" },
+    paper_bgcolor: "rgba(0,0,0,0)",
+  });
+}
+
+/* Held values for the interaction plot's non-axis factors when there is no fitted optimum to
+ * hold at (the screening view): each continuous factor at its midpoint, each categorical
+ * factor at its first level. A Plackett-Burman screen fits main effects only (no ":" terms),
+ * so continuousInteractionPairs() naturally finds nothing and the block stays hidden — this
+ * only matters for a (rare) screening plan whose model does carry an interaction term. */
+function screeningHeldNatural() {
+  const held = {};
+  for (const f of state.design.factors) {
+    held[f.name] = f.type === "categorical" ? f.levels[0] : (f.low + f.high) / 2;
+  }
+  return held;
+}
+
+/* ---------- Step 4: balance (desirability) ---------- */
+
+/* The most recent /optimize/desirability result and the goals that produced it — cached
+ * so changing the desirability map's axis pickers can redraw the contour without paying
+ * for another search (the goals/optimum don't change, only which slice is plotted). */
+let lastBalanceResult = null;
+let lastBalanceGoals = null;
+
+/* Show (or hide) the balance card after a successful analyse(): it only makes sense with
+ * 2+ measurements, and only for an all-continuous design — the desirability endpoint
+ * searches the coded box, which has no place for a categorical factor (mirrors the
+ * `#design-cat-note` gating pattern used for CCD/Box-Behnken). */
+function showBalanceCardIfEligible() {
+  const card = $("step-balance");
+  if (state.responseNames.length < 2) { card.hidden = true; return; }
+  card.hidden = false;
+  const categorical = hasCategorical();
+  $("balance-cat-note").hidden = !categorical;
+  $("balance-editor").hidden = categorical;
+  $("balance-results").hidden = true;
+  clearError("error-balance");
+  if (!categorical) renderGoalsTable();
+}
+
+/* Default goal per response: maximize, ramping across the observed min/max of that
+ * column's attached values (the user can change goal/bounds/weight before running). */
+function defaultGoals() {
+  return state.responseNames.map((name) => {
+    const values = state.design.runs
+      .map((r) => r[name])
+      .filter((v) => v !== null && v !== undefined);
+    const low = Math.min(...values);
+    const high = Math.max(...values);
+    return { response: name, goal: "max", low, high, target: (low + high) / 2, weight: 1 };
+  });
+}
+
+function renderGoalsTable() {
+  const goals = defaultGoals();
+  const rows = goals.map((g) => `
+    <tr data-response="${escapeAttr(g.response)}">
+      <td>${g.response}</td>
+      <td><select class="goal-type">
+        <option value="max" selected>Maximize</option>
+        <option value="min">Minimize</option>
+        <option value="target">Hit target</option>
+      </select></td>
+      <td><input type="number" class="goal-low" step="any" value="${g.low}"></td>
+      <td><input type="number" class="goal-high" step="any" value="${g.high}"></td>
+      <td><input type="number" class="goal-target" step="any" value="${g.target}" hidden></td>
+      <td><input type="number" class="goal-weight" step="any" value="1" min="0.01"></td>
+    </tr>`).join("");
+  $("goals-table").innerHTML =
+    "<thead><tr><th>Response</th><th>Goal</th><th class=\"num\">Low</th>" +
+    "<th class=\"num\">High</th><th class=\"num\">Target</th><th class=\"num\">Weight</th></tr></thead>" +
+    `<tbody>${rows}</tbody>`;
+  for (const tr of $("goals-table").querySelectorAll("tbody tr")) {
+    const sel = tr.querySelector(".goal-type");
+    sel.addEventListener("change", () => {
+      tr.querySelector(".goal-target").hidden = sel.value !== "target";
+    });
+  }
+}
+
+/* Read the goals table into the wire shape POST /optimize/desirability expects, with the
+ * same client-side sanity checks the library itself enforces (low < high; a target goal's
+ * target strictly between low and high) so a typo fails fast with a friendly message
+ * instead of a round-tripped 422. Every goal is fit as "quadratic", matching fitRequest(). */
+function readGoals() {
+  const goals = [];
+  for (const tr of $("goals-table").querySelectorAll("tbody tr")) {
+    const response = tr.dataset.response;
+    const goal = tr.querySelector(".goal-type").value;
+    const low = parseFloat(tr.querySelector(".goal-low").value);
+    const high = parseFloat(tr.querySelector(".goal-high").value);
+    const weight = parseFloat(tr.querySelector(".goal-weight").value);
+    if (Number.isNaN(low) || Number.isNaN(high)) {
+      throw new Error(`"${response}": enter both a low and a high value.`);
+    }
+    if (low >= high) throw new Error(`"${response}": low must be less than high.`);
+    if (Number.isNaN(weight) || weight <= 0) {
+      throw new Error(`"${response}": weight must be a positive number.`);
+    }
+    let target = null;
+    if (goal === "target") {
+      target = parseFloat(tr.querySelector(".goal-target").value);
+      if (Number.isNaN(target)) throw new Error(`"${response}": enter a target value.`);
+      if (!(low < target && target < high)) {
+        throw new Error(`"${response}": target must be strictly between low and high.`);
+      }
+    }
+    goals.push({ response, model: "quadratic", goal, low, high, target, weight });
+  }
+  if (!goals.length) throw new Error("Add at least one measurement to balance.");
+  return goals;
+}
+
+async function runBalance() {
+  clearError("error-balance");
+  const button = $("run-balance");
+  try {
+    const goals = readGoals();
+    setButtonBusy(button, true, "Searching…", [{ after: 4000, label: "Still working…" }]);
+    const result = await api("/optimize/desirability", { design: state.design, goals });
+    lastBalanceResult = result;
+    lastBalanceGoals = goals;
+
+    $("stat-balance-settings").textContent = formatOptimumSettings(result.natural);
+    $("stat-balance-overall").textContent = fmt(result.overall, 3);
+
+    const rows = goals.map((g) => {
+      const summary = g.goal === "max" ? `maximize (ramps ${fmt(g.low, 3)} → ${fmt(g.high, 3)})`
+        : g.goal === "min" ? `minimize (ramps ${fmt(g.high, 3)} → ${fmt(g.low, 3)})`
+        : `hit target ${fmt(g.target, 3)} (range ${fmt(g.low, 3)}–${fmt(g.high, 3)})`;
+      return `<tr><td>${g.response}</td>` +
+        `<td class="num">${fmt(result.responses[g.response], 4)}</td>` +
+        `<td class="num">${fmt(result.individual[g.response], 3)}</td>` +
+        `<td>${summary}</td></tr>`;
+    });
+    $("balance-table").innerHTML =
+      "<thead><tr><th>Response</th><th class=\"num\">Predicted value</th>" +
+      "<th class=\"num\">Desirability</th><th>Goal</th></tr></thead>" +
+      `<tbody>${rows.join("")}</tbody>`;
+
+    const warnings = result.warnings || [];
+    $("balance-warnings").hidden = warnings.length === 0;
+    $("balance-warnings").textContent = warnings.join("; ");
+
+    $("balance-results").hidden = false;
+    setupBalanceAxisPickers();
+    await renderBalanceContour();
+  } catch (err) {
+    showError("error-balance", err);
+  } finally {
+    setButtonBusy(button, false);
+  }
+}
+
+/* Its own (simpler) axis-picker pair — the balance view's optimum is independent of step
+ * 3's, so this doesn't reuse setupAxisPickers()'s state. Only shown when there are more
+ * than two continuous factors to choose between (same gate as the step-3 picker). */
+function setupBalanceAxisPickers() {
+  const names = continuousFactorNames();
+  const box = $("balance-axis-pickers");
+  const many = names.length > 2;
+  box.hidden = !many;
+  if (!many) return;
+  box.innerHTML = `<label class="inline-label">Map axes:
+    <select id="balance-axis-x"></select> ×
+    <select id="balance-axis-y"></select></label>`;
+  for (const [id, dflt] of [["balance-axis-x", names[0]], ["balance-axis-y", names[1]]]) {
+    const sel = $(id);
+    sel.innerHTML = names.map((n) => `<option value="${escapeAttr(n)}">${n}</option>`).join("");
+    sel.value = dflt;
+  }
+  const redraw = () => renderBalanceContour().catch((err) => showError("error-balance", err));
+  $("balance-axis-x").addEventListener("change", redraw);
+  $("balance-axis-y").addEventListener("change", redraw);
+}
+
+/* Client-side mirror of doe.analysis.optimize.ResponseGoal.desirability (see
+ * src/doe/analysis/optimize.py:709) — maps a predicted response value to [0, 1] per the
+ * goal's ramp. Kept exactly piecewise-identical (including the edge behaviour at low/high
+ * and the "outside [low, high] -> 0" branch for a target goal) so the client-drawn
+ * desirability map matches what the service itself would compute. */
+function desirabilityValue(goal, value) {
+  const { goal: kind, low: lo, high: hi, target, weight: wt } = goal;
+  if (kind === "max") {
+    if (value <= lo) return 0;
+    if (value >= hi) return 1;
+    return ((value - lo) / (hi - lo)) ** wt;
+  }
+  if (kind === "min") {
+    if (value <= lo) return 1;
+    if (value >= hi) return 0;
+    return ((hi - value) / (hi - lo)) ** wt;
+  }
+  // target
+  if (value < lo || value > hi) return 0;
+  if (value <= target) return ((value - lo) / (target - lo)) ** wt;
+  return ((hi - value) / (hi - target)) ** wt;
+}
+
+/* Desirability map: one /plot-data/surface call per response (identical x/y/resolution/
+ * fixed across all of them, so their grids line up cell-for-cell), each transformed
+ * through desirabilityValue() and combined as the unweighted geometric mean (matching
+ * doe.analysis.optimize.desirability's overall D), then drawn with the same contour
+ * styling as the step-3 response map. */
+async function renderBalanceContour() {
+  const el = $("balance-contour");
+  if (typeof Plotly === "undefined") { el.innerHTML = OFFLINE_PLOT_MSG; return; }
+  const names = continuousFactorNames();
+  if (names.length < 2) {
+    el.innerHTML = "<p class=\"plot-fallback\">A desirability map needs at least two " +
+      "continuous factors to draw.</p>";
+    return;
+  }
+  const result = lastBalanceResult;
+  const goals = lastBalanceGoals;
+  const x = names.length > 2 ? $("balance-axis-x").value : names[0];
+  let y = names.length > 2 ? $("balance-axis-y").value : names[1];
+  if (x === y) y = names.find((n) => n !== x);
+
+  // Hold every other factor at the optimum's setting (continuous-only — this view is
+  // gated off for a categorical design entirely).
+  const fixed = {};
+  for (const f of state.design.factors) {
+    if (f.name === x || f.name === y) continue;
+    fixed[f.name] = result.natural[f.name];
+  }
+
+  const surfaces = await Promise.all(goals.map((g) => api("/plot-data/surface", {
+    design: state.design, response: g.response, model: g.model, x, y, resolution: 40,
+    ...(Object.keys(fixed).length ? { fixed } : {}),
+  })));
+
+  const gx = surfaces[0].x[0];
+  const gy = surfaces[0].y.map((row) => row[0]);
+  const combined = surfaces[0].z.map((row, i) => row.map((_, j) => {
+    let prod = 1;
+    goals.forEach((g, k) => { prod *= desirabilityValue(g, surfaces[k].z[i][j]); });
+    return prod ** (1 / goals.length);
+  }));
+
+  const label = (n) => {
+    const f = state.design.factors.find((ff) => ff.name === n);
+    return f.units ? `${n} (${f.units})` : n;
+  };
+
+  const traces = [
+    {
+      type: "contour",
+      x: gx, y: gy, z: combined,
+      colorscale: CONTOUR_COLORSCALE,
+      zmin: 0, zmax: 1,
+      line: { width: 0.5, color: "rgba(255,255,255,0.6)" },
+      colorbar: { title: { text: "overall desirability", side: "right" }, thickness: 12, outlinewidth: 0 },
+      hovertemplate: `${x}: %{x:.4~g}<br>${y}: %{y:.4~g}<br>desirability: %{z:.3~g}<extra></extra>`,
+    },
+    {
+      type: "scatter", mode: "markers", name: "predicted best",
+      x: [result.natural[x]], y: [result.natural[y]],
+      marker: { color: "#ffffff", size: 14, symbol: "star", line: { color: "#1f2430", width: 1.5 } },
+      hovertemplate: "predicted best<extra></extra>",
+    },
+  ];
+
+  drawPlot(el, traces, {
+    margin: { t: 10, r: 10, b: 55, l: 65 },
+    xaxis: { title: { text: label(x) } },
+    yaxis: { title: { text: label(y) } },
+    showlegend: false,
+    font: { family: "system-ui, sans-serif", color: "#1f2430" },
+    paper_bgcolor: "rgba(0,0,0,0)",
+  });
+}
+
 /* ---------- wiring ---------- */
 
 EXAMPLE_FACTORS.forEach(addFactorRow);
@@ -1424,6 +1962,7 @@ $("import-results-file").addEventListener("change", (e) => {
   e.target.value = ""; // reset so re-selecting the same file fires 'change' again
 });
 $("run-table").addEventListener("paste", pasteResults);
+$("add-response").addEventListener("click", addResponse);
 $("save-plan").addEventListener("click", saveDesign);
 $("demo-fill").addEventListener("click", demoFill);
 $("analyze").addEventListener("click", analyze);
@@ -1431,3 +1970,12 @@ const rerender = () => renderResults().catch((err) => showError("error-results",
 $("maximize").addEventListener("change", rerender);
 $("axis-x").addEventListener("change", rerender);
 $("axis-y").addEventListener("change", rerender);
+$("results-response").addEventListener("change", (e) => {
+  state.responseName = e.target.value;
+  rerender();
+});
+$("run-balance").addEventListener("click", runBalance);
+$("interaction-pick").addEventListener("change", (e) => {
+  const pair = interactionContext.pairs.find((p) => p.term === e.target.value);
+  renderInteractionPlot(pair).catch((err) => showError("error-results", err));
+});
