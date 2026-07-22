@@ -24,7 +24,7 @@ from scipy.stats import qmc
 from ..design import Design
 from ..factors import CategoricalFactor, ContinuousFactor, FactorSet
 from ..serialization import json_safe
-from .model import coded_design_points, expand_coded_points
+from .model import _categorical_coded_levels, coded_design_points, expand_coded_points
 
 # --------------------------------------------------------------------------- #
 # 1.1 Information-matrix scalars
@@ -195,7 +195,7 @@ def _default_region_for_factors(
         if isinstance(factor, ContinuousFactor):
             axes.append(np.linspace(-1.0, 1.0, levels))
         elif isinstance(factor, CategoricalFactor):
-            axes.append(np.linspace(-1.0, 1.0, len(factor.levels)))
+            axes.append(_categorical_coded_levels(factor))
 
     n_grid = int(np.prod([len(axis) for axis in axes], dtype=np.int64))
     if n_grid <= max_grid:

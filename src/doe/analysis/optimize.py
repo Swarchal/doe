@@ -32,6 +32,7 @@ from scipy import optimize as sciopt
 from ..factors import CategoricalFactor, ContinuousFactor, FactorSet
 from ..serialization import json_safe
 from .fit import FitResult
+from .model import _effect_code
 
 Goal = Literal["max", "min", "target"]
 Bounds = tuple[float, float] | Sequence[tuple[float, float]] | Mapping[str, tuple[float, float]]
@@ -90,6 +91,35 @@ def _predict(b0: float, b: np.ndarray, big_b: np.ndarray, x: np.ndarray) -> floa
     return float(b0 + x @ b + x @ big_b @ x)
 
 
+def _quadratic_objective(
+    b0: float, b: np.ndarray, big_b: np.ndarray, sign: float
+) -> tuple[Callable[[np.ndarray], float], Callable[[np.ndarray], np.ndarray]]:
+    """The ``(objective, gradient)`` pair a minimizer needs for one quadratic form.
+
+    ``sign`` is ``-1`` to maximize the surface and ``+1`` to minimize it (the minimizer always
+    descends). Each call closes over *this* form's small ``(b0, b, B)`` arrays only, so callers
+    that build one per categorical-level combination get correctly-bound closures without the
+    late-binding default-argument dance.
+    """
+
+    def objective(x: np.ndarray) -> float:
+        return sign * _predict(b0, b, big_b, x)
+
+    def gradient(x: np.ndarray) -> np.ndarray:
+        return np.asarray(sign * (b + 2.0 * big_b @ x), dtype=float)
+
+    return objective, gradient
+
+
+def _at_bound(x: np.ndarray, box: Sequence[tuple[float, float]]) -> bool:
+    """``True`` when the solution sits on any coded box edge (the optimum is constrained)."""
+    lows = np.array([lo for lo, _ in box])
+    highs = np.array([hi for _, hi in box])
+    return bool(
+        np.any(np.isclose(x, lows, atol=1e-6)) or np.any(np.isclose(x, highs, atol=1e-6))
+    )
+
+
 def _decode(factors: FactorSet, coded: np.ndarray) -> dict[str, float]:
     """Decode a coded point to a ``{factor_name: natural_value}`` mapping."""
     out: dict[str, float] = {}
@@ -101,14 +131,16 @@ def _decode(factors: FactorSet, coded: np.ndarray) -> dict[str, float]:
     return out
 
 
-def _format_point(natural: dict[str, float]) -> str:
-    """Render a ``{factor: natural_value}`` mapping as ``a=1.23, b=4.56`` for reprs."""
+def _format_point(natural: Mapping[str, Any] | pd.Series) -> str:
+    """Render ``{factor: value}`` pairs as ``a=1.23, b=4.56`` for reprs.
+
+    Takes a mapping or a labelled ``pd.Series`` and iterates ``.items()`` on either. Note it
+    must be ``.items()`` and *not* ``dict(series)``: a response vector may carry a repeated
+    label (two goals fitted against the same response column), and ``dict()`` on such a Series
+    resolves the duplicate key to a sub-Series rather than a scalar -- which then fails to
+    format. ``.items()`` yields every entry, scalar, in order.
+    """
     return ", ".join(f"{name}={value:.4g}" for name, value in natural.items())
-
-
-def _format_series(series: pd.Series) -> str:
-    """Render a labelled ``pd.Series`` as ``a=1.23, b=4.56`` for reprs (same style as points)."""
-    return ", ".join(f"{name}={value:.4g}" for name, value in series.items())
 
 
 def _to_frame(natural: dict[str, float], tail: list[tuple[str, float]]) -> pd.DataFrame:
@@ -396,25 +428,15 @@ def optimum(
     box = _box(bounds, result.factors)
     sign = -1.0 if maximize else 1.0
 
-    def objective(x: np.ndarray) -> float:
-        return sign * _predict(b0, b, big_b, x)
-
-    def gradient(x: np.ndarray) -> np.ndarray:
-        return np.asarray(sign * (b + 2.0 * big_b @ x), dtype=float)
-
+    objective, gradient = _quadratic_objective(b0, b, big_b, sign)
     x_opt = _multistart_minimize(objective, box, jac=gradient)
 
-    lows = np.array([lo for lo, _ in box])
-    highs = np.array([hi for _, hi in box])
-    at_bound = bool(
-        np.any(np.isclose(x_opt, lows, atol=1e-6)) or np.any(np.isclose(x_opt, highs, atol=1e-6))
-    )
     return Optimum(
         coded=x_opt,
         natural=_decode(result.factors, x_opt),
         response=_predict(b0, b, big_b, x_opt),
         maximize=maximize,
-        at_bound=at_bound,
+        at_bound=_at_bound(x_opt, box),
         response_name=result.response_name,
     )
 
@@ -478,9 +500,9 @@ def _categorical_column_values(
 ) -> dict[str, float]:
     """Constant value each ``factor[level]`` contrast column takes at the given fixed levels.
 
-    Mirrors the deviation coding in :func:`doe.analysis.model._effect_code`: the first level
-    is the reference (every contrast column ``-1``); any other level sets its own column to
-    ``+1`` and that factor's remaining columns to ``0``.
+    Evaluates :func:`doe.analysis.model._effect_code` -- the single definition of the library's
+    deviation coding -- on a one-row block per fixed level, so the folded quadratic form can
+    never drift from the coding :func:`~doe.analysis.fit.fit_ols` actually fitted.
     """
     values: dict[str, float] = {}
     for name, level in fixed_levels.items():
@@ -491,13 +513,8 @@ def _categorical_column_values(
             raise ValueError(
                 f"factor {name!r} has unknown level {level!r}; expected {levels}"
             )
-        reference = levels[0]
-        for other in levels[1:]:
-            column = f"{name}[{other}]"
-            if level == reference:
-                values[column] = -1.0
-            else:
-                values[column] = 1.0 if other == level else 0.0
+        for column, col in _effect_code(factor, np.asarray([level], dtype=object)):
+            values[column] = float(col[0])
     return values
 
 
@@ -616,29 +633,10 @@ def categorical_optimum(
 
         if cont_factors is not None:
             box = _box(cont_bounds, cont_factors)
-
-            # Default args bind this combo's folded form into each closure.
-            def objective(
-                x: np.ndarray,
-                b0: float = b0,
-                b: np.ndarray = b,
-                big_b: np.ndarray = big_b,
-            ) -> float:
-                return sign * _predict(b0, b, big_b, x)
-
-            def gradient(
-                x: np.ndarray, b: np.ndarray = b, big_b: np.ndarray = big_b
-            ) -> np.ndarray:
-                return np.asarray(sign * (b + 2.0 * big_b @ x), dtype=float)
-
+            objective, gradient = _quadratic_objective(b0, b, big_b, sign)
             x_opt = _multistart_minimize(objective, box, jac=gradient)
             response = _predict(b0, b, big_b, x_opt)
-            lows = np.array([lo for lo, _ in box])
-            highs = np.array([hi for _, hi in box])
-            at_bound = bool(
-                np.any(np.isclose(x_opt, lows, atol=1e-6))
-                or np.any(np.isclose(x_opt, highs, atol=1e-6))
-            )
+            at_bound = _at_bound(x_opt, box)
             natural = _decode(cont_factors, x_opt)
         else:  # all-categorical fit: the response is the (constant) folded intercept
             x_opt = np.array([], dtype=float)
@@ -791,7 +789,7 @@ class DesirabilityResult:
     def __repr__(self) -> str:
         return (
             f"DesirabilityResult(D={self.overall:.4g}: {_format_point(self.natural)} "
-            f"| {_format_series(self.responses)})"
+            f"| {_format_point(self.responses)})"
         )
 
     def to_frame(self) -> pd.DataFrame:

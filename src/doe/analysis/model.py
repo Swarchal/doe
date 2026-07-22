@@ -68,13 +68,6 @@ def _effect_code(factor: CategoricalFactor, values: np.ndarray) -> _Encoding:
     return encoding
 
 
-def _encode_factor(factor: Factor, values: np.ndarray) -> _Encoding:
-    """Encode one factor into its model column(s)."""
-    if isinstance(factor, CategoricalFactor):
-        return _effect_code(factor, values)
-    return [(factor.name, np.asarray(values, dtype=float))]
-
-
 def _categorical_coded_levels(factor: CategoricalFactor) -> np.ndarray:
     """Numeric coordinates used for categorical levels in candidate regions."""
     return np.linspace(-1.0, 1.0, len(factor.levels))
@@ -216,48 +209,14 @@ def build_model_matrix(design: Design, order: int = 1, interactions: bool = True
         >>> build_model_matrix(blend, order=2).term_names
         ['A', 'B', 'A:B']
     """
-    coded = design.coded()
-    if design.factors.is_mixture:
-        points = coded.to_numpy(dtype=float)
-        return _scheffe_matrix(points, design.factors.names, order)
-    encodings: list[tuple[Factor, _Encoding]] = [
-        (factor, _encode_factor(factor, coded[factor.name].to_numpy())) for factor in design.factors
-    ]
-
-    cols: list[np.ndarray] = [np.ones(len(coded))]
-    term_names: list[str] = ["Intercept"]
-
-    for _factor, encoding in encodings:
-        for name, col in encoding:
-            cols.append(col)
-            term_names.append(name)
-
-    if interactions:
-        # An interaction term captures synergy/antagonism: the effect of one factor depending on
-        # the level of another. In coded units this is exactly the elementwise product of the two
-        # factors' columns -- positive where both agree in sign, negative where they oppose.
-        for (_fa, enc_a), (_fb, enc_b) in itertools.combinations(encodings, 2):
-            for (name_a, col_a), (name_b, col_b) in itertools.product(enc_a, enc_b):
-                cols.append(col_a * col_b)
-                term_names.append(f"{name_a}:{name_b}")
-
-    if order >= 2:
-        # Squared terms model curvature -- a response that peaks or bottoms out in the interior
-        # rather than rising monotonically. They turn the linear model into a second-order
-        # (response-surface) model whose optimum can be located (see analysis.optimize).
-        for factor, encoding in encodings:
-            # squares apply only to continuous factors; a categorical contrast column
-            # squared is not a meaningful curvature term.
-            if not isinstance(factor, ContinuousFactor):
-                continue
-            (name, col) = encoding[0]
-            # a pure +/-1 factor has x^2 == 1 (collinear with the intercept); only emit a
-            # squared term once the factor actually takes a value off {-1, +1}.
-            if np.any(np.abs(np.abs(col) - 1.0) > 1e-9):
-                cols.append(col**2)
-                term_names.append(f"{name}^2")
-
-    return ModelMatrix(np.column_stack(cols), term_names)
+    # The Design is turned into numeric coded coordinates (categoricals included) and expanded
+    # by the array-based core, so the two entry points cannot drift: one term layout, built once.
+    return expand_coded_points(
+        coded_design_points(design),
+        design.factors,
+        order=order,
+        interactions=interactions,
+    )
 
 
 def expand_coded_points(

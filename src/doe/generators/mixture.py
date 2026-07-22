@@ -79,6 +79,21 @@ def _classify_blend(row: np.ndarray, n_components: int) -> str:
     return "boundary"
 
 
+def _simplex_lattice_rows(k: int, m: int) -> np.ndarray:
+    """The ``{k, m}`` simplex-lattice proportions: every composition of ``m`` parts over ``k``.
+
+    Stars-and-bars: each choice of ``k - 1`` divider positions among ``m + k - 1`` slots cuts the
+    parts into ``k`` non-negative counts summing to ``m``, which divided by ``m`` gives one blend.
+    Returns a ``(C(k + m - 1, m), k)`` array whose rows sum to 1.
+    """
+    rows = [
+        [(bounds[i + 1] - bounds[i] - 1) / m for i in range(k)]
+        for dividers in itertools.combinations(range(m + k - 1), k - 1)
+        for bounds in [(-1, *dividers, m + k - 1)]
+    ]
+    return np.asarray(rows, dtype=float)
+
+
 def simplex_lattice(factors: Sequence[Factor], *, degree: int) -> Design:
     """The ``{k, m}`` simplex-lattice design: proportions on a ``1/m`` grid summing to 1.
 
@@ -94,13 +109,7 @@ def simplex_lattice(factors: Sequence[Factor], *, degree: int) -> Design:
         raise ValueError("degree must be a positive integer")
 
     k = len(fs)
-    # compositions of `degree` into k non-negative parts, via stars-and-bars positions
-    points = []
-    for dividers in itertools.combinations(range(degree + k - 1), k - 1):
-        bounds = (-1, *dividers, degree + k - 1)
-        counts = [bounds[i + 1] - bounds[i] - 1 for i in range(k)]
-        points.append([c / degree for c in counts])
-    arr = np.asarray(points, dtype=float)
+    arr = _simplex_lattice_rows(k, degree)
     point_types = tuple(_classify_blend(row, k) for row in arr)
     return _to_design(
         arr,
@@ -224,12 +233,11 @@ def mixture_candidates(factors: Sequence[Factor], *, resolution: int = 10) -> np
     highs = np.array([f.high for f in fs if isinstance(f, MixtureFactor)])
     k = len(fs)
 
-    lattice = []
-    for dividers in itertools.combinations(range(resolution + k - 1), k - 1):
-        bounds = (-1, *dividers, resolution + k - 1)
-        row = np.array([(bounds[i + 1] - bounds[i] - 1) / resolution for i in range(k)])
-        if np.all(row >= lows - 1e-12) and np.all(row <= highs + 1e-12):
-            lattice.append(row)
+    lattice = [
+        row
+        for row in _simplex_lattice_rows(k, resolution)
+        if np.all(row >= lows - 1e-12) and np.all(row <= highs + 1e-12)
+    ]
 
     vertices = _vertex_candidates(fs)
     stacked = np.vstack([*lattice, vertices, vertices.mean(axis=0)[None, :]])

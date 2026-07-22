@@ -26,7 +26,12 @@ import numpy as np
 import pandas as pd
 
 from ..analysis.diagnostics import log_det_information
-from ..analysis.model import coded_design_points, expand_coded_points
+from ..analysis.model import (
+    _categorical_coded_levels,
+    _decode_categorical_coded,
+    coded_design_points,
+    expand_coded_points,
+)
 from ..design import Design, _draw_seed
 from ..factors import CategoricalFactor, ContinuousFactor, Factor, FactorSet, MixtureFactor
 
@@ -68,7 +73,7 @@ def candidate_grid(factors: Sequence[Factor], *, levels: int = 3) -> np.ndarray:
         if isinstance(factor, ContinuousFactor):
             axes.append(np.linspace(-1.0, 1.0, levels))
         elif isinstance(factor, CategoricalFactor):
-            axes.append(np.linspace(-1.0, 1.0, len(factor.levels)))
+            axes.append(_categorical_coded_levels(factor))
         elif isinstance(factor, MixtureFactor):
             raise TypeError(
                 "candidate_grid covers the coded box, not the mixture simplex; use "
@@ -179,16 +184,7 @@ def _decode_design(factors: FactorSet, coded: np.ndarray) -> pd.DataFrame:
         elif isinstance(factor, MixtureFactor):
             columns[factor.name] = coded[:, j]  # proportions are already natural units
         else:
-            levels = np.linspace(-1.0, 1.0, len(factor.levels))
-            nearest = np.abs(coded[:, [j]] - levels[None, :]).argmin(axis=1)
-            valid = np.isclose(coded[:, j], levels[nearest], atol=1e-9, rtol=0.0)
-            if not np.all(valid):
-                bad = np.unique(coded[~valid, j])
-                raise ValueError(
-                    f"factor {factor.name!r} categorical candidate coordinate(s) "
-                    f"{bad.tolist()} do not match discrete coded levels {levels.tolist()}"
-                )
-            columns[factor.name] = [factor.levels[int(i)] for i in nearest]
+            columns[factor.name] = _decode_categorical_coded(factor, coded[:, j])
     return pd.DataFrame(columns, index=np.arange(coded.shape[0]))
 
 

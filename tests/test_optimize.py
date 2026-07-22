@@ -537,6 +537,47 @@ def test_desirability_mixed_named_and_fallback_labels():
     assert list(des.responses.index) == ["yield_pct", "response_2"]
 
 
+def test_desirability_repr_renders_duplicate_response_labels():
+    # Two goals against the *same* response column (push it up, but keep it near a target)
+    # give the responses Series a repeated index label. repr() must render both entries:
+    # dict(series) resolves a duplicated key to a sub-Series, which then fails to format.
+    design = _ccd()
+    coded = design.coded().to_numpy()
+    named_design = design.with_response("yield_pct", 50.0 + 10.0 * coded[:, 0])
+    r1 = fit_ols(named_design, "yield_pct", order=1, interactions=True)
+    r2 = fit_ols(named_design, "yield_pct", order=1, interactions=True)
+
+    des = desirability(
+        [
+            ResponseGoal(r1, goal="max", low=50.0, high=60.0),
+            ResponseGoal(r2, goal="target", low=50.0, high=60.0, target=55.0),
+        ]
+    )
+
+    assert list(des.responses.index) == ["yield_pct", "yield_pct"]
+    text = repr(des)  # must not raise
+    assert text.startswith("DesirabilityResult(D=")
+    assert text.count("yield_pct=") == 2  # both entries shown, not collapsed to one
+
+
+def test_desirability_to_frame_keeps_duplicate_response_labels():
+    # The to_frame() path documents the same duplicate-label contract; pin it alongside repr.
+    design = _ccd()
+    coded = design.coded().to_numpy()
+    named_design = design.with_response("yield_pct", 50.0 + 10.0 * coded[:, 0])
+    r1 = fit_ols(named_design, "yield_pct", order=1, interactions=True)
+    r2 = fit_ols(named_design, "yield_pct", order=1, interactions=True)
+
+    des = desirability(
+        [
+            ResponseGoal(r1, goal="max", low=50.0, high=60.0),
+            ResponseGoal(r2, goal="target", low=50.0, high=60.0, target=55.0),
+        ]
+    )
+    frame = des.to_frame()
+    assert list(frame.columns).count("yield_pct") == 2
+
+
 # --------------------------------------------------------------------------- #
 # to_frame()
 # --------------------------------------------------------------------------- #

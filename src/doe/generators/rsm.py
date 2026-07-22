@@ -13,11 +13,10 @@ from collections.abc import Sequence
 from typing import Literal
 
 import numpy as np
-import pandas as pd
 
 from ..design import Design
 from ..factors import ContinuousFactor, Factor, FactorSet
-from .factorial import _generator_spec, fractional_factorial
+from .factorial import _decode, _generator_spec, fractional_factorial
 
 #: How far the axial/star points sit from the center, in coded units.
 AlphaSpec = float | Literal["faced", "rotatable", "orthogonal"]
@@ -29,15 +28,6 @@ def _require_continuous(fs: FactorSet) -> None:
         raise ValueError(
             f"response-surface designs require continuous factors; got non-continuous: {bad}"
         )
-
-
-def _decode_coded(fs: FactorSet, coded: np.ndarray) -> pd.DataFrame:
-    """Map a coded design matrix (all-continuous factors) to a natural-unit runs frame."""
-    cols: dict[str, np.ndarray] = {}
-    for j, factor in enumerate(fs):
-        assert isinstance(factor, ContinuousFactor)  # guarded by _require_continuous
-        cols[factor.name] = factor.decode(coded[:, j])
-    return pd.DataFrame(cols)
 
 
 def _resolve_alpha(alpha: AlphaSpec, n_factorial: int, k: int, center: int) -> float:
@@ -117,7 +107,7 @@ def central_composite(
 
     coded = np.vstack([core, axial, center_block])
     point_types = ["factorial"] * n_factorial + ["axial"] * (2 * k) + ["center"] * center
-    runs = _decode_coded(fs, coded)
+    runs = _decode(fs, coded)
     meta: dict[str, object] = {
         # the requested spec (e.g. alpha="rotatable") regenerates the design; the resolved
         # numeric alpha and extrapolation flag describe what that request produced.
@@ -186,7 +176,7 @@ def box_behnken(factors: Sequence[Factor], *, center: int = 3) -> Design:
 
     coded = np.vstack([np.array(edges), np.zeros((center, k), dtype=float)])
     point_types = ["edge"] * len(edges) + ["center"] * center
-    runs = _decode_coded(fs, coded)
+    runs = _decode(fs, coded)
     return Design(
         runs,
         fs,

@@ -19,7 +19,7 @@ Within-block run order is randomized via the shared ``Design.randomize(within="b
 from __future__ import annotations
 
 import itertools
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 
 import numpy as np
 import pandas as pd
@@ -68,7 +68,6 @@ def randomized_complete_block(
         treatment_factors: list[Factor] = [treatment_factor]
     else:
         treatment_factors = list(treatments)
-        _require_no_block_collision([f.name for f in treatment_factors])
         treatment_runs = full_factorial(treatment_factors).runs
     _require_no_block_collision([f.name for f in treatment_factors])
 
@@ -142,21 +141,35 @@ def latin_square(treatments: int, *, seed: int | None = None) -> Design:
     )
 
 
-def _generalized_interactions(generator_letter_sets: list[frozenset[str]]) -> list[str]:
-    """All non-empty products of the block generators (the full confounded set for ``q > 1``).
+def _generator_products(
+    generator_letter_sets: Sequence[frozenset[str]],
+) -> Iterator[tuple[tuple[int, ...], frozenset[str]]]:
+    """Yield ``(subset, product)`` for every non-empty subset of the block generators.
 
-    A product of two contrasts is the symmetric difference of their factor-letter sets (repeated
-    letters cancel, ``x²=1``). Returned as sorted letter strings, in generator-subset order.
+    Blocking contrasts multiply like GF(2) vectors, so a subset's product is the symmetric
+    difference of its members' factor-letter sets (repeated letters cancel, ``x²=1``). Subsets
+    come in increasing size, then lexicographic order; ``q`` is tiny (``2^q`` blocks must fit
+    the design), so enumerating them all is free.
     """
-    confounded: list[str] = []
     q = len(generator_letter_sets)
     for r in range(1, q + 1):
         for combo in itertools.combinations(range(q), r):
             product: frozenset[str] = frozenset()
             for i in combo:
                 product = product ^ generator_letter_sets[i]
-            if product:
-                confounded.append("".join(sorted(product)))
+            yield combo, product
+
+
+def _generalized_interactions(generator_letter_sets: list[frozenset[str]]) -> list[str]:
+    """All non-empty products of the block generators (the full confounded set for ``q > 1``).
+
+    Returned as sorted letter strings, in generator-subset order.
+    """
+    confounded = [
+        "".join(sorted(product))
+        for _combo, product in _generator_products(generator_letter_sets)
+        if product
+    ]
     # de-duplicate while preserving first-appearance order
     return list(dict.fromkeys(confounded))
 
@@ -173,18 +186,16 @@ def _require_independent_generators(
     subsets are enumerated directly: ``q`` is tiny (``2^q`` blocks must fit the design).
     """
     q = len(generator_letter_sets)
-    for r in range(2, q + 1):
-        for combo in itertools.combinations(range(q), r):
-            product: frozenset[str] = frozenset()
-            for i in combo:
-                product = product ^ generator_letter_sets[i]
-            if not product:
-                dependent = [generators[i] for i in combo]
-                raise ValueError(
-                    f"block generators {dependent} are dependent: their product is the identity, "
-                    f"so they define fewer than 2^{q} blocks and the confounded-effect list would "
-                    "under-report what is lost. Supply independent defining contrasts."
-                )
+    for combo, product in _generator_products(generator_letter_sets):
+        # a singleton's product is its own (non-empty) letter set, so only genuine subsets can
+        # collapse to the identity -- start at pairs.
+        if len(combo) >= 2 and not product:
+            dependent = [generators[i] for i in combo]
+            raise ValueError(
+                f"block generators {dependent} are dependent: their product is the identity, "
+                f"so they define fewer than 2^{q} blocks and the confounded-effect list would "
+                "under-report what is lost. Supply independent defining contrasts."
+            )
 
 
 def blocked_factorial(

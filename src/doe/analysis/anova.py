@@ -17,6 +17,7 @@ from scipy import stats
 
 from ..design import Design
 from ..serialization import json_safe
+from .diagnostics import leverage
 from .fit import FitResult
 
 
@@ -57,12 +58,6 @@ class LackOfFit:
                 }
             ),
         )
-
-
-def _leverages(x: np.ndarray) -> np.ndarray:
-    """Diagonal of the hat matrix ``H = X (XtX)^-1 Xt`` via the (thin) QR factor Q."""
-    q, _ = np.linalg.qr(x)
-    return np.asarray(np.einsum("ij,ij->i", q, q), dtype=float)
 
 
 def anova_table(result: FitResult, design: Design, response: np.ndarray) -> pd.DataFrame:
@@ -253,7 +248,7 @@ def press(result: FitResult) -> float:
     of the fit (an algebraic shortcut that avoids ``n`` refits). It penalises over-fitting that
     ordinary R^2 rewards, and underlies the predicted R^2 below.
     """
-    h = _leverages(result.model_matrix)
+    h = leverage(result.model_matrix)
     denom = 1.0 - h
     # a run with leverage ~1 is fit (near-)exactly, so its deleted residual e_i / (1 - h_i) is
     # 0/0: PRESS is undefined there. Warn rather than silently return an inf/NaN downstream.

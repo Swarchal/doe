@@ -569,19 +569,7 @@ def fit_ols(
             )
         order, interactions = MODEL_SPECS[model]
 
-    response_name: str | None = None
-    if isinstance(response, str):
-        if response not in design.runs.columns:
-            raise ValueError(
-                f"no response column {response!r} on the design; "
-                f"available columns: {list(design.runs.columns)}"
-            )
-        response_name = response
-        response = design.runs[response].to_numpy()
-
-    y = np.asarray(response, dtype=float)
-    if y.shape[0] != design.n_runs:
-        raise ValueError("response length must match number of runs")
+    y, response_name = _resolve_response(design, response)
 
     mm = build_model_matrix(design, order=order, interactions=interactions)
     x = mm.X
@@ -594,11 +582,8 @@ def fit_ols(
 
     fitted = x @ coef
     residuals = y - fitted
-    # R^2 is the fraction of the total (mean-corrected) variation in the response explained by
-    # the model: 1 - unexplained/total. Undefined when the response never varies.
     ss_res = float(residuals @ residuals)
-    ss_tot = float(((y - y.mean()) ** 2).sum())
-    r_squared = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+    r_squared = _centered_r2(y, residuals)
 
     # residual degrees of freedom = runs minus parameters estimated; this is the budget that
     # pays for the error variance and therefore for every standard error and p-value below.
@@ -660,6 +645,42 @@ def fit_ols(
         y,
         response_name,
     )
+
+
+def _resolve_response(
+    design: Design, response: np.ndarray | str
+) -> tuple[np.ndarray, str | None]:
+    """Normalise a response given as a column name or an array into ``(y, response_name)``.
+
+    A string names a column of ``design.runs`` (and is carried through as the fit's
+    ``response_name``); an array is used as given and has no name. Shared by
+    :func:`fit_ols` and :func:`fit_gls` so both accept exactly the same forms.
+    """
+    response_name: str | None = None
+    if isinstance(response, str):
+        if response not in design.runs.columns:
+            raise ValueError(
+                f"no response column {response!r} on the design; "
+                f"available columns: {list(design.runs.columns)}"
+            )
+        response_name = response
+        response = design.runs[response].to_numpy()
+
+    y = np.asarray(response, dtype=float)
+    if y.shape[0] != design.n_runs:
+        raise ValueError("response length must match number of runs")
+    return y, response_name
+
+
+def _centered_r2(y: np.ndarray, residuals: np.ndarray) -> float:
+    """Mean-corrected ``R^2 = 1 - SS_res / SS_tot``, or NaN when the response never varies.
+
+    Kept *centered* even for the no-intercept Scheffé fits: the constant lies in the Scheffé
+    column space, so this is the meaningful number rather than the inflated uncorrected form.
+    """
+    ss_res = float(residuals @ residuals)
+    ss_tot = float(((y - y.mean()) ** 2).sum())
+    return 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
 
 
 def _term_factor_names(term: str) -> set[str]:
@@ -724,18 +745,7 @@ def fit_gls(
 
     from .variance import reml_variance_components, v0_inv_products
 
-    response_name: str | None = None
-    if isinstance(response, str):
-        if response not in design.runs.columns:
-            raise ValueError(
-                f"no response column {response!r} on the design; "
-                f"available columns: {list(design.runs.columns)}"
-            )
-        response_name = response
-        response = design.runs[response].to_numpy()
-    y = np.asarray(response, dtype=float)
-    if y.shape[0] != design.n_runs:
-        raise ValueError("response length must match number of runs")
+    y, response_name = _resolve_response(design, response)
 
     mm = build_model_matrix(design, order=order, interactions=interactions)
     x = mm.X
@@ -755,9 +765,7 @@ def fit_gls(
 
     fitted = x @ coef
     residuals = y - fitted
-    ss_res = float(residuals @ residuals)
-    ss_tot = float(((y - y.mean()) ** 2).sum())
-    r_squared = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+    r_squared = _centered_r2(y, residuals)
 
     # two-stratum degrees of freedom by the containment rule
     wp_names = {f.name for f in design.factors.whole_plot_factors}

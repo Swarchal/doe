@@ -27,6 +27,7 @@ from scipy.stats import qmc
 
 from ..design import Design, _draw_seed
 from ..factors import ContinuousFactor, Factor, FactorSet
+from .factorial import _is_power_of_two
 
 #: Post-sampling optimization applied to the Latin hypercube (``None`` = plain LHS).
 LhsCriterion = Literal["maximin", "correlation"]
@@ -146,7 +147,7 @@ def sobol(
         ``{"sampler": "sobol", "scramble": ..., "seed": ...}``.
     """
     continuous = _validate_continuous(factors)
-    if n_runs <= 0 or (n_runs & (n_runs - 1)) != 0:
+    if not _is_power_of_two(n_runs):
         lower = 1 << (n_runs.bit_length() - 1) if n_runs > 0 else 1
         upper = lower if lower == n_runs else lower * 2
         raise ValueError(
