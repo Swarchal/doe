@@ -36,16 +36,30 @@
         <option value="bb">Find the best settings, avoid extreme corners (Box–Behnken, needs ≥ 3 factors)</option>
         <option value="ff2">Quick screen: which factors matter? (2-level full factorial)</option>
         <option value="dopt">Custom design supporting categorical factors (D-optimal)</option>
+        <option value="sf">Explore the whole space evenly (space-filling — Latin hypercube / Sobol / Halton)</option>
       </select>
-      <p class="hint-inline" id="design-cat-note" hidden>Central composite and Box–Behnken need
-        all-continuous factors — with a categorical factor, use the quick screen or the D-optimal
-        custom design.</p>
+      <p class="hint-inline" id="design-cat-note" hidden>Central composite, Box–Behnken and
+        space-filling plans need all-continuous factors — with a categorical factor, use the quick
+        screen or the D-optimal custom design.</p>
       <p class="hint-inline" id="ff2-pb-hint" hidden></p>
       <div id="dopt-runs-wrap" hidden>
         <label class="inline-label">Number of runs
           <input type="number" id="dopt-runs" min="2" step="1" size="5">
         </label>
         <span class="hint-inline" id="dopt-runs-hint"></span>
+      </div>
+      <div id="sf-wrap" hidden>
+        <label class="inline-label">Sampler
+          <select id="sf-sampler">
+            <option value="lhs" selected>Latin hypercube (recommended)</option>
+            <option value="sobol">Sobol′ sequence</option>
+            <option value="halton">Halton sequence</option>
+          </select>
+        </label>
+        <label class="inline-label">Number of runs
+          <input type="number" id="sf-runs" min="2" step="1" size="5">
+        </label>
+        <span class="hint-inline" id="sf-runs-hint"></span>
       </div>
       <p class="hint-inline" id="run-count-preview" hidden></p>
     </div>
@@ -70,6 +84,7 @@
   <section id="step-plan" class="card" hidden>
     <h2><span class="step-no">2</span> Run these experiments</h2>
     <p class="hint" id="plan-summary"></p>
+    <p class="hint-inline" id="coverage-note" hidden></p>
     <div class="toolbar">
       <button type="button" class="secondary" id="download-csv">Download run sheet (CSV)</button>
       <button type="button" class="secondary" id="import-results">Import results (CSV)</button>

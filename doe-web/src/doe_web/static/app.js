@@ -289,17 +289,53 @@ function boxBehnkenRunCount(k) {
   return 4 * ((k * (k - 1)) / 2) + 3;
 }
 
+/* ---- Space-filling ("sf") run-count math ----
+ * A space-filling plan has no natural run count: the user picks a budget, exactly like the
+ * D-optimal design. Two rules constrain it, and both are mirrored here so the hint and the
+ * client-side check agree with what the service would do:
+ *   1. The analysis step fits the quadratic model, so the budget must cover its terms.
+ *   2. Sobol' (doe.generators.spacefilling.sobol) accepts only power-of-two run counts and
+ *      raises otherwise — pre-empt that 422 in the browser. */
+function nextPowerOfTwo(n) {
+  let p = 1;
+  while (p < n) p *= 2;
+  return p;
+}
+
+function sobolNeighbours(n) {
+  const upper = nextPowerOfTwo(n);
+  return { lower: Math.max(1, upper / 2), upper };
+}
+
+/* The smallest run count this sampler can be asked for: enough to fit the quadratic model,
+ * rounded up to a power of two for Sobol'. */
+function spaceFillingMinRuns(factors, sampler) {
+  const terms = quadraticTermCount(factors);
+  return sampler === "sobol" ? nextPowerOfTwo(terms) : terms;
+}
+
+/* The run count to pre-fill: a few runs past the model's term count, for residual degrees of
+ * freedom. Sobol' has to land on a power of two, and rounding the term count up to one
+ * usually supplies that headroom already (10 terms -> 16 runs); only when the term count is
+ * itself a power of two does the suggestion need the next size up. */
+function spaceFillingSuggestedRuns(factors, sampler) {
+  const terms = quadraticTermCount(factors);
+  if (sampler !== "sobol") return terms + 4;
+  const min = nextPowerOfTwo(terms);
+  return min > terms ? min : nextPowerOfTwo(terms + 1);
+}
+
 /* Keep the plan controls in step with the current factor rows: the categorical note, the
- * quick-screen Plackett-Burman reroute hint, and the D-optimal run-count field / its
- * suggested default. Called whenever a row or the plan type changes; failures (a
- * half-typed row) are swallowed — the notes just stay as-is. */
+ * quick-screen Plackett-Burman reroute hint, and the D-optimal / space-filling run-count
+ * fields and their suggested defaults. Called whenever a row, the plan type or the sampler
+ * changes; failures (a half-typed row) are swallowed — the notes just stay as-is. */
 function onFactorsChanged() {
   let factors = [];
   try { factors = readFactors(); } catch { /* incomplete rows — leave hints unchanged */ }
   const anyCategorical = factors.some((f) => f.type === "categorical");
   const type = $("design-type").value;
 
-  $("design-cat-note").hidden = !(anyCategorical && (type === "ccd" || type === "bb"));
+  $("design-cat-note").hidden = !(anyCategorical && CONTINUOUS_ONLY_PLANS.has(type));
 
   const pbHint = $("ff2-pb-hint");
   if (type === "ff2" && factors.length >= PB_REROUTE_MIN_FACTORS) {
@@ -330,14 +366,33 @@ function onFactorsChanged() {
     $("dopt-runs-hint").textContent = `≥ ${terms} runs needed to fit the model (${suggested} suggested).`;
   }
 
+  // The space-filling field works the same way (user-chosen budget, auto-suggested until the
+  // user types), but its minimum depends on the sampler — see spaceFillingMinRuns.
+  const isSpaceFilling = type === "sf";
+  $("sf-wrap").hidden = !isSpaceFilling;
+  if (isSpaceFilling && factors.length >= 2 && !anyCategorical) {
+    const sampler = $("sf-sampler").value;
+    const min = spaceFillingMinRuns(factors, sampler);
+    const suggested = spaceFillingSuggestedRuns(factors, sampler);
+    const input = $("sf-runs");
+    if (!input.value || input.dataset.auto === "1") {
+      input.value = suggested;
+      input.dataset.auto = "1";
+    }
+    $("sf-runs-hint").textContent =
+      `≥ ${min} runs needed to fit the model (${suggested} suggested).` +
+      (sampler === "sobol" ? " Sobol′ needs a power-of-two run count." : "");
+  }
+
   // Live run-count preview: the bench cost of the plan as it stands right now, before the
   // user commits by clicking "Create experimental plan". Hidden whenever the rows don't
   // parse, there aren't yet 2 factors, or the plan/factor combination is invalid (the
-  // categorical-with-ccd/bb case #design-cat-note already covers); the D-optimal run count
-  // already has its own field + hint above, so this stays quiet for "dopt".
+  // categorical-with-ccd/bb/space-filling case #design-cat-note already covers); the
+  // D-optimal and space-filling run counts already have their own field + hint above, so
+  // this stays quiet for "dopt" and "sf".
   const preview = $("run-count-preview");
   preview.hidden = true;
-  const planInvalid = anyCategorical && (type === "ccd" || type === "bb");
+  const planInvalid = anyCategorical && CONTINUOUS_ONLY_PLANS.has(type);
   if (factors.length >= 2 && !planInvalid) {
     let text = null;
     if (type === "ccd") {
@@ -377,10 +432,10 @@ async function generatePlan() {
     const factors = readFactors();
     const type = $("design-type").value;
     const anyCategorical = factors.some((f) => f.type === "categorical");
-    if (anyCategorical && (type === "ccd" || type === "bb")) {
+    if (anyCategorical && CONTINUOUS_ONLY_PLANS.has(type)) {
       throw new Error(
-        "Central composite and Box–Behnken designs need all-continuous factors. " +
-        "For a categorical factor, pick the quick screen or the D-optimal custom design.");
+        "Central composite, Box–Behnken and space-filling designs need all-continuous " +
+        "factors. For a categorical factor, pick the quick screen or the D-optimal custom design.");
     }
     // A quick screen with more than 4 factors reroutes to a Plackett-Burman design: the
     // 2-level full factorial's 2^k runs get impractical fast (32 at 5 factors, 64 at 6),
@@ -388,12 +443,7 @@ async function generatePlan() {
     // Plackett-Burman accepts (see pbCompatible) — otherwise the full factorial stays, so
     // this never turns a working flow into a 422.
     const useScreeningPB = type === "ff2" && screeningWillUsePlackettBurman(factors);
-    const endpoint = useScreeningPB ? "/designs/plackett-burman" : {
-      ccd: "/designs/central-composite",
-      bb: "/designs/box-behnken",
-      ff2: "/designs/full-factorial",
-      dopt: "/designs/optimal",
-    }[type];
+    const endpoint = useScreeningPB ? "/designs/plackett-burman" : PLAN_ENDPOINTS[type];
     const body = { factors };
     if (type === "ff2" && !useScreeningPB) body.levels = 2;
     if (type === "dopt") {
@@ -406,8 +456,27 @@ async function generatePlan() {
       body.n_runs = nRuns;
       body.model = "quadratic";
     }
+    if (type === "sf") {
+      // All three samplers share one endpoint; `sampler` picks between them. `criterion`
+      // (Latin hypercube) and `scramble` (Sobol'/Halton) are left to the service defaults.
+      const sampler = $("sf-sampler").value;
+      const nRuns = parseInt($("sf-runs").value, 10);
+      if (Number.isNaN(nRuns) || nRuns < 2) throw new Error("Enter how many runs the design should have.");
+      const minRuns = quadraticTermCount(factors);
+      if (nRuns < minRuns) {
+        throw new Error(`This model needs at least ${minRuns} runs to be estimable; you asked for ${nRuns}.`);
+      }
+      if (sampler === "sobol" && !isPowerOfTwo(nRuns)) {
+        const { lower, upper } = sobolNeighbours(nRuns);
+        throw new Error(
+          `A Sobol′ design needs a power-of-two number of runs; you asked for ${nRuns} ` +
+          `(nearest valid sizes: ${lower}, ${upper}).`);
+      }
+      body.sampler = sampler;
+      body.n_runs = nRuns;
+    }
     const seed = debugSeed();
-    if (seed !== null && type === "dopt") body.seed = seed;
+    if (seed !== null && SEEDED_PLANS.has(type)) body.seed = seed;
     // Generation can take a moment (the D-optimal coordinate-exchange search especially),
     // so show a spinner once the request is actually in flight — after all validation above.
     // If it runs long, escalate the label so it clearly hasn't hung.
@@ -425,6 +494,7 @@ async function generatePlan() {
     state.responseNames = ["response"];
     state.responseName = "response";
     renderPlan();
+    await renderCoverage();
     $("step-plan").hidden = false;
     $("step-results").hidden = true;
     $("step-balance").hidden = true;
@@ -443,6 +513,27 @@ function continuousFactors() { return state.design.factors.filter((f) => f.type 
 function continuousFactorNames() { return continuousFactors().map((f) => f.name); }
 function hasCategorical() { return state.design.factors.some((f) => f.type === "categorical"); }
 
+/* The plan type the user picks in step 1, mapped onto the generation endpoint it calls, plus
+ * the two capabilities that vary between them. Space-filling is the one type whose value does
+ * not name its endpoint: all three samplers post to /designs/space-filling and differ only in
+ * the `sampler` field (see generatePlan). */
+const PLAN_ENDPOINTS = {
+  ccd: "/designs/central-composite",
+  bb: "/designs/box-behnken",
+  ff2: "/designs/full-factorial",
+  dopt: "/designs/optimal",
+  sf: "/designs/space-filling",
+};
+
+/* Plans whose generator rejects a categorical factor (the RSM designs have no coded box for
+ * one; doe.generators.spacefilling refuses outright). */
+const CONTINUOUS_ONLY_PLANS = new Set(["ccd", "bb", "sf"]);
+
+/* Plans whose *generation* is stochastic, so the debug seed is worth forwarding: the
+ * D-optimal coordinate-exchange search and the space-filling samplers. (Run-order
+ * randomization is seeded separately, for every plan type.) */
+const SEEDED_PLANS = new Set(["dopt", "sf"]);
+
 /* Screening generators (loaded plans carry the generator that built them): a plan that ranks
  * factor effects rather than locating an optimum. The UI only offers the 2-level full
  * factorial, but a fractional-factorial or Plackett–Burman screen loaded from JSON is
@@ -452,7 +543,10 @@ const SCREENING_GENERATORS = new Set(["fractional_factorial", "plackett_burman"]
 function isScreeningPlan() {
   // A freshly generated plan knows exactly which type the user picked.
   if (state.planType) return state.planType === "ff2";
-  // A loaded plan doesn't, so infer it from the recorded generator.
+  // A loaded plan doesn't, so infer it from the recorded generator. A space-filling design
+  // records only its sampler (no `generator` block), so it falls through to `false` here and
+  // gets the response-surface view — which is the right answer: it maps a surface, it doesn't
+  // rank effects.
   const gen = state.design && state.design.meta && state.design.meta.generator;
   if (!gen) return false;
   if (gen.name === "full_factorial") {
@@ -573,6 +667,27 @@ function renderPlan(responseSnapshot) {
     `<tbody>${rows.join("")}</tbody>`;
   $("import-status").hidden = true; // a fresh table has no imported measurements
   renderResponseControls();
+}
+
+/* A space-filling plan is judged before the bench work by two model-free coverage metrics
+ * (see /v1/analysis/coverage): discrepancy, how evenly the runs fill the region, and the
+ * maximin distance, how far apart the closest pair of runs is. Neither depends on a model, so
+ * they are the only "is this a good plan?" read a space-filling design has.
+ *
+ * Gated on `meta.sampler` rather than `state.planType` so a *loaded* plan shows the line too
+ * (meta survives /designs/randomize and the JSON round-trip). Purely a diagnostic: a failure
+ * leaves the line hidden rather than blocking the run sheet. */
+async function renderCoverage() {
+  const note = $("coverage-note");
+  note.hidden = true;
+  if (!(state.design && state.design.meta && state.design.meta.sampler)) return;
+  try {
+    const c = await api("/analysis/coverage", { design: state.design });
+    note.textContent =
+      `Coverage: evenness (discrepancy) ${fmt(c.discrepancy, 4)} — lower is more even; ` +
+      `closest pair of runs ${fmt(c.maximin_distance, 3)} — larger is better separated.`;
+    note.hidden = false;
+  } catch { /* diagnostic only — never block the run sheet */ }
 }
 
 /* Quote a CSV field when it contains a comma, quote or newline (factor names, levels and
@@ -936,6 +1051,7 @@ async function loadDesign(file) {
       });
     }
     renderPlan(snap);
+    await renderCoverage();
     $("step-plan").hidden = false;
     $("step-results").hidden = true;
     $("step-balance").hidden = true;
@@ -1433,6 +1549,16 @@ function invNormalCDF(p) {
     ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
 }
 
+/* A map's two axes have to name different factors. When they collide, move the Y picker onto
+ * another factor and leave X where the user put it — so the pickers show the slice actually
+ * drawn rather than an impossible pair. Shared by the step-3 response map and the step-4
+ * desirability map so both auto-correct identically. */
+function snapAxisPickers(xId, yId, names) {
+  const x = $(xId);
+  const y = $(yId);
+  if (x.value === y.value) y.value = names.find((n) => n !== x.value);
+}
+
 function setupAxisPickers(opt) {
   // The response map's axes are always two *continuous* factors (a categorical factor has
   // no coded sweep); pickers only appear when there are more than two to choose between.
@@ -1446,7 +1572,7 @@ function setupAxisPickers(opt) {
       sel.innerHTML = names.map((n) => `<option value="${escapeAttr(n)}">${n}</option>`).join("");
       sel.value = names.includes(current) ? current : dflt;
     }
-    if ($("axis-x").value === $("axis-y").value) $("axis-y").value = names.find((n) => n !== $("axis-x").value);
+    snapAxisPickers("axis-x", "axis-y", names);
   }
 
   // One level picker per categorical factor — the map holds that factor at the chosen level.
@@ -1834,7 +1960,13 @@ function setupBalanceAxisPickers() {
     sel.innerHTML = names.map((n) => `<option value="${escapeAttr(n)}">${n}</option>`).join("");
     sel.value = dflt;
   }
-  const redraw = () => renderBalanceContour().catch((err) => showError("error-balance", err));
+  // Step 3 re-runs setupAxisPickers() on every redraw, which is what snaps its Y picker off a
+  // duplicate axis; this view redraws the contour alone (re-running the setup would reset the
+  // pickers to their defaults), so it snaps here instead — same correction, same moment.
+  const redraw = () => {
+    snapAxisPickers("balance-axis-x", "balance-axis-y", names);
+    renderBalanceContour().catch((err) => showError("error-balance", err));
+  };
   $("balance-axis-x").addEventListener("change", redraw);
   $("balance-axis-y").addEventListener("change", redraw);
 }
@@ -1943,8 +2075,11 @@ $("add-factor").addEventListener("click", () => { addFactorRow(); onFactorsChang
 // Recompute the plan hints whenever a factor's name/levels/type changes (event delegation).
 $("factor-rows").addEventListener("input", onFactorsChanged);
 $("design-type").addEventListener("change", onFactorsChanged);
-// Once the user edits the run count, stop auto-overwriting it.
+// Once the user edits a run count, stop auto-overwriting it.
 $("dopt-runs").addEventListener("input", (e) => { e.target.dataset.auto = ""; });
+$("sf-runs").addEventListener("input", (e) => { e.target.dataset.auto = ""; });
+// The sampler changes the run-count minimum (Sobol' is power-of-two only), so refresh the hint.
+$("sf-sampler").addEventListener("change", onFactorsChanged);
 $("generate").addEventListener("click", generatePlan);
 $("seed-toggle").addEventListener("click", () => { $("seed-wrap").hidden = !$("seed-wrap").hidden; });
 onFactorsChanged();

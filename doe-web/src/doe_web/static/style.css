@@ -127,7 +127,14 @@ button:disabled { cursor: not-allowed; }
 .load-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; margin-top: 0.75rem; }
 .design-choice { margin-top: 1.25rem; }
 .design-choice select { display: block; margin-top: 0.3rem; max-width: 100%; }
-#dopt-runs-wrap { margin-top: 0.6rem; }
+#dopt-runs-wrap, #sf-wrap { margin-top: 0.6rem; }
+/* The sampler picker sits beside the run count, so this row is a flex line — which means it
+ * needs its own [hidden] rule (a display value beats the hidden attribute's default). The
+ * .design-choice `display: block` rule targets the plan-type select; undo it for the inline
+ * sampler picker. */
+#sf-wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 1rem; }
+#sf-wrap[hidden] { display: none; }
+#sf-wrap select { display: inline-block; margin-top: 0; }
 #cat-levels { display: inline-flex; flex-wrap: wrap; gap: 0.4rem 0.9rem; }
 
 .toolbar {

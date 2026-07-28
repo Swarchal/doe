@@ -321,6 +321,183 @@ def test_run_count_formulas_anchor_client_side_preview(client: TestClient) -> No
     assert len(pb_response.json()["design"]["runs"]) == 8
 
 
+def test_space_filling_flow_generate_fit_surface(client: TestClient) -> None:
+    """Replays the UI's space-filling path (app.js generatePlan(), plan type "sf"): all three
+    samplers post to /designs/space-filling and differ only in ``sampler``. The design comes
+    back with the run count asked for, ``meta.sampler`` recorded (the gate renderCoverage()
+    checks -- and it must survive /designs/randomize, since the UI randomizes before drawing
+    the run sheet) and no ``point_types`` (so renderPlan() drops that column). From there it is
+    an ordinary design: responses -> quadratic fit -> optimum -> surface, exactly as for a CCD,
+    which is why isScreeningPlan() correctly leaves it in the response-surface view."""
+    factors = [
+        {"type": "continuous", "name": "temp", "low": 20, "high": 80, "units": "C"},
+        {"type": "continuous", "name": "time", "low": 0, "high": 10, "units": None},
+    ]
+    # quadraticTermCount for 2 continuous factors = intercept + 2 main + 2 squares + 1
+    # interaction = 6; the UI suggests 6 + 4 = 10 (a power of two is not required for LHS).
+    n_runs = 10
+
+    by_sampler: dict[str, dict[str, Any]] = {}
+    for sampler in ("lhs", "sobol", "halton"):
+        # Sobol' only accepts power-of-two sizes, which is why spaceFillingMinRuns() rounds up.
+        runs_wanted = 16 if sampler == "sobol" else n_runs
+        design_response = client.post(
+            "/api/v1/designs/space-filling",
+            json={"factors": factors, "sampler": sampler, "n_runs": runs_wanted, "seed": 7},
+        )
+        assert design_response.status_code == 200, design_response.text
+        design = design_response.json()["design"]
+        assert len(design["runs"]) == runs_wanted
+        assert design["meta"]["sampler"] == sampler
+        assert design["point_types"] is None
+        # Runs land inside the factor ranges (space-filling spreads over the box, it does not
+        # sit on its corners the way a factorial does).
+        assert all(20.0 <= run["temp"] <= 80.0 for run in design["runs"])
+
+        randomized = client.post("/api/v1/designs/randomize", json={"design": design, "seed": 3})
+        assert randomized.status_code == 200, randomized.text
+        by_sampler[sampler] = randomized.json()["design"]
+        # renderCoverage()'s gate has to survive the randomize step 2 does before drawing.
+        assert by_sampler[sampler]["meta"]["sampler"] == sampler
+
+    # The rest of the flow, once, on the Latin hypercube design.
+    design = by_sampler["lhs"]
+    responses = [float(i % 4) for i in range(len(design["runs"]))]
+    design = client.post(
+        "/api/v1/designs/responses",
+        json={"design": design, "responses": {"yield": responses}},
+    ).json()["design"]
+
+    fit_response = client.post(
+        "/api/v1/analysis/fit",
+        json={"design": design, "response": "yield", "model": "quadratic"},
+    )
+    assert fit_response.status_code == 200, fit_response.text
+
+    optimum_response = client.post(
+        "/api/v1/optimize/optimum",
+        json={"design": design, "response": "yield", "model": "quadratic", "maximize": True},
+    )
+    assert optimum_response.status_code == 200, optimum_response.text
+
+    surface_response = client.post(
+        "/api/v1/plot-data/surface",
+        json={
+            "design": design,
+            "response": "yield",
+            "model": "quadratic",
+            "x": "temp",
+            "y": "time",
+            "resolution": 10,
+        },
+    )
+    assert surface_response.status_code == 200, surface_response.text
+
+
+def test_space_filling_run_count_minimum_anchors_client_guard(client: TestClient) -> None:
+    """A space-filling design has no natural run count -- the user picks a budget -- but the
+    analysis step fits the quadratic model, so app.js refuses to generate below
+    quadraticTermCount(factors) runs (spaceFillingMinRuns()). This anchors that number: one run
+    short, the fit the UI would go on to make is rank-deficient and 422s; at the minimum it
+    succeeds. Without the client-side guard the user would only find out at step 3."""
+    factors = [
+        {"type": "continuous", "name": n, "low": 0, "high": 1} for n in ("a", "b", "c")
+    ]
+    # 1 intercept + 3 main effects + 3 squares + 3 interactions.
+    terms = 10
+
+    for n_runs, expected in [(terms - 1, 422), (terms, 200)]:
+        design = client.post(
+            "/api/v1/designs/space-filling",
+            json={"factors": factors, "sampler": "lhs", "n_runs": n_runs, "seed": 1},
+        ).json()["design"]
+        assert len(design["runs"]) == n_runs
+
+        design = client.post(
+            "/api/v1/designs/responses",
+            json={"design": design, "responses": {"y": [float(i) for i in range(n_runs)]}},
+        ).json()["design"]
+
+        fit = client.post(
+            "/api/v1/analysis/fit",
+            json={"design": design, "response": "y", "model": "quadratic"},
+        )
+        assert fit.status_code == expected, fit.text
+
+
+def test_sobol_requires_power_of_two_runs(client: TestClient) -> None:
+    """app.js pre-empts this 422 in the browser (generatePlan()'s isPowerOfTwo check and the
+    "Sobol' needs a power-of-two run count" hint), so the message it mirrors -- including the
+    nearest valid sizes it quotes back -- is anchored here."""
+    factors = [
+        {"type": "continuous", "name": n, "low": 0, "high": 1} for n in ("a", "b", "c")
+    ]
+
+    bad = client.post(
+        "/api/v1/designs/space-filling",
+        json={"factors": factors, "sampler": "sobol", "n_runs": 10},
+    )
+    assert bad.status_code == 422, bad.text
+    error = bad.json()["error"]
+    assert error["code"] == "infeasible"
+    assert "power-of-two" in error["message"]
+    assert "8, 16" in error["message"]  # the sizes sobolNeighbours(10) reports
+
+    good = client.post(
+        "/api/v1/designs/space-filling",
+        json={"factors": factors, "sampler": "sobol", "n_runs": 16},
+    )
+    assert good.status_code == 200, good.text
+    assert len(good.json()["design"]["runs"]) == 16
+
+
+def test_space_filling_rejects_categorical_factors(client: TestClient) -> None:
+    """Space-filling samplers are continuous-only, which is why "sf" joins "ccd"/"bb" in
+    app.js's CONTINUOUS_ONLY_PLANS (the gate in generatePlan() and the #design-cat-note hint).
+    Without it the user would reach this 422 after filling in the whole form."""
+    factors = [
+        {"type": "continuous", "name": "temp", "low": 20, "high": 80},
+        {"type": "categorical", "name": "buffer", "levels": ["tris", "hepes"]},
+    ]
+
+    response = client.post(
+        "/api/v1/designs/space-filling",
+        json={"factors": factors, "sampler": "lhs", "n_runs": 8},
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "infeasible"
+
+
+def test_coverage_reports_both_metrics(client: TestClient) -> None:
+    """renderCoverage() draws the run sheet's coverage line from /analysis/coverage -- the two
+    model-free metrics a space-filling plan is judged by. A maximin-criterion Latin hypercube
+    separates its runs, so the closest pair sits strictly above zero (a design with replicated
+    runs, e.g. a CCD's centre points, scores exactly 0)."""
+    factors = [
+        {"type": "continuous", "name": "temp", "low": 20, "high": 80},
+        {"type": "continuous", "name": "time", "low": 0, "high": 10},
+    ]
+    design = client.post(
+        "/api/v1/designs/space-filling",
+        json={"factors": factors, "sampler": "lhs", "n_runs": 10, "seed": 7},
+    ).json()["design"]
+
+    response = client.post("/api/v1/analysis/coverage", json={"design": design})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert isinstance(body["discrepancy"], float)
+    assert isinstance(body["maximin_distance"], float)
+    assert body["maximin_distance"] > 0.0
+
+    # A CCD replicates its centre point, so the closest pair is zero apart -- the contrast the
+    # UI's "larger is better separated" wording leans on.
+    ccd = client.post("/api/v1/designs/central-composite", json={"factors": factors}).json()
+    ccd_coverage = client.post(
+        "/api/v1/analysis/coverage", json={"design": ccd["design"]}
+    ).json()
+    assert ccd_coverage["maximin_distance"] == 0.0
+
+
 def test_categorical_dopt_flow_generate_fit_surface(client: TestClient) -> None:
     """Replays the UI's categorical path: a D-optimal design over mixed factors ->
     attach responses -> fit (deviation-coded categorical term) -> surface over the two
