@@ -65,6 +65,9 @@ th {
 }
 td { padding: 0.35rem 0.6rem; border-bottom: 1px solid var(--line); }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+/* The winning row of the per-level balance comparison -- a tint plus bold text, so the
+   choice is not carried by colour alone. */
+tr.best-row td { background: var(--ok-bg); font-weight: 600; }
 
 .table-scroll { overflow-x: auto; }
 

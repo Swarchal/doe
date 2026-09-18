@@ -29,14 +29,15 @@ def test_openapi_schema_builds_without_error() -> None:
 
 
 def test_openapi_documents_every_v1_route() -> None:
-    # 36 POST compute routes (design generation/operations/candidates including the
+    # 37 POST compute routes (design generation/operations/candidates including the
     # Phase-5 split-plot/blocking generators, analysis including split-plot fit-gls,
-    # optimize including the mixed categorical-optimum, plot-data) plus GET /v1/health.
+    # optimize including the mixed categorical-optimum/categorical-desirability,
+    # plot-data) plus GET /v1/health.
     spec = create_app().openapi()
     operations = _operations(spec)
     post_routes = [(m, p) for m, p, _ in operations if m == "POST" and p.startswith("/v1/")]
     get_routes = [(m, p) for m, p, _ in operations if m == "GET" and p == "/v1/health"]
-    assert len(post_routes) == 36
+    assert len(post_routes) == 37
     assert len(get_routes) == 1
 
 

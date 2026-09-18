@@ -179,6 +179,19 @@ def build_mixed_design() -> dict[str, Any]:
     return gen
 
 
+def add_impurity(design: dict[str, Any]) -> dict[str, Any]:
+    """Copy of the mixed design with a second, *conflicting* readout, for the mixed
+    categorical-desirability example: impurity rises with both continuous factors and is
+    far worse for catalyst "B" (+12), so the two goals disagree about the level."""
+    out = json.loads(json.dumps(design))
+    for run in out["runs"]:
+        t = (run["temp"] - 50) / 30
+        m = (run["time"] - 6) / 4
+        bump = 12.0 if run["catalyst"] == "B" else 0.0
+        run["impurity"] = round(10 + 2 * t + 1 * m + bump, 3)
+    return out
+
+
 def build_scheffe_design() -> dict[str, Any]:
     """A 3-component extreme-vertices mixture design with a synthetic blend response,
     for the Scheffé fit / ternary examples."""
@@ -624,6 +637,22 @@ example(
     "operating point plus per-response predictions and individual desirabilities.",
     "/v1/optimize/desirability",
     DESIRABILITY_REQ,
+)
+
+example(
+    "Mixed continuous/categorical desirability",
+    "`/desirability` has no coded box for a categorical factor either. This fits the goals "
+    "once over the *whole* design, then conditions on each combination of categorical levels "
+    "and runs the desirability search within it, returning the best; `per_level` is the full "
+    "comparison (best `overall_D` first), so a UI can show what each level can achieve.",
+    "/v1/optimize/categorical-desirability",
+    {
+        "design": add_impurity(MIXED_DESIGN),
+        "goals": [
+            {"response": "yield", "model": "quadratic", "goal": "max", "low": 60, "high": 85},
+            {"response": "impurity", "model": "quadratic", "goal": "min", "low": 5, "high": 20},
+        ],
+    },
 )
 
 

@@ -59,7 +59,10 @@ generators/analysis have service endpoints too: `POST /v1/designs/split-plot`,
 `POST /v1/analysis/fit-gls` (the REML/GLS split-plot fit). `POST
 /v1/optimize/categorical-optimum` optimizes the continuous factors exactly within each
 combination of categorical levels (the mixed-factor optimum `/optimize/optimum` can't
-search), wrapping the library's `categorical_optimum`. Categorical DSDs need no new
+search), wrapping the library's `categorical_optimum`; `POST
+/v1/optimize/categorical-desirability` is the multi-response counterpart (same body as
+`/optimize/desirability`, plus a `per_level` comparison table), wrapping
+`categorical_desirability`. Categorical DSDs need no new
 route — `/v1/designs/definitive-screening` forwards the factor list, so it builds the
 Jones–Nachtsheim categorical augment for free. The split-plot wire additions
 (`hard_to_change` on a factor, `whole_plots` on a design) are emitted **only when set**,
@@ -196,6 +199,12 @@ consumes one.
   factors' levels it folds those contrast columns into the continuous quadratic form
   (`_fold_quadratic_form`) and runs the same `optimum` search, keeping the best — so the
   continuous settings are exact, not grid-snapped, and `levels` names the winning level(s).
+  `categorical_desirability` (returning a `CategoricalDesirability`) is the same trick applied
+  to *multi-response* balancing, which `desirability` likewise rejects on a categorical fit:
+  the goals are fitted once over the whole design, then each level combination's folded
+  surfaces get their own desirability search (shared engine `_desirability_search`), and
+  `per_level` keeps every combination's best compromise for comparison — deliberately *not*
+  the same as splitting the runs by level and fitting each subset alone.
 - `plotting.py` — effect plots (`pareto_plot`, `main_effects_plot`, `half_normal_plot`,
   `interaction_plot` over its headless `interaction_lines`), RSM (`contour_plot` + 3-D
   `surface_plot` over their headless core `surface_grid`, which takes `fixed={factor: value}` to

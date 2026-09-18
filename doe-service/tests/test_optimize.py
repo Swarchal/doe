@@ -358,6 +358,18 @@ def test_mixture_design_is_infeasible_not_a_server_error() -> None:
                 }
             ],
         },
+        "/v1/optimize/categorical-desirability": {
+            "design": design,
+            "goals": [
+                {
+                    "response": "y",
+                    "goal": "max",
+                    "low": 1.0,
+                    "high": 5.0,
+                    "model": "scheffe-quadratic",
+                }
+            ],
+        },
     }
     for path, body in bodies.items():
         response = client.post(path, json=body)
@@ -437,3 +449,115 @@ def test_categorical_optimum_honours_continuous_bounds(client: TestClient) -> No
     body = response.json()
     assert body["settings"]["temp"] == pytest.approx(60.0, abs=1e-2)
     assert body["at_bound"] is True
+
+
+# --------------------------------------------------------------------------- #
+# categorical-desirability: multi-response balance with a categorical factor
+# --------------------------------------------------------------------------- #
+
+
+def _mixed_design_with_two_responses() -> dict:
+    """The ``_mixed_design_with_response`` design plus a conflicting second readout:
+    ``impurity`` rises with both continuous factors and is far worse for catalyst 'B'
+    (+12), so the two goals disagree about the level and the compromise has to choose."""
+    design = Design.from_dict(_mixed_design_with_response())
+    impurity = [
+        10.0
+        + 2.0 * (row["temp"] - 50.0) / 30.0
+        + 1.0 * (row["time"] - 6.0) / 4.0
+        + (12.0 if row["catalyst"] == "B" else 0.0)
+        for _, row in design.runs.iterrows()
+    ]
+    return design.with_response("impurity", impurity).to_dict()
+
+
+_MIXED_GOALS = [
+    {"response": "yield", "goal": "max", "low": 60.0, "high": 85.0, "model": "quadratic"},
+    {"response": "impurity", "goal": "min", "low": 5.0, "high": 20.0, "model": "quadratic"},
+]
+
+
+def test_categorical_desirability_balances_within_the_best_level(client: TestClient) -> None:
+    response = client.post(
+        "/v1/optimize/categorical-desirability",
+        json={"design": _mixed_design_with_two_responses(), "goals": _MIXED_GOALS},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    # yield alone would pick 'B' (+8); impurity's +12 penalty there outweighs it
+    assert body["levels"] == {"catalyst": "A"}
+    assert body["settings"]["catalyst"] == "A"
+    assert set(body["responses"]) == {"yield", "impurity"}
+    assert 0.0 < body["overall"] <= 1.0
+    assert body["warnings"] == []
+
+
+def test_categorical_desirability_reports_every_level(client: TestClient) -> None:
+    response = client.post(
+        "/v1/optimize/categorical-desirability",
+        json={"design": _mixed_design_with_two_responses(), "goals": _MIXED_GOALS},
+    )
+    body = response.json()
+    per_level = body["per_level"]
+
+    assert [row["catalyst"] for row in per_level] == ["A", "B"]  # best overall_D first
+    assert per_level[0]["overall_D"] >= per_level[1]["overall_D"]
+    assert per_level[0]["overall_D"] == pytest.approx(body["overall"])
+    assert per_level[0]["temp"] == pytest.approx(body["natural"]["temp"])
+
+
+def test_categorical_desirability_matches_desirability_when_all_continuous(
+    client: TestClient,
+) -> None:
+    """An all-continuous design is accepted too -- it is then just ``/desirability`` with
+    empty ``levels``, so a caller need not know whether the design has a categorical factor."""
+    design = _workflow_design().to_dict()
+    goals = [{"response": "yield_pct", "goal": "max", "low": 70.0, "high": 85.0,
+              "model": "quadratic"}]
+    body = {"design": design, "goals": goals}
+
+    mixed = client.post("/v1/optimize/categorical-desirability", json=body)
+    plain = client.post("/v1/optimize/desirability", json=body)
+    assert mixed.status_code == plain.status_code == 200, mixed.text
+
+    assert mixed.json()["levels"] == {}
+    assert mixed.json()["overall"] == pytest.approx(plain.json()["overall"], abs=1e-6)
+    assert mixed.json()["natural"] == pytest.approx(plain.json()["natural"], abs=1e-6)
+    assert len(mixed.json()["per_level"]) == 1
+
+
+def test_categorical_desirability_honours_continuous_bounds(client: TestClient) -> None:
+    response = client.post(
+        "/v1/optimize/categorical-desirability",
+        json={
+            "design": _mixed_design_with_two_responses(),
+            "goals": _MIXED_GOALS,
+            "bounds": {"temp": [20.0, 40.0]},
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["settings"]["temp"] <= 40.0 + 1e-6
+
+
+def test_categorical_desirability_rejects_unknown_bounds_factor(client: TestClient) -> None:
+    response = client.post(
+        "/v1/optimize/categorical-desirability",
+        json={
+            "design": _mixed_design_with_two_responses(),
+            "goals": _MIXED_GOALS,
+            "bounds": {"nope": [0.0, 1.0]},
+        },
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_error"
+
+
+def test_categorical_desirability_caps_goal_count(client: TestClient) -> None:
+    design = _mixed_design_with_two_responses()
+    goals = [dict(_MIXED_GOALS[0]) for _ in range(9)]  # limits.max_goals is 8
+    response = client.post(
+        "/v1/optimize/categorical-desirability", json={"design": design, "goals": goals}
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "limit_exceeded"

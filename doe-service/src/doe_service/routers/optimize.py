@@ -9,18 +9,24 @@ it directly. Both require a quadratic model (the library's ``_quadratic_form`` n
 curvature to locate); a linear model is rejected here as 422 ``infeasible`` before any
 fit is attempted, so the wasted fit never runs.
 
-All three endpoints additionally require all-continuous factors: they search the coded
-box, and the library signals a mixture/categorical fit with a bare ``TypeError`` that
-would otherwise escape ``call_library`` as a 500 (see ``_require_continuous_factors``).
+``/stationary-point``/``/optimum``/``/desirability`` additionally require all-continuous
+factors: they search the coded box, and the library signals a mixture/categorical fit with
+a bare ``TypeError`` that would otherwise escape ``call_library`` as a 500 (see
+``_require_continuous_factors``). ``/categorical-optimum`` and ``/categorical-desirability``
+are the categorical-aware counterparts -- they enumerate the levels instead of searching
+them, so they accept a categorical factor and reject only a mixture one
+(``_require_optimizable_factors``).
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
 from doe import (
+    CategoricalDesirability,
     CategoricalFactor,
     CategoricalOptimum,
     ContinuousFactor,
@@ -31,6 +37,7 @@ from doe import (
     ResponseGoal,
     ValidationError,
 )
+from doe import categorical_desirability as _categorical_desirability
 from doe import categorical_optimum as _categorical_optimum
 from doe import desirability as _desirability
 from doe import optimum as _optimum
@@ -54,6 +61,7 @@ from doe_service.schemas.optimization import (
     StationaryPointRequest,
 )
 from doe_service.schemas.results import (
+    CategoricalDesirabilityResponse,
     CategoricalOptimumResponse,
     DesirabilityResponse,
     OptimumResponse,
@@ -238,20 +246,17 @@ def categorical_optimum(
     return CategoricalOptimumResponse.model_validate({**payload, "warnings": warns})
 
 
-# --------------------------------------------------------------------------- #
-# /desirability
-# --------------------------------------------------------------------------- #
+def _desirability_prologue(
+    body: DesirabilityRequest,
+    limits: Limits,
+    require_factors: Callable[[FactorSet], None],
+) -> tuple[list[ResponseGoal], Bounds, list[str]]:
+    """Shared prologue of ``/desirability`` and ``/categorical-desirability``.
 
-
-@router.post("/desirability")
-def desirability(
-    body: DesirabilityRequest, limits: Annotated[Limits, Depends(app_limits)]
-) -> DesirabilityResponse:
-    """Wraps ``doe.desirability`` over per-goal re-fits (``doe.ResponseGoal``).
-
-    Each goal re-fits its own ``response``/``model`` on the shared design -- the
-    library's bracket ``ValueError``s (e.g. a ``target`` outside ``(low, high)``) become
-    422 ``infeasible``. Goal count is capped at ``limits.max_goals``.
+    Caps the goal count, loads the design, checks its factors are ones the endpoint's
+    library function can search (the two differ *only* here -- a categorical factor is
+    fatal for one and the whole point of the other), validates ``bounds``, then re-fits
+    one ``ResponseGoal`` per entry, collecting fit warnings.
     """
     if len(body.goals) > limits.max_goals:
         raise LimitExceeded(
@@ -260,7 +265,7 @@ def desirability(
         )
 
     design = design_from_document(body.design.model_dump(), limits=limits)
-    _require_continuous_factors(design.factors)
+    require_factors(design.factors)
     bounds = _validate_bounds(body.bounds, design.factors.names)
     bounds_arg: Bounds = bounds if bounds is not None else (-1.0, 1.0)
 
@@ -285,6 +290,25 @@ def desirability(
 
             goals.append(call_library(make_goal))
     warns.extend(fit_warns)
+    return goals, bounds_arg, warns
+
+
+# --------------------------------------------------------------------------- #
+# /desirability
+# --------------------------------------------------------------------------- #
+
+
+@router.post("/desirability")
+def desirability(
+    body: DesirabilityRequest, limits: Annotated[Limits, Depends(app_limits)]
+) -> DesirabilityResponse:
+    """Wraps ``doe.desirability`` over per-goal re-fits (``doe.ResponseGoal``).
+
+    Each goal re-fits its own ``response``/``model`` on the shared design -- the
+    library's bracket ``ValueError``s (e.g. a ``target`` outside ``(low, high)``) become
+    422 ``infeasible``. Goal count is capped at ``limits.max_goals``.
+    """
+    goals, bounds_arg, warns = _desirability_prologue(body, limits, _require_continuous_factors)
 
     def run() -> DesirabilityResult:
         return _desirability(goals, bounds=bounds_arg)
@@ -292,3 +316,37 @@ def desirability(
     result = call_library(run)
     payload = result.to_dict()
     return DesirabilityResponse.model_validate({**payload, "warnings": warns})
+
+
+# --------------------------------------------------------------------------- #
+# /categorical-desirability
+# --------------------------------------------------------------------------- #
+
+
+@router.post("/categorical-desirability")
+def categorical_desirability(
+    body: DesirabilityRequest, limits: Annotated[Limits, Depends(app_limits)]
+) -> CategoricalDesirabilityResponse:
+    """Wraps ``doe.categorical_desirability`` -- multi-response desirability with a
+    categorical factor.
+
+    ``/desirability`` searches a continuous coded box and so rejects a categorical factor
+    (422), exactly as ``/optimum`` does. This endpoint is to ``/desirability`` what
+    ``/categorical-optimum`` is to ``/optimum``: the goals are fitted **once over the whole
+    design** (categorical included), then each combination of the categorical factors'
+    levels is held fixed -- folding its contrast columns into the continuous surface -- and
+    given its own desirability search. The best combination is returned, with ``per_level``
+    carrying the whole comparison so a caller can show what each level can achieve.
+
+    Takes the same body as ``/desirability``; ``bounds`` constrains the continuous factors
+    only. An all-continuous design is accepted too (empty ``levels``), so a caller need not
+    know in advance whether the design has a categorical factor.
+    """
+    goals, bounds_arg, warns = _desirability_prologue(body, limits, _require_optimizable_factors)
+
+    def run() -> CategoricalDesirability:
+        return _categorical_desirability(goals, bounds=bounds_arg)
+
+    result = call_library(run)
+    payload = result.to_dict()
+    return CategoricalDesirabilityResponse.model_validate({**payload, "warnings": warns})

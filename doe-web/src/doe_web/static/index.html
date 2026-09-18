@@ -225,9 +225,10 @@
     <h2><span class="step-no">4</span> Balance multiple measurements</h2>
     <p class="hint">Find the settings that best satisfy every measurement at once — e.g.
       maximize yield while minimizing impurity.</p>
-    <p class="hint-inline" id="balance-cat-note" hidden>Balancing multiple measurements needs
-      all-continuous factors (it searches the coded box) — this plan has a categorical
-      factor, so this step isn't available.</p>
+    <p class="hint-inline" id="balance-cat-note" hidden>This plan has a categorical factor, so
+      the best option for it is chosen as part of the balance: every setting is compared within
+      each option, using all the runs, and the winner is reported along with how the other
+      options compare.</p>
     <div id="balance-editor">
       <div class="table-scroll"><table class="goals-table" id="goals-table"></table></div>
       <button type="button" class="primary" id="run-balance">Find best balance</button>
@@ -245,11 +246,17 @@
         </div>
       </div>
       <div class="table-scroll"><table class="terms-table" id="balance-table"></table></div>
+      <div id="balance-levels-block" hidden>
+        <h3>How the options compare</h3>
+        <p class="hint">The best balance each option can reach, best first — every option is
+          judged using all the runs, not just its own.</p>
+        <div class="table-scroll"><table class="terms-table" id="balance-levels-table"></table></div>
+      </div>
       <div class="warnings" id="balance-warnings" hidden></div>
       <h3>Desirability map</h3>
-      <p class="hint">Where the overall desirability is highest across two factors at a
-        time (other factors held at the best balanced settings above); the ★ marks that
-        optimum.</p>
+      <p class="hint" id="balance-map-hint">Where the overall desirability is highest across
+        two factors at a time (other factors held at the best balanced settings above); the
+        ★ marks that optimum.</p>
       <div id="balance-axis-pickers" hidden></div>
       <div id="balance-contour" class="plot"></div>
     </div>

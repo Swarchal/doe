@@ -13,6 +13,7 @@ import pytest
 from doe.analysis.fit import fit_ols
 from doe.analysis.optimize import (
     ResponseGoal,
+    categorical_desirability,
     categorical_optimum,
     desirability,
     optimum,
@@ -637,3 +638,164 @@ def test_desirability_to_frame():
     assert list(frame.columns) == ["a", "b", "yield_pct", "impurity_pct", "overall_D"]
     assert frame.loc[0, "yield_pct"] == pytest.approx(des.responses["yield_pct"])
     assert frame.loc[0, "overall_D"] == pytest.approx(des.overall)
+
+
+# --------------------------------------------------------------------------- #
+# Mixed continuous/categorical desirability
+# --------------------------------------------------------------------------- #
+
+
+def _mixed_two_response_fits():
+    """Two responses over one mixed continuous/categorical design, both exactly representable.
+
+    ``yield`` is the concave surface of :func:`_mixed_quadratic_fit` (peak temp=68.75,
+    time=9.0, with catalyst "B" worth a flat +8). ``impurity`` rises with both continuous
+    factors and is *much* worse for catalyst "B" (+12), so the two goals disagree about the
+    level -- which is the point: the compromise has to choose.
+    """
+    factors = [
+        ContinuousFactor("temp", 20.0, 80.0),
+        ContinuousFactor("time", 2.0, 10.0),
+        CategoricalFactor("catalyst", ("A", "B")),
+    ]
+    design = coordinate_exchange(factors, n_runs=16, model="quadratic", seed=0).design
+
+    def coded(row):
+        return (row["temp"] - 50.0) / 30.0, (row["time"] - 6.0) / 4.0, row["catalyst"] == "B"
+
+    rows = [coded(row) for _, row in design.runs.iterrows()]
+    yields = [70.0 + 5 * t + 3 * m - 4 * t**2 - 2 * m**2 + 8.0 * b for t, m, b in rows]
+    impurity = [10.0 + 2 * t + 1 * m + 12.0 * b for t, m, b in rows]
+    design = design.with_response("yield", yields).with_response("impurity", impurity)
+    return (
+        fit_ols(design, "yield", model="quadratic"),
+        fit_ols(design, "impurity", model="quadratic"),
+    )
+
+
+def test_categorical_desirability_matches_categorical_optimum_for_one_goal():
+    # a single "max" goal whose bracket is never saturated is a strictly increasing transform
+    # of the response, so the compromise must land exactly on the single-response optimum
+    fit, _ = _mixed_two_response_fits()
+    best = categorical_desirability([ResponseGoal(fit, goal="max", low=0.0, high=200.0)])
+    ref = categorical_optimum(fit, maximize=True)
+
+    assert best.levels == ref.levels == {"catalyst": "B"}
+    assert best.natural["temp"] == pytest.approx(ref.natural["temp"], abs=1e-2)
+    assert best.natural["time"] == pytest.approx(ref.natural["time"], abs=1e-2)
+    assert best.responses["yield"] == pytest.approx(80.6875, abs=1e-2)
+
+
+def test_categorical_desirability_flips_the_level_when_responses_conflict():
+    yield_fit, impurity_fit = _mixed_two_response_fits()
+    goals = [
+        ResponseGoal(yield_fit, goal="max", low=60.0, high=85.0),
+        ResponseGoal(impurity_fit, goal="min", low=5.0, high=20.0),
+    ]
+    best = categorical_desirability(goals)
+
+    # yield alone would pick "B" (+8); impurity's +12 penalty there is heavy enough that the
+    # compromise gives the bonus up -- the choice of level is genuinely made by the trade-off
+    assert categorical_optimum(yield_fit, maximize=True).levels == {"catalyst": "B"}
+    assert best.levels == {"catalyst": "A"}
+    assert 0.0 < best.overall <= 1.0
+    assert best.settings()["catalyst"] == "A"
+    # the reported overall D really is the geometric mean of the reported individual scores
+    assert best.overall == pytest.approx(float(np.prod(best.individual.to_numpy()) ** 0.5))
+
+
+def test_categorical_desirability_per_level_covers_every_combination_best_first():
+    yield_fit, impurity_fit = _mixed_two_response_fits()
+    best = categorical_desirability(
+        [
+            ResponseGoal(yield_fit, goal="max", low=60.0, high=85.0),
+            ResponseGoal(impurity_fit, goal="min", low=5.0, high=20.0),
+        ]
+    )
+    frame = best.per_level
+
+    assert list(frame["catalyst"]) == ["A", "B"]  # sorted by overall_D, best first
+    assert frame["overall_D"].is_monotonic_decreasing
+    assert frame.loc[0, "overall_D"] == pytest.approx(best.overall)
+    assert frame.loc[0, "temp"] == pytest.approx(best.natural["temp"])
+    assert list(frame.columns) == [
+        "catalyst",
+        "overall_D",
+        "yield",
+        "d(yield)",
+        "impurity",
+        "d(impurity)",
+        "temp",
+        "time",
+    ]
+
+
+def test_categorical_desirability_honours_continuous_bounds_mapping():
+    yield_fit, _ = _mixed_two_response_fits()
+    # cap temp below its unconstrained optimum (68.75); the search must respect it
+    best = categorical_desirability(
+        [ResponseGoal(yield_fit, goal="max", low=0.0, high=200.0)],
+        bounds={"temp": (20.0, 60.0)},
+    )
+    assert best.natural["temp"] == pytest.approx(60.0, abs=1e-2)
+
+
+def test_categorical_desirability_delegates_when_all_continuous():
+    result = _fit(lambda x1, x2: 50.0 + 10.0 * x1, model=None, order=1, response_name="y")
+    goals = [ResponseGoal(result, goal="max", low=50.0, high=60.0)]
+    best = categorical_desirability(goals)
+    ref = desirability(goals)
+
+    assert best.levels == {}
+    assert best.settings() == best.natural
+    assert np.allclose(best.coded, ref.coded, atol=1e-6)
+    assert best.overall == pytest.approx(ref.overall)
+    assert len(best.per_level) == 1
+
+
+def test_categorical_desirability_to_frame_and_to_dict():
+    yield_fit, impurity_fit = _mixed_two_response_fits()
+    best = categorical_desirability(
+        [
+            ResponseGoal(yield_fit, goal="max", low=60.0, high=85.0),
+            ResponseGoal(impurity_fit, goal="min", low=5.0, high=20.0),
+        ]
+    )
+    frame = best.to_frame()
+    assert list(frame.columns) == ["catalyst", "temp", "time", "yield", "impurity", "overall_D"]
+    assert frame.loc[0, "catalyst"] == "A"
+
+    payload = best.to_dict()
+    assert payload["levels"] == {"catalyst": "A"}
+    assert payload["settings"]["catalyst"] == "A"
+    assert payload["overall"] == pytest.approx(best.overall)
+    assert set(payload["responses"]) == {"yield", "impurity"}
+    assert len(payload["per_level"]) == 2
+    assert payload["per_level"][0]["catalyst"] == "A"
+    # json_safe must leave nothing numpy-flavoured behind (the response body is serialized)
+    import json
+
+    json.dumps(payload)
+
+
+def test_categorical_desirability_rejects_mixture_factor():
+    from doe.factors import MixtureFactor
+    from doe.generators.mixture import simplex_lattice
+
+    factors = [MixtureFactor("x1", 0.0, 1.0), MixtureFactor("x2", 0.0, 1.0)]
+    design = simplex_lattice(factors, degree=2)
+    rng = np.random.default_rng(0)
+    mix_fit = fit_ols(
+        design.with_response("y", rng.normal(size=design.n_runs)), "y", model="scheffe-quadratic"
+    )
+    with pytest.raises(TypeError, match="continuous and categorical"):
+        categorical_desirability([ResponseGoal(mix_fit, "max", 0.0, 1.0)])
+
+
+def test_categorical_desirability_rejects_all_categorical_fit():
+    factors = [CategoricalFactor("cat", ("A", "B")), CategoricalFactor("lot", ("L1", "L2"))]
+    design = full_factorial(factors, levels=2)
+    rng = np.random.default_rng(0)
+    fit = fit_ols(design, rng.normal(size=design.n_runs), order=1, interactions=True)
+    with pytest.raises(ValueError, match="continuous factor"):
+        categorical_desirability([ResponseGoal(fit, "max", -5.0, 5.0)])

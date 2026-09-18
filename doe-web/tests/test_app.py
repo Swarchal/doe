@@ -657,10 +657,15 @@ def test_multi_response_flow_two_fits_and_desirability(client: TestClient) -> No
     assert surfaces[0]["y"] == surfaces[1]["y"]
 
 
-def test_desirability_rejects_categorical_factors(client: TestClient) -> None:
-    """Anchors the UI's categorical gating for the balance card (#balance-cat-note):
-    /optimize/desirability requires all-continuous factors (it searches the coded box),
-    so a mixed design must 422 rather than the UI ever attempting the request."""
+def test_balance_routes_a_categorical_plan_to_categorical_desirability(
+    client: TestClient,
+) -> None:
+    """Replays the balance card's categorical path (app.js runBalance()): with a categorical
+    factor the UI posts the *same* goals body to /optimize/categorical-desirability instead of
+    /optimize/desirability, because the plain endpoint has no coded box for a categorical
+    factor and 422s (asserted here too -- the UI must not call it). The mixed response carries
+    the winning `levels`, a `settings` mapping the settings tile renders, and the `per_level`
+    comparison the "How the options compare" table is built from."""
     factors = [
         {"type": "continuous", "name": "temp", "low": 20, "high": 80, "units": "C"},
         {"type": "continuous", "name": "time", "low": 2, "high": 10, "units": "min"},
@@ -700,6 +705,47 @@ def test_desirability_rejects_categorical_factors(client: TestClient) -> None:
         "/api/v1/optimize/desirability", json={"design": design, "goals": goals}
     )
     assert desirability_response.status_code == 422
+
+    balance_response = client.post(
+        "/api/v1/optimize/categorical-desirability", json={"design": design, "goals": goals}
+    )
+    assert balance_response.status_code == 200, balance_response.text
+    body: dict[str, Any] = balance_response.json()
+
+    # What the settings tile renders: every factor, the categorical one as a level label.
+    assert set(body["settings"]) == {"temp", "time", "catalyst"}
+    assert body["settings"]["catalyst"] in {"A", "B"}
+    assert body["levels"] == {"catalyst": body["settings"]["catalyst"]}
+    assert set(body["responses"]) == {"yield", "impurity"}
+    assert 0.0 <= body["overall"] <= 1.0
+
+    # What the per-level table renders: one row per level, best first, the winner on top.
+    per_level = body["per_level"]
+    assert [row["catalyst"] for row in per_level] == sorted(
+        (row["catalyst"] for row in per_level),
+        key=lambda level: -next(r["overall_D"] for r in per_level if r["catalyst"] == level),
+    )
+    assert len(per_level) == 2
+    assert per_level[0]["catalyst"] == body["levels"]["catalyst"]
+    assert per_level[0]["overall_D"] == pytest.approx(body["overall"])
+    for row in per_level:
+        assert {"overall_D", "yield", "impurity", "temp", "time"} <= set(row)
+
+    # The balance contour holds the categorical at the winning level -- same `fixed` shape
+    # the step-3 contour uses, so the slice drawn is the one the optimum lives on.
+    surface_response = client.post(
+        "/api/v1/plot-data/surface",
+        json={
+            "design": design,
+            "response": "yield",
+            "model": "quadratic",
+            "x": "temp",
+            "y": "time",
+            "resolution": 8,
+            "fixed": {"catalyst": body["levels"]["catalyst"]},
+        },
+    )
+    assert surface_response.status_code == 200, surface_response.text
 
 
 def test_interaction_plot_data_shows_crossing_lines(client: TestClient) -> None:

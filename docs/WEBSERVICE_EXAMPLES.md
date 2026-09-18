@@ -2965,38 +2965,38 @@ curl -s -X POST http://localhost:8000/v1/analysis/fit-gls \
       "term": "Intercept",
       "coefficient": 50.62500000000001,
       "effect": 50.62500000000001,
-      "std_error": 0.4506939284323682,
-      "t": 112.32678500038162,
-      "p": 7.924679654808261e-05,
-      "ci_low": 48.68582053854897,
-      "ci_high": 52.56417946145105
+      "std_error": 0.45069381868782943,
+      "t": 112.3268123521018,
+      "p": 7.924675795928542e-05,
+      "ci_low": 48.685821010741606,
+      "ci_high": 52.56417898925841
     },
     {
       "term": "temp",
-      "coefficient": -0.6250000000000009,
-      "effect": -1.2500000000000018,
-      "std_error": 0.4506939284323682,
-      "t": -1.3867504321034787,
-      "p": 0.29985997303284434,
-      "ci_low": -2.5641794614510385,
-      "ci_high": 1.314179461451037
+      "coefficient": -0.6250000000000018,
+      "effect": -1.2500000000000036,
+      "std_error": 0.45069381868782943,
+      "t": -1.3867507697790382,
+      "p": 0.29985988611892445,
+      "ci_low": -2.5641789892584,
+      "ci_high": 1.3141789892583966
     },
     {
       "term": "conc",
       "coefficient": 0.375,
       "effect": 0.75,
-      "std_error": 0.3749999841914659,
-      "t": 1.0000000421560926,
-      "p": 0.42264971458448697,
-      "ci_low": -1.2384947056374158,
-      "ci_high": 1.9884947056374158
+      "std_error": 0.37500007550457515,
+      "t": 0.9999997986545068,
+      "p": 0.4226498083082985,
+      "ci_low": -1.2384950985260146,
+      "ci_high": 1.9884950985260146
     },
     "… 1 more"
   ],
   "r_squared": 0.6535433070866141,
   "adjusted_r2": 0.39370078740157477,
   "dof_resid": 2,
-  "mse": 1.1249999051487976,
+  "mse": 1.1250004530274964,
   "fitted": [
     50.00000000000001,
     52.50000000000001,
@@ -3014,7 +3014,7 @@ curl -s -X POST http://localhost:8000/v1/analysis/fit-gls \
     "interactions": true
   },
   "warnings": [],
-  "sigma2_wp": 0.25000011592880367,
+  "sigma2_wp": 0.24999944629992393,
   "n_whole_plots": 4,
   "dof_terms": {
     "Intercept": 2,
@@ -3464,6 +3464,155 @@ curl -s -X POST http://localhost:8000/v1/optimize/desirability \
     "impurity_pct": 0.4308330248030184,
     "cost": 0.9999999999994502
   },
+  "warnings": []
+}
+```
+
+### Mixed continuous/categorical desirability
+
+`/desirability` has no coded box for a categorical factor either. This fits the goals once over the *whole* design, then conditions on each combination of categorical levels and runs the desirability search within it, returning the best; `per_level` is the full comparison (best `overall_D` first), so a UI can show what each level can achieve.
+
+```bash
+curl -s -X POST http://localhost:8000/v1/optimize/categorical-desirability \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "design": {
+    "schema_version": "1.0",
+    "name": "d_optimal_quadratic",
+    "factors": [
+      {
+        "type": "continuous",
+        "name": "temp",
+        "low": 20.0,
+        "high": 80.0,
+        "units": "C"
+      },
+      {
+        "type": "continuous",
+        "name": "time",
+        "low": 2.0,
+        "high": 10.0,
+        "units": "min"
+      },
+      {
+        "type": "categorical",
+        "name": "catalyst",
+        "levels": [
+          "A",
+          "B"
+        ],
+        "units": null
+      }
+    ],
+    "runs": [
+      {
+        "temp": 20.0,
+        "time": 10.0,
+        "catalyst": "B",
+        "yield": 70.0,
+        "impurity": 21.0
+      },
+      {
+        "temp": 20.0,
+        "time": 6.0,
+        "catalyst": "B",
+        "yield": 69.0,
+        "impurity": 20.0
+      },
+      {
+        "temp": 20.0,
+        "time": 10.0,
+        "catalyst": "A",
+        "yield": 62.0,
+        "impurity": 9.0
+      },
+      "… 13 more"
+    ],
+    "point_types": null,
+    "meta": {
+      "criterion": "D",
+      "score": 19.77374025523943,
+      "d_efficiency": 0.5624199468978253,
+      "n_restarts": 20,
+      "seed": 0,
+      "model": "quadratic",
+      "order": 2,
+      "interactions": true,
+      "converged": true
+    }
+  },
+  "goals": [
+    {
+      "response": "yield",
+      "model": "quadratic",
+      "goal": "max",
+      "low": 60,
+      "high": 85
+    },
+    {
+      "response": "impurity",
+      "model": "quadratic",
+      "goal": "min",
+      "low": 5,
+      "high": 20
+    }
+  ]
+}'
+```
+
+> `design.runs` is abbreviated above for readability — POST the full design document (any generation response, or the one shown under [Attach responses](#attach-responses)).
+
+`200`
+
+```json
+{
+  "settings": {
+    "temp": 58.73584405008054,
+    "time": 7.6647643806605075,
+    "catalyst": "A"
+  },
+  "levels": {
+    "catalyst": "A"
+  },
+  "natural": {
+    "temp": 58.73584405008054,
+    "time": 7.6647643806605075
+  },
+  "coded": [
+    0.2911948016693513,
+    0.41619109516512687
+  ],
+  "overall": 0.5371219968047517,
+  "responses": {
+    "yield": 72.01893958837569,
+    "impurity": 10.998580698503826
+  },
+  "individual": {
+    "yield": 0.4807575835350275,
+    "impurity": 0.6000946200997449
+  },
+  "per_level": [
+    {
+      "catalyst": "A",
+      "overall_D": 0.5371219968047517,
+      "yield": 72.01893958837569,
+      "d(yield)": 0.4807575835350275,
+      "impurity": 10.998580698503826,
+      "d(impurity)": 0.6000946200997449,
+      "temp": 58.73584405008054,
+      "time": 7.6647643806605075
+    },
+    {
+      "catalyst": "B",
+      "overall_D": 0.10662770474747314,
+      "yield": 65.2317863199012,
+      "d(yield)": 0.20927145279604814,
+      "impurity": 19.185067963082755,
+      "d(impurity)": 0.05432880246114967,
+      "temp": 20.600651301549917,
+      "time": 2.580098171917648
+    }
+  ],
   "warnings": []
 }
 ```

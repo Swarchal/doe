@@ -376,6 +376,38 @@ Each goal is `ResponseGoal.to_dict()` plus the `response`/`model` needed to re-f
 `FitResult` server-side (the goal serialization deliberately omits the fit). All goals
 share the design's factors, which the library already requires.
 
+`/desirability` searches a continuous coded box too, so a categorical factor is a 422
+`infeasible` there as well. `/categorical-desirability` is its categorical-aware
+counterpart — the same body, but the goals are fitted **once over the whole design** and
+then each combination of the categorical factors' levels is held fixed (folding its
+contrast columns into the continuous surface) and given its own desirability search. The
+best combination is returned; `per_level` carries the full comparison, best `overall_D`
+first, so a UI can show what each level can achieve. `bounds` constrains the continuous
+factors only, and an all-continuous design is accepted (empty `levels`):
+
+```text
+POST /v1/optimize/categorical-desirability
+{ "design": DesignDocument, "goals": [...] }   # exactly /desirability's body
+→ 200
+{ "settings": {"temp": 68.75, "time": 9.0, "catalyst": "B"},  # all factors merged
+  "levels": {"catalyst": "B"},        # winning categorical level(s)
+  "natural": {"temp": 68.75, "time": 9.0}, "coded": [0.625, 0.75],  # continuous only
+  "overall": 0.684,
+  "responses": {"yield": 80.69, "impurity": 16.0},
+  "individual": {"yield": 0.828, "impurity": 0.565},
+  "per_level": [                      # one row per level combination, best first
+    { "catalyst": "B", "overall_D": 0.684, "yield": 80.69, "d(yield)": 0.828,
+      "impurity": 16.0, "d(impurity)": 0.565, "temp": 68.75, "time": 9.0 },
+    ...
+  ],
+  "warnings": [] }
+```
+
+Note this is *not* the same as splitting the runs by level and fitting each subset on its
+own: every conditioned surface still borrows strength from all the runs, which matters
+because subsets of a mixed-factor design are rarely large enough to support a quadratic
+model.
+
 ## Plot data
 
 Headless cores as JSON for frontend rendering (Plotly/Vega); no matplotlib in the

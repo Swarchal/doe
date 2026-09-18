@@ -5,7 +5,8 @@ These land per milestone (``docs/WEBSERVICE_BUILD.md`` §3–§5) and mirror the
 these models only *declare* them for OpenAPI. Milestone 3 (analysis router) adds
 ``FitResponse``, ``AnovaResponse``, ``PredictResponse``, ``DiagnosticsResponse``,
 ``CoverageResponse``. Planned for later milestones: ``StationaryPointResponse``,
-``OptimumResponse``, ``DesirabilityResponse``, ``SurfaceResponse``,
+``OptimumResponse``, ``DesirabilityResponse``, ``CategoricalDesirabilityResponse``,
+``SurfaceResponse``,
 ``InteractionsResponse``, ``TernaryResponse``, ``AliasResponse``.
 """
 
@@ -488,6 +489,64 @@ class DesirabilityResponse(BaseModel):
     overall: float
     responses: dict[str, float]
     individual: dict[str, float]
+    warnings: list[str] = []
+
+
+# --------------------------------------------------------------------------- #
+# /v1/optimize/categorical-desirability
+# --------------------------------------------------------------------------- #
+
+
+class CategoricalDesirabilityResponse(BaseModel):
+    """``POST /v1/optimize/categorical-desirability`` response --
+    ``CategoricalDesirability.to_dict()`` plus ``warnings``.
+
+    The desirability counterpart of ``CategoricalOptimumResponse``: it names the winning
+    ``levels`` and reports the exactly-optimized continuous settings within them
+    (``natural``/``coded`` cover the continuous factors only), alongside ``/desirability``'s
+    usual ``overall``/``responses``/``individual``. ``per_level`` is the comparison table --
+    one record per categorical-level combination, best ``overall_D`` first -- whose keys are
+    the categorical factor names, ``overall_D``, each response label and its ``d(label)``,
+    then the continuous settings; ``dict[str, Any]`` because level labels are strings.
+    """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "settings": {"temp": 68.75, "time": 9.0, "catalyst": "B"},
+                    "levels": {"catalyst": "B"},
+                    "natural": {"temp": 68.75, "time": 9.0},
+                    "coded": [0.625, 0.75],
+                    "overall": 0.6837,
+                    "responses": {"yield": 80.6875, "impurity": 16.0},
+                    "individual": {"yield": 0.8275, "impurity": 0.565},
+                    "per_level": [
+                        {
+                            "catalyst": "B",
+                            "overall_D": 0.6837,
+                            "yield": 80.6875,
+                            "d(yield)": 0.8275,
+                            "impurity": 16.0,
+                            "d(impurity)": 0.565,
+                            "temp": 68.75,
+                            "time": 9.0,
+                        }
+                    ],
+                    "warnings": [],
+                }
+            ]
+        }
+    )
+
+    settings: dict[str, Any]
+    levels: dict[str, str]
+    natural: dict[str, float]
+    coded: list[float]
+    overall: float
+    responses: dict[str, float]
+    individual: dict[str, float]
+    per_level: list[dict[str, Any]]
     warnings: list[str] = []
 
 

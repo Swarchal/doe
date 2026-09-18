@@ -1814,19 +1814,18 @@ let lastBalanceResult = null;
 let lastBalanceGoals = null;
 
 /* Show (or hide) the balance card after a successful analyse(): it only makes sense with
- * 2+ measurements, and only for an all-continuous design — the desirability endpoint
- * searches the coded box, which has no place for a categorical factor (mirrors the
- * `#design-cat-note` gating pattern used for CCD/Box-Behnken). */
+ * 2+ measurements. A categorical factor is fine here — the request is routed to
+ * /optimize/categorical-desirability instead (see runBalance), which chooses the best level
+ * as part of the balance; the note just explains that that is what will happen. */
 function showBalanceCardIfEligible() {
   const card = $("step-balance");
   if (state.responseNames.length < 2) { card.hidden = true; return; }
   card.hidden = false;
-  const categorical = hasCategorical();
-  $("balance-cat-note").hidden = !categorical;
-  $("balance-editor").hidden = categorical;
+  $("balance-cat-note").hidden = !hasCategorical();
   $("balance-results").hidden = true;
+  $("balance-levels-block").hidden = true;
   clearError("error-balance");
-  if (!categorical) renderGoalsTable();
+  renderGoalsTable();
 }
 
 /* Default goal per response: maximize, ramping across the observed min/max of that
@@ -1908,11 +1907,17 @@ async function runBalance() {
   try {
     const goals = readGoals();
     setButtonBusy(button, true, "Searching…", [{ after: 4000, label: "Still working…" }]);
-    const result = await api("/optimize/desirability", { design: state.design, goals });
+    // A categorical factor has no coded axis for the plain desirability search to walk, so
+    // the mixed endpoint is used instead: it conditions on each combination of levels and
+    // returns the winner plus a per-level comparison. Same request body either way.
+    const path = hasCategorical() ? "/optimize/categorical-desirability" : "/optimize/desirability";
+    const result = await api(path, { design: state.design, goals });
     lastBalanceResult = result;
     lastBalanceGoals = goals;
 
-    $("stat-balance-settings").textContent = formatOptimumSettings(result.natural);
+    // The mixed response carries `settings` (continuous values + winning level labels); the
+    // all-continuous one only has `natural`, which is the same thing when nothing is categorical.
+    $("stat-balance-settings").textContent = formatOptimumSettings(result.settings || result.natural);
     $("stat-balance-overall").textContent = fmt(result.overall, 3);
 
     const rows = goals.map((g) => {
@@ -1929,6 +1934,8 @@ async function runBalance() {
       "<th class=\"num\">Desirability</th><th>Goal</th></tr></thead>" +
       `<tbody>${rows.join("")}</tbody>`;
 
+    renderBalancePerLevel(result, goals);
+
     const warnings = result.warnings || [];
     $("balance-warnings").hidden = warnings.length === 0;
     $("balance-warnings").textContent = warnings.join("; ");
@@ -1941,6 +1948,32 @@ async function runBalance() {
   } finally {
     setButtonBusy(button, false);
   }
+}
+
+/* The per-level comparison from /optimize/categorical-desirability: the best compromise each
+ * combination of categorical levels can reach, best first. This is the part the plain
+ * desirability view has no equivalent of, and usually the useful read — it says how much
+ * overall desirability each option buys, not just which one won. Hidden for an all-continuous
+ * design (the response has no `per_level`) and for a single combination (nothing to compare). */
+function renderBalancePerLevel(result, goals) {
+  const block = $("balance-levels-block");
+  const rows = result.per_level || [];
+  const catNames = Object.keys(result.levels || {});
+  if (!catNames.length || rows.length < 2) { block.hidden = true; return; }
+
+  const head = "<thead><tr>" +
+    catNames.map((n) => `<th>${n}</th>`).join("") +
+    "<th class=\"num\">Overall desirability</th>" +
+    goals.map((g) => `<th class="num">${g.response}</th>`).join("") +
+    "</tr></thead>";
+  const body = rows.map((row, i) => {
+    const cells = catNames.map((n) => `<td>${row[n]}</td>`).join("") +
+      `<td class="num">${fmt(row.overall_D, 3)}</td>` +
+      goals.map((g) => `<td class="num">${fmt(row[g.response], 4)}</td>`).join("");
+    return `<tr${i === 0 ? ' class="best-row"' : ""}>${cells}</tr>`;
+  }).join("");
+  $("balance-levels-table").innerHTML = head + `<tbody>${body}</tbody>`;
+  block.hidden = false;
 }
 
 /* Its own (simpler) axis-picker pair — the balance view's optimum is independent of step
@@ -2014,13 +2047,20 @@ async function renderBalanceContour() {
   let y = names.length > 2 ? $("balance-axis-y").value : names[1];
   if (x === y) y = names.find((n) => n !== x);
 
-  // Hold every other factor at the optimum's setting (continuous-only — this view is
-  // gated off for a categorical design entirely).
+  // Hold every non-axis factor: continuous at the balanced optimum, and each categorical at
+  // the level the balance chose (`levels`, absent for an all-continuous design) — so the
+  // slice drawn is the one the balanced optimum actually lives on.
+  const levels = result.levels || {};
   const fixed = {};
   for (const f of state.design.factors) {
     if (f.name === x || f.name === y) continue;
-    fixed[f.name] = result.natural[f.name];
+    fixed[f.name] = f.type === "categorical" ? levels[f.name] : result.natural[f.name];
   }
+  $("balance-map-hint").textContent = Object.keys(levels).length
+    ? `Other factors are held at the best balanced settings above, including ` +
+      Object.entries(levels).map(([n, l]) => `${n} = ${l}`).join(", ") +
+      "; the ★ marks that optimum."
+    : "Other factors are held at the best balanced settings above; the ★ marks that optimum.";
 
   const surfaces = await Promise.all(goals.map((g) => api("/plot-data/surface", {
     design: state.design, response: g.response, model: g.model, x, y, resolution: 40,

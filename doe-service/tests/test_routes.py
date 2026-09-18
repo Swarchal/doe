@@ -42,6 +42,7 @@ EXPECTED_V1_ROUTES = {
     ("POST", "/v1/optimize/optimum"),
     ("POST", "/v1/optimize/categorical-optimum"),
     ("POST", "/v1/optimize/desirability"),
+    ("POST", "/v1/optimize/categorical-desirability"),
     # plot data
     ("POST", "/v1/plot-data/surface"),
     ("POST", "/v1/plot-data/interactions"),

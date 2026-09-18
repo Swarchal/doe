@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import itertools
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal, cast
 
 import numpy as np
@@ -827,36 +827,47 @@ class DesirabilityResult:
         )
 
 
-def desirability(
-    goals: Sequence[ResponseGoal], *, bounds: Bounds = (-1.0, 1.0)
-) -> DesirabilityResult:
-    """Maximise the geometric-mean desirability of several responses over the coded box.
+def _check_goals(goals: Sequence[ResponseGoal]) -> None:
+    """Validate a goal list shared by :func:`desirability` and :func:`categorical_desirability`.
 
-    Each response is predicted from its own :class:`FitResult` (all must share the same
-    factors). The overall desirability is ``D = (prod d_i)^(1/m)``, maximised with a global
-    optimiser because the per-response desirabilities are non-smooth (flat where saturated).
-
-    ``bounds`` accepts the same three forms as :func:`optimum`: a single coded
-    ``(low, high)`` pair, a coded per-factor sequence, or a ``{factor_name: (low, high)}``
-    mapping in **natural** units with unnamed factors defaulting to their full tested range.
-
-    Examples:
-        >>> desirability(goals, bounds={"temperature": (45, 70)})  # doctest: +SKIP
+    Every response is optimized over one shared coded box, so the goals must agree not just on
+    factor *names* but on each factor's definition (bounds/levels) -- otherwise a coded point
+    would decode to different natural settings per response. Frozen factor dataclasses compare
+    by value, so tuple equality checks names, order, and coding together.
     """
     if not goals:
         raise ValueError("need at least one response goal")
-
-    # Every response is optimized over one shared coded box, so the goals must agree not just on
-    # factor *names* but on each factor's definition (bounds/levels) -- otherwise a coded point
-    # would decode to different natural settings per response. Frozen factor dataclasses compare
-    # by value, so tuple equality checks names, order, and coding together.
     reference = tuple(goals[0].result.factors)
     for goal in goals[1:]:
         if tuple(goal.result.factors) != reference:
             raise ValueError("all responses must be fitted over the same factors")
 
-    forms = [_quadratic_form(goal.result) for goal in goals]
-    box = _box(bounds, goals[0].result.factors)
+
+def _goal_labels(goals: Sequence[ResponseGoal]) -> list[str]:
+    """Response label per goal: its fit's ``response_name``, else a positional fallback.
+
+    Each goal's own fit knows the response it predicts (``fit_ols(design, "yield_pct", ...)``
+    stashes that column name); a goal fitted from a bare array has no such name, so it falls
+    back to a positional placeholder rather than leaving the output anonymous.
+    """
+    return [
+        goal.result.response_name if goal.result.response_name is not None else f"response_{i + 1}"
+        for i, goal in enumerate(goals)
+    ]
+
+
+def _desirability_search(
+    goals: Sequence[ResponseGoal],
+    forms: Sequence[tuple[float, np.ndarray, np.ndarray]],
+    box: Sequence[tuple[float, float]],
+) -> tuple[np.ndarray, pd.Series, pd.Series, float]:
+    """Maximise the geometric-mean desirability of ``forms`` over ``box``.
+
+    The shared engine behind :func:`desirability` (quadratic forms over every factor) and
+    :func:`categorical_desirability` (forms folded at one categorical-level combination):
+    both differ only in how the ``(b0, b, B)`` forms and the box were built. Returns
+    ``(coded point, predicted responses, individual desirabilities, overall D)``.
+    """
     m = len(goals)
 
     def neg_overall(x: np.ndarray) -> float:
@@ -873,19 +884,36 @@ def desirability(
     res = sciopt.differential_evolution(neg_overall, box, rng=0, tol=1e-10, polish=True)
     x_opt = np.clip(res.x, [lo for lo, _ in box], [hi for _, hi in box])
 
-    # Each goal's own fit knows the response it predicts (fit_ols(design, "yield_pct", ...)
-    # stashes that column name); a goal fitted from a bare array has no such name, so it falls
-    # back to a positional placeholder rather than leaving the output anonymous.
-    labels = [
-        goal.result.response_name if goal.result.response_name is not None else f"response_{i + 1}"
-        for i, goal in enumerate(goals)
-    ]
+    labels = _goal_labels(goals)
     values = np.array([_predict(*form, x_opt) for form in forms])
     responses = pd.Series(values, index=labels)
     individual = pd.Series(
         [goal.desirability(v) for goal, v in zip(goals, values, strict=True)], index=labels
     )
-    overall = float(-neg_overall(x_opt))
+    return x_opt, responses, individual, float(-neg_overall(x_opt))
+
+
+def desirability(
+    goals: Sequence[ResponseGoal], *, bounds: Bounds = (-1.0, 1.0)
+) -> DesirabilityResult:
+    """Maximise the geometric-mean desirability of several responses over the coded box.
+
+    Each response is predicted from its own :class:`FitResult` (all must share the same
+    factors). The overall desirability is ``D = (prod d_i)^(1/m)``, maximised with a global
+    optimiser because the per-response desirabilities are non-smooth (flat where saturated).
+
+    ``bounds`` accepts the same three forms as :func:`optimum`: a single coded
+    ``(low, high)`` pair, a coded per-factor sequence, or a ``{factor_name: (low, high)}``
+    mapping in **natural** units with unnamed factors defaulting to their full tested range.
+
+    Examples:
+        >>> desirability(goals, bounds={"temperature": (45, 70)})  # doctest: +SKIP
+    """
+    _check_goals(goals)
+    forms = [_quadratic_form(goal.result) for goal in goals]
+    box = _box(bounds, goals[0].result.factors)
+
+    x_opt, responses, individual, overall = _desirability_search(goals, forms, box)
     return DesirabilityResult(
         coded=x_opt,
         natural=_decode(goals[0].result.factors, x_opt),
@@ -893,3 +921,168 @@ def desirability(
         individual=individual,
         overall=overall,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Mixed continuous/categorical desirability
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class CategoricalDesirability:
+    """Best multi-response compromise of a mixed continuous/categorical model.
+
+    The desirability analogue of :class:`CategoricalOptimum`: it names the winning *level* of
+    each categorical factor (:attr:`levels`) and the exactly-optimized continuous settings
+    within that combination, alongside the usual :class:`DesirabilityResult` fields. Every
+    level's surface comes from the *same* fit over *all* the runs, so no level is judged on a
+    subset of the data (see :func:`categorical_desirability`).
+
+    :attr:`per_level` is the full comparison -- one row per categorical-level combination, the
+    best compromise achievable within it -- which is usually what you want to look at: it says
+    how much overall desirability each level can buy, not just which one won.
+    """
+
+    #: Chosen level of each categorical factor, ``{factor_name: level}``.
+    levels: dict[str, str]
+    #: Exactly-optimized continuous settings (natural units), ``{factor_name: value}``.
+    natural: dict[str, float]
+    #: The continuous factors' coded coordinates, in continuous-factor order.
+    coded: np.ndarray
+    #: Predicted value of each response at the compromise, indexed by response label.
+    responses: pd.Series
+    #: Each response's individual desirability there, indexed the same way.
+    individual: pd.Series
+    #: The overall (geometric-mean) desirability ``D``.
+    overall: float
+    #: One row per categorical-level combination, best-first: its levels, ``overall_D``,
+    #: each response's predicted value and desirability, and the continuous settings.
+    per_level: pd.DataFrame
+
+    def __repr__(self) -> str:
+        levels = ", ".join(f"{name}={level!r}" for name, level in self.levels.items())
+        return (
+            f"CategoricalDesirability(D={self.overall:.4g}: {levels} | "
+            f"{_format_point(self.natural)} | {_format_point(self.responses)})"
+        )
+
+    def settings(self) -> dict[str, Any]:
+        """All factors in one mapping: continuous values merged with categorical levels."""
+        return {**self.natural, **self.levels}
+
+    def to_frame(self) -> pd.DataFrame:
+        """One-row frame: levels, natural settings, one column per response, ``overall_D``."""
+        tail = list(zip(self.responses.index, self.responses.to_numpy(), strict=True))
+        tail.append(("overall_D", self.overall))
+        frame = _to_frame(self.natural, tail)
+        for name, level in reversed(self.levels.items()):
+            frame.insert(0, name, [level])
+        return frame
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to the ``POST /v1/optimize/categorical-desirability`` response body.
+
+        ``per_level`` becomes a list of row records (best-first), the JSON shape of the
+        comparison table.
+        """
+        return cast(
+            "dict[str, Any]",
+            json_safe(
+                {
+                    "settings": self.settings(),
+                    "levels": self.levels,
+                    "natural": self.natural,
+                    "coded": self.coded,
+                    "overall": self.overall,
+                    "responses": self.responses.to_dict(),
+                    "individual": self.individual.to_dict(),
+                    "per_level": self.per_level.to_dict(orient="records"),
+                }
+            ),
+        )
+
+
+def categorical_desirability(
+    goals: Sequence[ResponseGoal], *, bounds: Bounds = (-1.0, 1.0)
+) -> CategoricalDesirability:
+    """Multi-response desirability for a fit containing categorical factors.
+
+    :func:`desirability` maximises a smooth surface over the coded box, so it rejects a
+    categorical factor -- there is no axis to search. This does for desirability what
+    :func:`categorical_optimum` does for a single response: with a categorical factor held at
+    one level its deviation-coded contrast columns are *constants*, which fold into the
+    intercept and the continuous linear coefficients (see ``_fold_quadratic_form``), leaving a
+    purely continuous quadratic surface per response. Every combination of the categorical
+    factors' levels gets that treatment and its own desirability search; the best combination
+    wins, and :attr:`~CategoricalDesirability.per_level` keeps the rest for comparison.
+
+    Note this is *not* the same as splitting the runs by level and fitting each subset
+    separately: the goals' fits are made once over the whole design, so each conditioned
+    surface still borrows strength from every run (and subsets of a mixed-factor design are
+    rarely large enough to support a quadratic model on their own).
+
+    ``bounds`` accepts the same forms as :func:`optimum` and constrains the *continuous*
+    factors only; a ``{factor_name: (low, high)}`` mapping may not name a categorical factor
+    (enumerating its levels is the search). An all-continuous fit is accepted too -- it is
+    then just :func:`desirability` with empty ``levels``.
+
+    Examples:
+        >>> best = categorical_desirability(goals)  # doctest: +SKIP
+        >>> best.levels, best.overall  # doctest: +SKIP
+        ({'catalyst': 'B'}, 0.83)
+    """
+    _check_goals(goals)
+    factors = goals[0].result.factors
+    cont_names = [n for n in factors.names if isinstance(factors[n], ContinuousFactor)]
+    cat_names = [n for n in factors.names if isinstance(factors[n], CategoricalFactor)]
+    other = [n for n in factors.names if n not in cont_names and n not in cat_names]
+    if other:
+        raise TypeError(
+            "categorical_desirability handles continuous and categorical factors only; got "
+            f"factor(s) {other} of another kind (e.g. mixture) -- for a mixture fit read the "
+            "best blend off plotting.ternary_contour instead"
+        )
+    if not cont_names:
+        raise ValueError(
+            "categorical_desirability needs at least one continuous factor to search; "
+            "an all-categorical fit has no surface to optimize -- compare the levels' "
+            "fitted responses directly"
+        )
+
+    cont_factors = FactorSet([factors[n] for n in cont_names])
+    box = _box(_continuous_bounds(bounds, cont_names), cont_factors)
+    labels = _goal_labels(goals)
+
+    best: CategoricalDesirability | None = None
+    rows: list[dict[str, Any]] = []
+    for combo in itertools.product(*(list(factors[n].levels) for n in cat_names)):  # type: ignore[union-attr]
+        fixed_levels: dict[str, str] = {
+            name: str(level) for name, level in zip(cat_names, combo, strict=True)
+        }
+        forms = [_fold_quadratic_form(goal.result, fixed_levels, cont_names) for goal in goals]
+        x_opt, responses, individual, overall = _desirability_search(goals, forms, box)
+        natural = _decode(cont_factors, x_opt)
+
+        row: dict[str, Any] = dict(fixed_levels)
+        row["overall_D"] = overall
+        triples = zip(labels, responses.to_numpy(), individual.to_numpy(), strict=True)
+        for label, value, d in triples:
+            row[label] = float(value)
+            row[f"d({label})"] = float(d)
+        row.update(natural)
+        rows.append(row)
+
+        if best is None or overall > best.overall:
+            best = CategoricalDesirability(
+                levels=fixed_levels,
+                natural=natural,
+                coded=x_opt,
+                responses=responses,
+                individual=individual,
+                overall=overall,
+                per_level=pd.DataFrame(),  # filled in below, once every combination is scored
+            )
+
+    assert best is not None  # at least one combination always exists (none = the empty product)
+    per_level = pd.DataFrame(rows).sort_values("overall_D", ascending=False, ignore_index=True)
+    return replace(best, per_level=per_level)
