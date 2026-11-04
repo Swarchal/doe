@@ -86,6 +86,7 @@ from .generators.screening import definitive_screening
 from .generators.spacefilling import halton, latin_hypercube, sobol
 from .generators.splitplot import split_plot
 from .interactive import to_html
+from .report import analysis_report
 from .serialization import ValidationError, json_safe, validate_design_dict
 
 __all__ = [
@@ -110,6 +111,7 @@ __all__ = [
     "StationaryPoint",
     "ValidationError",
     "adjusted_r2",
+    "analysis_report",
     "anova_records",
     "anova_table",
     "augment",

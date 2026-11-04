@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from pydantic import BaseModel, Field
+
 from doe_service.schemas.common import ModelSpec
 from doe_service.schemas.design import DesignRequest
 
@@ -59,3 +61,41 @@ class CoverageRequest(DesignRequest):
     """``POST /v1/analysis/coverage`` parameters."""
 
     method: Literal["CD", "WD", "MD", "L2-star"] = "CD"
+
+
+#: Caps on the free-form report ``sections`` (the body-size cap bounds them too, but a
+#: section count/row count cap keeps a pathological request from rendering for ages).
+MAX_REPORT_SECTIONS = 20
+MAX_REPORT_SECTION_ROWS = 1000
+
+
+class ReportResponseSpec(BaseModel):
+    """One response to fit and report: ``{response, model?}`` (model defaults as ``/fit``)."""
+
+    response: str
+    model: ModelSpec | None = None
+
+
+class ReportSection(BaseModel):
+    """A caller-supplied extra section: a heading plus optional prose and/or a table.
+
+    ``rows`` are table records (``[{column: value}, ...]``), rendered in order -- typically
+    results the client already computed and wants on the record (best settings, a
+    desirability balance, a per-level comparison).
+    """
+
+    heading: str = Field(min_length=1, max_length=200)
+    text: str | None = Field(default=None, max_length=20_000)
+    rows: list[dict[str, Any]] | None = Field(default=None, max_length=MAX_REPORT_SECTION_ROWS)
+
+
+class ReportRequest(DesignRequest):
+    """``POST /v1/analysis/report`` -- render fits of one or more responses as HTML."""
+
+    responses: list[ReportResponseSpec] = Field(min_length=1)
+    title: str | None = Field(default=None, max_length=200)
+    description: str | None = Field(default=None, max_length=20_000)
+    sections: list[ReportSection] = Field(default_factory=list, max_length=MAX_REPORT_SECTIONS)
+    figures: bool = True
+    image_format: Literal["png", "svg"] = "png"
+    confidence: float = Field(default=0.95, gt=0.0, lt=1.0)

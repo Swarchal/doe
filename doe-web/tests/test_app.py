@@ -808,3 +808,77 @@ def test_interaction_plot_data_shows_crossing_lines(client: TestClient) -> None:
     # A pure interaction crosses: the gap between the two lines has opposite signs at the two
     # ends of the x sweep (parallel lines -- no interaction -- would keep the same sign).
     assert gap_first * gap_last < 0
+
+
+def test_export_report_flow_returns_downloadable_html(client: TestClient) -> None:
+    """Replays the "Export report (HTML)" button: two measurements on a CCD, the optimum and
+    balance results the page computed sent back as ``sections``, one HTML document out."""
+    factors = [
+        {"type": "continuous", "name": "temp", "low": 20, "high": 80, "units": "C"},
+        {"type": "continuous", "name": "time", "low": 0, "high": 10, "units": None},
+    ]
+    design = client.post("/api/v1/designs/central-composite", json={"factors": factors}).json()[
+        "design"
+    ]
+    n = len(design["runs"])
+    yields = [50 + (i % 5) * 1.3 + (i % 3) * 0.7 for i in range(n)]
+    purity = [90 - (i % 4) * 0.9 + (i % 2) * 0.4 for i in range(n)]
+    design = client.post(
+        "/api/v1/designs/responses",
+        json={"design": design, "responses": {"yield": yields, "purity": purity}},
+    ).json()["design"]
+    optimum = client.post(
+        "/api/v1/optimize/optimum",
+        json={"design": design, "response": "yield", "model": "quadratic", "maximize": True},
+    ).json()
+
+    report = client.post(
+        "/api/v1/analysis/report",
+        json={
+            "design": design,
+            "responses": [
+                {"response": "yield", "model": "quadratic"},
+                {"response": "purity", "model": "quadratic"},
+            ],
+            "title": "plan — analysis report",
+            "sections": [
+                {
+                    "heading": "Best predicted settings (yield)",
+                    "text": "Settings predicted to maximize yield within the tested range.",
+                    "rows": [{**optimum["natural"], "predicted yield": optimum["response"]}],
+                },
+                {
+                    "heading": "Balance goals",
+                    "rows": [
+                        {"response": "yield", "goal": "max", "low": 50, "high": 56},
+                        {"response": "purity", "goal": "target 89", "low": 87, "high": 91},
+                    ],
+                },
+            ],
+        },
+    )
+    assert report.status_code == 200, report.text
+    assert report.headers["content-type"].startswith("text/html")
+    html = report.text
+    assert "<title>plan — analysis report</title>" in html
+    assert 'id="yield"' in html and 'id="purity"' in html
+    assert "Best predicted settings (yield)" in html and "target 89" in html
+    assert "data:image/png;base64," in html
+
+
+def test_spa_wires_the_export_report_button(client: TestClient) -> None:
+    page = client.get("/").text
+    assert 'id="export-report"' in page
+    # its own final card, after the step-4 balance card
+    assert page.index('id="step-balance"') < page.index('id="step-export"') < page.index(
+        'id="export-report"'
+    )
+    js = client.get("/app.js").text
+    assert '"/api/v1/analysis/report"' in js
+    assert 'addEventListener("click", exportReport)' in js
+
+
+def test_static_ui_is_served_with_revalidation(client: TestClient) -> None:
+    """The UI files must not be heuristically cached, or a changed page can go unseen."""
+    for path in ("/", "/app.js", "/style.css"):
+        assert client.get(path).headers["cache-control"] == "no-cache", path

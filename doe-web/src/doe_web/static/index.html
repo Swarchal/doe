@@ -262,6 +262,18 @@
     </div>
     <div class="error" id="error-balance" hidden></div>
   </section>
+
+  <!-- Final step: export everything above as one self-contained HTML report. Shown once the
+       results are analysed; numbered 4 or 5 depending on whether the balance step is shown
+       (see renderExportCard() in app.js). -->
+  <section id="step-export" class="card" hidden>
+    <h2><span class="step-no" id="export-step-no">5</span> Export a report</h2>
+    <p class="hint">Download one self-contained HTML file with the analysis on this page — it
+      opens offline, so it's easy to email, archive, or attach to a lab notebook.</p>
+    <ul class="export-contents" id="export-contents"></ul>
+    <button type="button" class="primary" id="export-report">Export report (HTML)</button>
+    <div class="error" id="error-export" hidden></div>
+  </section>
 </main>
 
 <footer>

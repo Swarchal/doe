@@ -9,7 +9,9 @@ check ``response`` names a real run column (else 422 ``validation_error`` listin
 available columns, via :func:`_check_response_column`) -> resolve the model spec ->
 ``fit_ols`` inside :func:`~doe_service.convert.captured_warnings`, routed through
 :func:`~doe_service.convert.call_library` so a library ``ValueError`` becomes 422
-``infeasible``. ``/diagnostics`` and ``/coverage`` take no ``response`` and skip the fit
+``infeasible``. ``/report`` runs the same prologue once per listed response, then hands the fits to
+``doe.report.analysis_report`` and returns ``text/html`` rather than JSON.
+``/diagnostics`` and ``/coverage`` take no ``response`` and skip the fit
 part of the prologue entirely -- they judge the design itself, before any experiment runs.
 """
 
@@ -20,6 +22,7 @@ from typing import Annotated, Any, cast
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, Depends
+from fastapi.responses import HTMLResponse
 
 from doe import Design, Efficiency, FitResult, ValidationError
 from doe import anova_records as _anova_records
@@ -35,6 +38,7 @@ from doe import vif as _vif
 from doe.analysis.fit import ModelSpec as _LibraryModelSpec
 from doe.analysis.model import ModelMatrix
 from doe.analysis.model import build_model_matrix as _build_model_matrix
+from doe.report import analysis_report as _analysis_report
 from doe_service.convert import (
     ModelSpecLike,
     call_library,
@@ -45,7 +49,7 @@ from doe_service.convert import (
 )
 from doe_service.convert import region_array as _region_array
 from doe_service.deps import app_limits
-from doe_service.limits import DEFAULT_LIMITS, Limits
+from doe_service.limits import DEFAULT_LIMITS, LimitExceeded, Limits
 from doe_service.schemas.analysis import (
     AnalysisFitRequest,
     AnovaRequest,
@@ -54,6 +58,7 @@ from doe_service.schemas.analysis import (
     FitGlsRequest,
     FitRequest,
     PredictRequest,
+    ReportRequest,
 )
 from doe_service.schemas.results import (
     AnovaResponse,
@@ -345,3 +350,69 @@ def coverage(
     with captured_warnings():
         disc, mm_dist = call_library(run)
     return CoverageResponse(discrepancy=disc, maximin_distance=mm_dist)
+
+
+# --------------------------------------------------------------------------- #
+# /report
+# --------------------------------------------------------------------------- #
+
+
+@router.post(
+    "/report",
+    response_class=HTMLResponse,
+    responses={200: {"content": {"text/html": {}}, "description": "Self-contained HTML report"}},
+)
+def report(body: ReportRequest, limits: Annotated[Limits, Depends(app_limits)]) -> HTMLResponse:
+    """Wraps ``doe.report.analysis_report`` -- a self-contained HTML report.
+
+    Fits every listed response (same model resolution and default as ``/fit``), renders
+    them with embedded figures, and appends the caller's ``sections`` (prose and/or a
+    table of records each) after the fits. Fit warnings are listed in a trailing
+    ``Warnings`` section rather than an envelope, since the body is HTML. The response
+    count shares the desirability goal cap (each is a re-fit, plus its figures).
+    """
+    if len(body.responses) > limits.max_goals:
+        raise LimitExceeded(
+            f"too many report responses: {len(body.responses)} exceeds the cap of "
+            f"{limits.max_goals}"
+        )
+    design = design_from_document(body.design.model_dump(), limits=limits)
+    names = [spec.response for spec in body.responses]
+    if len(set(names)) != len(names):
+        raise ValidationError([f"duplicate response in report: {names}"])
+    for name in names:
+        _check_response_column(design, name)
+
+    warns: list[str] = []
+    fits: dict[str, FitResult] = {}
+    for spec in body.responses:
+
+        def run(spec_: Any = spec) -> FitResult:
+            return _resolved_fit(design, spec_.response, spec_.model, default=_DEFAULT_FIT_MODEL)
+
+        with captured_warnings() as fit_warns:
+            fits[spec.response] = call_library(run)
+        warns.extend(f"{spec.response}: {w}" for w in fit_warns)
+
+    extras: dict[str, object] = {}
+    for section in body.sections:
+        parts: list[object] = []
+        if section.text:
+            parts.append(section.text)
+        if section.rows:
+            parts.append(pd.DataFrame.from_records(section.rows))
+        extras[section.heading] = parts
+    if warns:
+        extras["Warnings"] = "\n\n".join(warns)
+
+    html = call_library(
+        _analysis_report,
+        fits,
+        title=body.title,
+        description=body.description,
+        extras=extras,
+        figures=body.figures,
+        image_format=body.image_format,
+        confidence=body.confidence,
+    )
+    return HTMLResponse(content=html)

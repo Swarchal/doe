@@ -498,6 +498,7 @@ async function generatePlan() {
     $("step-plan").hidden = false;
     $("step-results").hidden = true;
     $("step-balance").hidden = true;
+    $("step-export").hidden = true;
     $("step-plan").scrollIntoView({ behavior: "smooth" });
   } catch (err) {
     showError("error-factors", err);
@@ -1055,6 +1056,7 @@ async function loadDesign(file) {
     $("step-plan").hidden = false;
     $("step-results").hidden = true;
     $("step-balance").hidden = true;
+    $("step-export").hidden = true;
     $("step-plan").scrollIntoView({ behavior: "smooth" });
   } catch (err) {
     showError("error-factors", err);
@@ -1169,6 +1171,7 @@ async function analyze() {
       throw err;
     }
     showBalanceCardIfEligible();
+    renderExportCard();
     results.scrollIntoView({ behavior: "smooth" });
   } catch (err) {
     showError("error-plan", err);
@@ -1218,7 +1221,13 @@ function formatOptimumSettings(natural) {
     .join(", ");
 }
 
+/* The best predicted settings currently on screen (response-surface view only), kept so the
+ * exported report records exactly what the page showed. Cleared on each render, so a
+ * screening view (which has no optimum) never exports a stale one. */
+let lastOptimum = null;
+
 async function renderResults() {
+  lastOptimum = null;
   const fit = await api("/analysis/fit", fitRequest());
 
   // The R² tile and effects table are shown in both views, so fill them once up front.
@@ -1257,6 +1266,7 @@ async function renderOptimizeView(fit) {
     ? await bestSettingsCategorical(maximize)
     : await api("/optimize/optimum", { ...fitRequest(), maximize });
 
+  lastOptimum = { response: state.responseName, maximize, opt };
   $("optimum-label").textContent = maximize ? "Best predicted settings (max)" : "Best predicted settings (min)";
   $("stat-optimum").textContent = formatOptimumSettings(opt.natural);
   $("stat-optimum-y").textContent =
@@ -1941,6 +1951,7 @@ async function runBalance() {
     $("balance-warnings").textContent = warnings.join("; ");
 
     $("balance-results").hidden = false;
+    renderExportCard();
     setupBalanceAxisPickers();
     await renderBalanceContour();
   } catch (err) {
@@ -2129,6 +2140,117 @@ $("load-plan-file").addEventListener("change", (e) => {
   if (file) loadDesign(file);
   e.target.value = ""; // reset so re-selecting the same file fires 'change' again
 });
+/* ---------- Export: self-contained HTML report ---------- */
+
+/* Report sections for the results the page computed itself (the service re-fits every
+ * measurement, but the best settings and the balance depend on choices made on the page —
+ * "higher is better", the goals table — so they're sent along as plain tables). */
+function reportSections() {
+  const sections = [];
+  if (lastOptimum && !isScreeningPlan()) {
+    const { response, maximize, opt } = lastOptimum;
+    sections.push({
+      heading: `Best predicted settings (${response})`,
+      text: `Settings predicted to ${maximize ? "maximize" : "minimize"} ${response} within ` +
+        "the tested range" + (opt.at_bound ? " — the optimum lies at the edge of that range, " +
+          "so a better setting may exist outside it." : "."),
+      rows: [{ ...opt.natural, [`predicted ${response}`]: opt.response }],
+    });
+  }
+  // Only a balance that is on screen: re-analysing hides (and so invalidates) the old one.
+  if (lastBalanceResult && !$("step-balance").hidden && !$("balance-results").hidden) {
+    const result = lastBalanceResult;
+    const goals = lastBalanceGoals;
+    sections.push({
+      heading: "Best balance of all measurements",
+      text: `Derringer–Suich desirability: overall D = ${fmt(result.overall, 3)} ` +
+        "(0 = fails a goal, 1 = ideal) at the settings below.",
+      rows: [{ ...(result.settings || result.natural), overall_D: result.overall }],
+    });
+    sections.push({
+      heading: "Balance goals",
+      rows: goals.map((g) => ({
+        response: g.response,
+        goal: g.goal === "target" ? `target ${g.target}` : g.goal,
+        low: g.low,
+        high: g.high,
+        weight: g.weight ?? 1,
+        predicted: result.responses[g.response],
+        desirability: result.individual[g.response],
+      })),
+    });
+    const perLevel = result.per_level || [];
+    if (Object.keys(result.levels || {}).length && perLevel.length > 1) {
+      sections.push({ heading: "How the options compare", rows: perLevel });
+    }
+  }
+  return sections;
+}
+
+/* Show the export card (the last step) and list what the report will contain, so it's clear
+ * whether the step-4 balance will be included before clicking. Numbered after the balance
+ * card when that is shown, else straight after step 3. */
+function renderExportCard() {
+  const balanceShown = !$("step-balance").hidden;
+  $("export-step-no").textContent = balanceShown ? "5" : "4";
+  const names = state.responseNames;
+  const items = [
+    `Model fit, effects, ANOVA and diagnostic plots for ${names.length > 1 ? "each of " : ""}` +
+      names.map((n) => `<strong>${escapeAttr(n)}</strong>`).join(", "),
+  ];
+  if (lastOptimum && !isScreeningPlan()) {
+    items.push(`Best predicted settings for <strong>${escapeAttr(lastOptimum.response)}</strong> ` +
+      `(${lastOptimum.maximize ? "maximized" : "minimized"})`);
+  }
+  if (balanceShown) {
+    items.push(!$("balance-results").hidden
+      ? "The best balance of all measurements and the goals behind it" +
+        (hasCategorical() ? ", plus how the options compare" : "")
+      : '<span class="pending-note">Balance of all measurements — run step 4 first to include it</span>');
+  }
+  items.push("The run sheet with your measurements");
+  $("export-contents").innerHTML = items
+    .map((html) => `<li${html.includes("pending-note") ? ' class="pending"' : ""}>${html}</li>`)
+    .join("");
+  $("step-export").hidden = false;
+}
+
+async function exportReport() {
+  clearError("error-export");
+  const button = $("export-report");
+  try {
+    if (!state.design) throw new Error("Analyse the results first.");
+    setButtonBusy(button, true, "Building report…", [{ after: 4000, label: "Drawing figures…" }]);
+    const { model } = fitRequest();
+    const name = state.design.name || "design";
+    const res = await fetch("/api/v1/analysis/report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        design: state.design,
+        responses: state.responseNames.map((response) => ({ response, model })),
+        title: `${name} — analysis report`,
+        sections: reportSections(),
+      }),
+    });
+    if (!res.ok) {
+      let data = null;
+      try { data = await res.json(); } catch { /* non-JSON error body */ }
+      throw new Error(apiErrorMessage(data, res.status));
+    }
+    const blob = new Blob([await res.text()], { type: "text/html" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${name}-report.html`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch (err) {
+    showError("error-export", err);
+  } finally {
+    setButtonBusy(button, false);
+  }
+}
+
 $("download-csv").addEventListener("click", downloadCsv);
 $("import-results").addEventListener("click", () => $("import-results-file").click());
 $("import-results-file").addEventListener("change", (e) => {
@@ -2141,7 +2263,9 @@ $("add-response").addEventListener("click", addResponse);
 $("save-plan").addEventListener("click", saveDesign);
 $("demo-fill").addEventListener("click", demoFill);
 $("analyze").addEventListener("click", analyze);
-const rerender = () => renderResults().catch((err) => showError("error-results", err));
+const rerender = () => renderResults()
+  .then(renderExportCard)
+  .catch((err) => showError("error-results", err));
 $("maximize").addEventListener("change", rerender);
 $("axis-x").addEventListener("change", rerender);
 $("axis-y").addEventListener("change", rerender);
@@ -2150,6 +2274,7 @@ $("results-response").addEventListener("change", (e) => {
   rerender();
 });
 $("run-balance").addEventListener("click", runBalance);
+$("export-report").addEventListener("click", exportReport);
 $("interaction-pick").addEventListener("change", (e) => {
   const pair = interactionContext.pairs.find((p) => p.term === e.target.value);
   renderInteractionPlot(pair).catch((err) => showError("error-results", err));

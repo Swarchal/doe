@@ -16,6 +16,8 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import Response
+from starlette.types import Scope
 
 from doe_service.limits import DEFAULT_LIMITS
 from doe_service.main import create_app as create_api_app
@@ -38,6 +40,21 @@ WEB_LIMITS = replace(
 )
 
 
+class RevalidatingStaticFiles(StaticFiles):
+    """Static files sent with ``Cache-Control: no-cache``.
+
+    Without a ``Cache-Control`` header browsers apply heuristic caching and may keep serving
+    an old ``index.html``/``app.js`` after the UI changes (e.g. a new button never appears).
+    ``no-cache`` still lets the browser keep a copy, but makes it revalidate with the ETag
+    on every load -- a cheap 304 when nothing changed, the new file when something did.
+    """
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 def create_app() -> FastAPI:
     """Build the combined app: doe-service under ``/api``, the SPA at ``/``.
 
@@ -48,7 +65,7 @@ def create_app() -> FastAPI:
     """
     app = FastAPI(title="doe-web", version=__version__)
     app.mount("/api", create_api_app(limits=WEB_LIMITS))
-    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+    app.mount("/", RevalidatingStaticFiles(directory=STATIC_DIR, html=True), name="static")
     return app
 
 

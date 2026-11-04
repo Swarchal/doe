@@ -56,7 +56,10 @@ parameter caps enforced across every endpoint and a golden request/response cont
 test per spec example (`docs/WEBSERVICE_BUILD.md`, all six milestones done). The Phase 5
 generators/analysis have service endpoints too: `POST /v1/designs/split-plot`,
 `/randomized-complete-block`, `/latin-square`, `/blocked-factorial`, and
-`POST /v1/analysis/fit-gls` (the REML/GLS split-plot fit). `POST
+`POST /v1/analysis/fit-gls` (the REML/GLS split-plot fit). `POST /v1/analysis/report` returns `text/html` — the
+`doe.report.analysis_report` of each listed response, plus client-supplied `sections` — and is
+the only non-JSON route (doe-service therefore depends on `doe[plotting]`); doe-web's
+**Export report (HTML)** button posts to it. `POST
 /v1/optimize/categorical-optimum` optimizes the continuous factors exactly within each
 combination of categorical levels (the mixed-factor optimum `/optimize/optimum` can't
 search), wrapping the library's `categorical_optimum`; `POST
@@ -219,6 +222,11 @@ consumes one.
 - `interactive.py` — `to_html` renders a `Design` to a self-contained, sortable HTML run sheet
   (natural + coded columns on a diverging colour scale, tinted point-type column); adds no new
   Python dependencies.
+- `report.py` — `analysis_report` (also `FitResult.report`) renders one or more fits to a single
+  self-contained HTML report: stat cards, coefficient + CI table, ANOVA/lack-of-fit, auto-chosen
+  diagnostic figures embedded as base64 PNG or inline SVG (drawn on pyplot-free `Figure`s, so no
+  global matplotlib state), the design run sheet, and arbitrary `extras` (figures, frames,
+  `to_frame()` results, notes). Inapplicable stats/plots are skipped with a note, not raised.
 
 Tests anchor correctness against known designs/effects (e.g. a 2^(4-1) defining relation,
 recovering injected coded-unit effects exactly, textbook CCD/Box-Behnken run counts). Keep

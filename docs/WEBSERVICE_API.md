@@ -310,6 +310,27 @@ POST /v1/analysis/coverage
 → 200 { "discrepancy": 0.0457, "maximin_distance": 0.0 }
 ```
 
+`POST /v1/analysis/report` is the one endpoint that answers with a document rather than
+JSON: it fits each listed response and returns a self-contained `text/html` report
+(`doe.report.analysis_report`) — fit statistics, coefficients with CIs, ANOVA and
+lack-of-fit, embedded diagnostic figures, and the run sheet.
+
+```text
+POST /v1/analysis/report
+{ "design": DesignDocument,
+  "responses": [{"response": "yield", "model": "quadratic"}, {"response": "purity"}],
+  "title": "Bench study"?, "description": "..."?,
+  "sections": [{"heading": "Best settings", "text": "..."?, "rows": [{...}]?}]?,
+  "figures": true, "image_format": "png", "confidence": 0.95 }
+→ 200 text/html
+```
+
+Each `model` defaults as in `/fit`. `sections` lets a client put results it already
+holds on the record (best settings, a desirability balance) as prose and/or a table of
+records, appended after the fits. Fit warnings appear as a `Warnings` section rather than a
+`warnings` field. The response count shares the desirability goal cap (8); a duplicate or
+unknown response is a 422 `validation_error`. Up to 20 sections of up to 1000 rows each.
+
 ## Optimization
 
 The `/optimize/*` examples below reuse the same `/analysis/fit` golden design (its
@@ -464,6 +485,7 @@ defaults:
 | `region` / candidate rows | 100 000 | exchange sweep cost |
 | grid `resolution` (surface/ternary) | 200 | response payload |
 | desirability goals | 8 | `differential_evolution` dimensionality is fixed, but each goal is a re-fit |
+| report responses | 8 (shares the goal cap) | one re-fit + figure set each |
 | request body | 5 MB | everything |
 
 ## Implementation notes

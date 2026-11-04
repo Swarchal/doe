@@ -29,15 +29,16 @@ def test_openapi_schema_builds_without_error() -> None:
 
 
 def test_openapi_documents_every_v1_route() -> None:
-    # 37 POST compute routes (design generation/operations/candidates including the
-    # Phase-5 split-plot/blocking generators, analysis including split-plot fit-gls,
+    # 38 POST compute routes (design generation/operations/candidates including the
+    # Phase-5 split-plot/blocking generators, analysis including split-plot fit-gls and
+    # the HTML report,
     # optimize including the mixed categorical-optimum/categorical-desirability,
     # plot-data) plus GET /v1/health.
     spec = create_app().openapi()
     operations = _operations(spec)
     post_routes = [(m, p) for m, p, _ in operations if m == "POST" and p.startswith("/v1/")]
     get_routes = [(m, p) for m, p, _ in operations if m == "GET" and p == "/v1/health"]
-    assert len(post_routes) == 37
+    assert len(post_routes) == 38
     assert len(get_routes) == 1
 
 
@@ -61,10 +62,17 @@ def test_every_v1_post_route_has_a_typed_request_body_schema() -> None:
         assert "$ref" in body, f"{method} {path} request body is not a named schema: {body}"
 
 
+#: Routes whose 200 body is a document rather than JSON (so no named response schema).
+HTML_ROUTES = {"/v1/analysis/report"}
+
+
 def test_every_v1_post_route_has_a_typed_200_response_schema() -> None:
     spec = create_app().openapi()
     for method, path, operation in _operations(spec):
         if method != "POST" or not path.startswith("/v1/"):
+            continue
+        if path in HTML_ROUTES:
+            assert "text/html" in operation["responses"]["200"]["content"], path
             continue
         ok = operation["responses"]["200"]["content"]["application/json"]["schema"]
         assert "$ref" in ok, f"{method} {path} 200 response is not a named schema: {ok}"

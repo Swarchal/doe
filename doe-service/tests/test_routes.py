@@ -37,6 +37,7 @@ EXPECTED_V1_ROUTES = {
     ("POST", "/v1/analysis/predict"),
     ("POST", "/v1/analysis/diagnostics"),
     ("POST", "/v1/analysis/coverage"),
+    ("POST", "/v1/analysis/report"),
     # optimization
     ("POST", "/v1/optimize/stationary-point"),
     ("POST", "/v1/optimize/optimum"),

@@ -7,7 +7,7 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Scott Warchal", email = "scott.warchal@gmail.com" }]
 dependencies = [
-    "doe",
+    "doe[plotting]",  # /v1/analysis/report renders figures with matplotlib
     "fastapi>=0.110",
     "pydantic>=2.7",
 ]

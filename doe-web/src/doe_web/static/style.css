@@ -197,3 +197,8 @@ button:disabled { cursor: not-allowed; }
 .plot { width: 100%; min-height: 420px; }
 .plot-small { min-height: 300px; }
 .plot-fallback { color: var(--ink-3); padding: 2rem; text-align: center; }
+
+/* Export card: what the report will contain; the pending (not-yet-run) parts are muted. */
+.export-contents { margin: 0.5rem 0 0; padding-left: 1.25rem; }
+.export-contents li { margin: 0.15rem 0; }
+.export-contents li.pending { color: var(--ink-3); }

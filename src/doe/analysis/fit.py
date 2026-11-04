@@ -5,6 +5,7 @@ from __future__ import annotations
 import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 import numpy as np
@@ -375,6 +376,12 @@ class FitResult:
         from .optimize import optimum
 
         return optimum(self, maximize=maximize, bounds=bounds)
+
+    def report(self, path: str | Path | None = None, **kwargs: Any) -> str:
+        """Self-contained HTML report of this fit (see :func:`doe.report.analysis_report`)."""
+        from ..report import analysis_report
+
+        return analysis_report(self, path, **kwargs)
 
     def to_dict(self, *, confidence: float = 0.95) -> dict[str, Any]:
         """Serialize to the ``POST /v1/analysis/fit`` response body (minus ``warnings``).

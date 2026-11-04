@@ -62,6 +62,9 @@ module by module.
 :mod:`doe.interactive`
     Self-contained HTML run sheets.
 
+:mod:`doe.report`
+    Self-contained HTML analysis reports with embedded figures.
+
 .. toctree::
    :maxdepth: 1
    :hidden:
@@ -85,3 +88,4 @@ module by module.
    plotting
    serialization
    interactive
+   report
